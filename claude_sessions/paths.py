@@ -25,11 +25,12 @@ def find_actual_path(encoded, max_depth=8):
                        if os.path.isdir(os.path.join(current, d))]
         except (PermissionError, OSError):
             return None
+        rem_l = remaining.lower()
         for subdir in subdirs:
-            enc = encode_component(subdir)
-            if enc == remaining:
+            enc = encode_component(subdir).lower()   # NTFS is case-insensitive
+            if enc == rem_l:
                 return os.path.join(current, subdir)
-            if remaining.startswith(enc + '-'):
+            if rem_l.startswith(enc + '-'):
                 r = match(os.path.join(current, subdir), remaining[len(enc)+1:], depth+1)
                 if r:
                     return r

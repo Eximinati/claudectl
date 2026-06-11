@@ -8,6 +8,7 @@ import subprocess
 import shutil
 
 from .config import (W, _AUTOGEN_START, _AUTOGEN_END, _SESSIONS_START, _SESSIONS_END, _AI_MARKER)
+from .config import get_claude_exe, open_in_editor
 from .sessions import get_session_info, get_session_rich_summary, read_extra_paths, format_age
 from .ui import text_input, _cls, wait_event, poll_event
 
@@ -440,9 +441,9 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
         )
 
     # Locate claude.exe
-    claude_exe = os.path.join(os.environ['USERPROFILE'], '.local', 'bin', 'claude.exe')
-    if not os.path.exists(claude_exe):
-        print(f"\n  claude.exe not found at {claude_exe}")
+    claude_exe = get_claude_exe()
+    if not claude_exe:
+        print(f"\n  claude.exe not found (checked %USERPROFILE%\\.local\\bin and PATH)")
         print(f"  Falling back to standard scaffold...")
         time.sleep(2)
         scaffold_claude_md(project_path, proj_folder)
@@ -635,10 +636,7 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
         time.sleep(2)
         return
 
-    try:
-        subprocess.Popen([r'C:\Program Files\Notepad++\notepad++.exe',md_path])
-    except Exception:
-        pass
+    open_in_editor(md_path)
 
 
 def scaffold_claude_md(project_path, proj_folder=None):
@@ -688,9 +686,6 @@ def scaffold_claude_md(project_path, proj_folder=None):
             f.write(final)
     except Exception:
         return
-    try:
-        subprocess.Popen([r'C:\Program Files\Notepad++\notepad++.exe',md_path])
-    except Exception:
-        pass
+    open_in_editor(md_path)
 
 

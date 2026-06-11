@@ -8,60 +8,86 @@ from .config import BAD_PREFIXES, BAD_CONTAINS, last_session_file, projects_dir
 
 # ── session parsing ──────────────────────────────────────────
 
-def get_session_info(jsonl_path):
-    """Returns (last_user_preview: str, msg_count: int). Single file read."""
+_info_cache = {}   # jsonl_path -> ((mtime_ns, size), (preview, count, title))
+
+
+def _extract_texts(obj):
+    """Pull text blocks from a message object's content."""
+    content = obj.get('content') or obj.get('message', {}).get('content', '')
+    texts = []
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get('type') == 'text':
+                texts.append(block.get('text', '').strip())
+    elif isinstance(content, str):
+        texts.append(content.strip())
+    return texts
+
+
+def _good_text(text):
+    if not text or len(text) < 5:
+        return False
+    if any(text.startswith(p) for p in BAD_PREFIXES):
+        return False
+    if any(b in text.lower() for b in BAD_CONTAINS):
+        return False
+    return True
+
+
+def _parse_session(jsonl_path):
+    """Single-pass parse, cached by (mtime, size).
+    Returns (last_user_preview: str, msg_count: int, ai_title: str)."""
+    try:
+        st = os.stat(jsonl_path)
+    except OSError:
+        return '', 0, ''
+    key = (st.st_mtime_ns, st.st_size)
+    cached = _info_cache.get(jsonl_path)
+    if cached and cached[0] == key:
+        return cached[1]
+
     try:
         with open(jsonl_path, 'r', encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
     except Exception:
-        return '', 0
+        return '', 0, ''
 
     count = 0
+    title = ''
+    preview = ''
     for line in lines:
         ls = line.strip()
         if not ls:
             continue
         try:
             obj = json.loads(ls)
-            role = obj.get('role') or obj.get('message', {}).get('role', '')
-            if role in ('user', 'assistant'):
-                count += 1
-        except Exception:
-            pass
-
-    preview = ''
-    for line in reversed(lines):
-        ls = line.strip()
-        if not ls:
-            continue
-        try:
-            obj = json.loads(ls)
-            role = obj.get('role') or obj.get('message', {}).get('role', '')
-            if role != 'user':
-                continue
-            content = obj.get('content') or obj.get('message', {}).get('content', '')
-            texts = []
-            if isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict) and block.get('type') == 'text':
-                        texts.append(block.get('text', '').strip())
-            elif isinstance(content, str):
-                texts.append(content.strip())
-            for text in texts:
-                if not text or len(text) < 5:
-                    continue
-                if any(text.startswith(p) for p in BAD_PREFIXES):
-                    continue
-                if any(b in text.lower() for b in BAD_CONTAINS):
-                    continue
-                preview = text[:65].replace('\n', ' ')
-                break
-            if preview:
-                break
         except Exception:
             continue
+        if obj.get('type') == 'ai-title' and not title:
+            title = (obj.get('title', '') or obj.get('content', '')).strip()
+        role = obj.get('role') or obj.get('message', {}).get('role', '')
+        if role in ('user', 'assistant'):
+            count += 1
+        if role == 'user':
+            for text in _extract_texts(obj):
+                if _good_text(text):
+                    preview = text[:65].replace('\n', ' ')   # last good one wins
+                    break
 
+    result = (preview, count, title)
+    _info_cache[jsonl_path] = (key, result)
+    return result
+
+
+def get_session_info(jsonl_path):
+    """Returns (last_user_preview: str, msg_count: int). Cached by mtime+size."""
+    preview, count, _ = _parse_session(jsonl_path)
     return preview, count
+
+
+def get_session_title(jsonl_path):
+    """AI-generated session title from the transcript, '' if none. Cached."""
+    return _parse_session(jsonl_path)[2]
 
 
 def get_session_rich_summary(jsonl_path, max_user_msgs=15):

@@ -24,8 +24,13 @@ Claude Code treats your work as a collection of chats. claudectl treats each pro
 - **MCP documentation** — analyze any MCP server's tools and write the docs into the global `~/.claude/CLAUDE.md` so Claude knows them in every session
 
 **Per-project launch control**
-- **Effort / model selector** — choose reasoning effort and model override before each launch
+- **Effort / model selector** — choose reasoning effort and model override before each launch; last choice remembered per project
 - **Extra PATH entries** — per-project PATH dirs injected into Claude's environment
+
+**Quality of life**
+- **AI session titles** — sessions without a manual name show their AI-generated transcript title
+- **Settings screen** (⚙) — configure editor, claude.exe path, and default launch options (`~/.claude/claudectl.json`)
+- **Help screen** — press `?` for a keyboard reference
 
 ---
 
@@ -33,29 +38,36 @@ Claude Code treats your work as a collection of chats. claudectl treats each pro
 
 - Python 3.10+
 - Windows 10 or Windows 11
-- [Claude Code CLI](https://docs.anthropic.com/claude-code) installed (`claude.exe` at `%USERPROFILE%\.local\bin\claude.exe`)
-- Notepad++ installed at `C:\Program Files\Notepad++\notepad++.exe` (used to open generated files; failures are silently ignored)
+- [Claude Code CLI](https://docs.anthropic.com/claude-code) installed (auto-detected at `%USERPROFILE%\.local\bin\claude.exe` or on PATH; overridable in Settings)
+- Any text editor — Notepad++ / VS Code are auto-detected, Windows Notepad is the fallback (overridable in Settings)
 
 ---
 
 ## Setup
 
-### 1. Clone the repo
+### Option A — pipx (recommended)
+
+```
+pipx install claudectl
+claudectl
+```
+
+That's it — `claudectl` launches the session browser and starts Claude directly.
+
+### Option B — clone and run
 
 ```
 git clone https://github.com/babarmuhammad/claudectl.git
 cd claudectl
 ```
 
-### 2. Run it
+Double-click `Open Repo cmd.bat` (or run it from a terminal).
 
-Double-click `Open Repo cmd.bat` (or run it from a terminal). That's it — it launches the session browser.
-
-### 3. Optional: Desktop shortcut
+### Optional: Desktop shortcut
 
 Right-click `Open Repo cmd.bat` → **Send to** → **Desktop (create shortcut)**.
 
-### 4. Optional: Pin to taskbar (Windows 11)
+### Optional: Pin to taskbar (Windows 11)
 
 Windows 11 can't pin `.bat` shortcuts directly — the shortcut must point to `cmd.exe`. Run this once in PowerShell from the repo folder:
 
@@ -118,6 +130,7 @@ Opens a sub-menu listing all connected MCP servers. Select any server to run Cla
 | A | AI-generate CLAUDE.md (Claude CLI) |
 | S | Edit / generate system prompt |
 | P | Manage extra PATH entries |
+| ? | Help / keyboard reference |
 | BACKSPACE | Delete last filter character |
 | Type text | Filter sessions live by name or preview |
 
@@ -184,6 +197,18 @@ Each MCP server gets its own sentinel-delimited section:
 Re-running the analysis for the same server updates only that section; other content is untouched.
 
 Access via: main screen → **⚙ Global CLAUDE.md / MCP Analysis**
+
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| "claude.exe not found" screen on startup | Install [Claude Code](https://docs.anthropic.com/claude-code), or set the path in **⚙ Settings** |
+| Generated files don't open in an editor | Set your editor path in **⚙ Settings** (auto-detects Notepad++, VS Code, falls back to Notepad) |
+| Window closes instantly with an error | Check `%TEMP%\claudectl_crash.log` — the crash handler writes the traceback there |
+| Projects missing from the list | The project folder was moved/deleted, or the path can't be decoded — see *Session encoding* below |
+| Settings location | `~/.claude/claudectl.json` — safe to edit by hand or delete to reset |
 
 ---
 

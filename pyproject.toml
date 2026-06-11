@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claudectl"
+version = "1.1.0"
+description = "Windows workspace manager for Claude Code - project memory, MCP awareness, and multi-project workflows in a fast terminal UI"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Babar Muhammad Anas" }]
+keywords = ["claude", "claude-code", "tui", "session-manager", "windows"]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development",
+]
+
+[project.urls]
+Homepage = "https://github.com/babarmuhammad/claudectl"
+Issues = "https://github.com/babarmuhammad/claudectl/issues"
+
+[project.scripts]
+claudectl = "claude_sessions.main:run"
+
+[tool.setuptools]
+packages = ["claude_sessions"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

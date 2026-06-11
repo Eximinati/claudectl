@@ -3,8 +3,8 @@ import shutil
 from datetime import datetime
 
 from .config import W, C_RESET, C_TITLE, C_SEL, C_DIM, C_SRCH, C_BOLD
-from .sessions import load_name, save_name, format_age, get_session_info
-from .ui import text_input, paths_menu, _cls, wait_event
+from .sessions import load_name, save_name, format_age, get_session_info, get_session_title
+from .ui import text_input, paths_menu, _cls, wait_event, help_screen, flash
 from .claude_md import scaffold_claude_md, ai_scaffold_claude_md
 from .system_prompt import edit_system_prompt
 
@@ -13,7 +13,11 @@ from .system_prompt import edit_system_prompt
 
 def sessions_menu(sessions_in, proj_folder, project_name, project_path):
     sessions       = list(sessions_in)   # (mtime, sid, preview, count)
-    names          = {sid: load_name(proj_folder, sid) for _, sid, _, _ in sessions}
+    # Display name: manual rename wins, else AI-generated transcript title
+    names = {}
+    for _, sid, _, _ in sessions:
+        names[sid] = load_name(proj_folder, sid) or \
+                     get_session_title(os.path.join(proj_folder, f"{sid}.jsonl"))
     filter_str     = ''
     search_focused = False   # True = cursor on search bar, typing goes there
     nav_pos        = 0       # index into nav_indices of current list item
@@ -72,7 +76,7 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
         if search_focused:
             print(f"\n  {C_DIM}type to search   ↓/ENTER go to list   ESC clear / exit{C_RESET}")
         else:
-            print(f"\n  {C_DIM}r rename  d delete  f fork  p paths  c claude.md  a ai-analyze  s sys-prompt{C_RESET}")
+            print(f"\n  {C_DIM}r rename  d delete  f fork  p paths  c claude.md  a ai-analyze  s sys-prompt  ? help{C_RESET}")
             print(f"  {C_DIM}↑↓ navigate   ENTER select   ESC back   ↑ from top → search{C_RESET}")
 
         ev = wait_event()
@@ -131,7 +135,11 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
                 new_name = text_input("Rename session:", default=names.get(sid, ''))
                 if new_name is not None:
                     names[sid] = new_name
-                    save_name(proj_folder, sid, new_name)
+                    try:
+                        save_name(proj_folder, sid, new_name)
+                        flash(f"Renamed to '{new_name}'" if new_name else "Name cleared")
+                    except Exception as e:
+                        flash(f"Rename failed: {e}", ok=False, secs=1.5)
 
         elif ev[0] == 'char' and ev[1] == 'd':
             val = rows[cur][1]
@@ -139,18 +147,28 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
                 sid = val.split('::')[1] if '::' in val else val[7:]
                 confirm = text_input("Delete session? Type 'yes' to confirm:")
                 if confirm and confirm.lower() == 'yes':
+                    errors = []
                     for fname in [f"{sid}.jsonl", f"{sid}.name"]:
                         fp = os.path.join(proj_folder, fname)
                         if os.path.exists(fp):
-                            try: os.remove(fp)
-                            except Exception: pass
+                            try:
+                                os.remove(fp)
+                            except Exception as e:
+                                errors.append(f"{fname}: {e}")
                     sid_dir = os.path.join(proj_folder, sid)
                     if os.path.isdir(sid_dir):
-                        try: shutil.rmtree(sid_dir)
-                        except Exception: pass
-                    sessions = [s for s in sessions if s[1] != sid]
-                    if sid in names: del names[sid]
-                    nav_pos = min(nav_pos, max(0, len(nav_indices) - 2))
+                        try:
+                            shutil.rmtree(sid_dir)
+                        except Exception as e:
+                            errors.append(f"{sid}/: {e}")
+                    if errors:
+                        flash("Delete failed: " + "; ".join(errors)[:120], ok=False, secs=2)
+                    else:
+                        flash("Session deleted")
+                    if not os.path.exists(os.path.join(proj_folder, f"{sid}.jsonl")):
+                        sessions = [s for s in sessions if s[1] != sid]
+                        if sid in names: del names[sid]
+                        nav_pos = min(nav_pos, max(0, len(nav_indices) - 2))
 
         elif ev[0] == 'char' and ev[1] == 'f':
             val = rows[cur][1]
@@ -169,3 +187,6 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
 
         elif ev[0] == 'char' and ev[1] == 's':
             edit_system_prompt(proj_folder, project_name, project_path)
+
+        elif ev[0] == 'char' and ev[1] == '?':
+            help_screen()

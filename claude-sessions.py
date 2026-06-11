@@ -10,15 +10,24 @@ try:
 except SystemExit:
     raise   # normal exit — let bat file handle choice_file check
 except BaseException:
+    tb = traceback.format_exc()
+    banner = "\n" + "=" * 60 + "\n  CLAUDECTL CRASH\n" + "=" * 60 + "\n" + tb + "=" * 60
+
+    # Always persist the traceback — console may be closed/redirected
+    try:
+        import tempfile
+        log_path = os.path.join(tempfile.gettempdir(), 'claudectl_crash.log')
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(banner + "\n")
+    except Exception:
+        log_path = None
+
     try:
         os.system('cls')
-    except Exception:
-        pass
-    tb = traceback.format_exc()
-    print("\n" + "=" * 60)
-    print("  CLAUDECTL CRASH")
-    print("=" * 60)
-    print(tb)   # stdout avoids encoding issues with stderr
-    print("=" * 60)
-    input("\n  Press Enter to close...")
+        print(banner)   # stdout avoids encoding issues with stderr
+        if log_path:
+            print(f"\n  Saved to {log_path}")
+        input("\n  Press Enter to close...")
+    except (OSError, EOFError, KeyboardInterrupt):
+        pass   # headless / closed console — log file is enough
     sys.exit(1)

@@ -5,7 +5,8 @@ import time
 import ctypes
 
 from .config import W, EFFORTS, EFFORT_LABELS, MODELS, MODEL_LABELS
-from .config import C_RESET, C_TITLE, C_SEL, C_DIM, C_SRCH, C_BOLD
+from .config import C_RESET, C_TITLE, C_SEL, C_DIM, C_SRCH, C_BOLD, C_GREEN
+from .config import load_settings, save_settings, find_editor, get_claude_exe, settings_file
 from .sessions import load_extra_paths, save_extra_paths
 
 
@@ -85,6 +86,15 @@ def pause(msg='  Press Enter to continue...'):
     flush_input()
     while wait_event()[0] not in ('enter', 'esc'):
         pass
+
+
+def flash(msg, ok=True, secs=0.8):
+    """One-line transient feedback shown after an action (✔/✘ + message)."""
+    icon = f"{C_GREEN}✔{C_RESET}" if ok else "✘"
+    sys.stdout.write(f"\n  {icon} {msg}\n")
+    sys.stdout.flush()
+    time.sleep(secs)
+    flush_input()
 
 
 # ── UI primitives ────────────────────────────────────────────
@@ -217,6 +227,77 @@ def menu(items, title, footer='', footer_fn=None):
         _draw(_last_footer)
 
 
+def help_screen():
+    """Static hotkey reference. Any key returns."""
+    _cls()
+    print(f"\n  {C_TITLE}{C_BOLD}HELP  /  keyboard shortcuts{C_RESET}\n")
+    print(f"  {C_DIM}{'─' * W}{C_RESET}")
+    print(f"  {C_BOLD}Main screen{C_RESET}")
+    print(f"    ↑↓ navigate    ENTER open project / resume    ESC exit")
+    print(f"    type to search projects    ★/☆ quick-resume recent sessions")
+    print()
+    print(f"  {C_BOLD}Sessions screen{C_RESET}")
+    print(f"    ↑↓ navigate    ENTER resume    ESC back    type to filter")
+    print(f"    r  rename session         d  delete session")
+    print(f"    f  fork session           p  extra PATH entries")
+    print(f"    c  scaffold CLAUDE.md     a  AI-generate CLAUDE.md")
+    print(f"    s  system prompt          ?  this help")
+    print()
+    print(f"  {C_BOLD}Launch options{C_RESET}")
+    print(f"    ↑↓ switch field    ← → cycle value    ENTER launch    ESC back")
+    print(f"  {C_DIM}{'─' * W}{C_RESET}")
+    print(f"\n  {C_DIM}Settings file: {settings_file}{C_RESET}")
+    pause("\n  Press Enter to go back...")
+
+
+def settings_menu():
+    """Edit ~/.claude/claudectl.json interactively."""
+    while True:
+        s = load_settings()
+        editor_now = s['editor'] or (find_editor() or 'NOT FOUND')
+        claude_now = s['claude_exe'] or (get_claude_exe() or 'NOT FOUND')
+        eff = s['default_effort'] or 'default'
+        mod = s['default_model'] or 'default'
+        items = [
+            (f"Editor      :  {editor_now}", 'editor'),
+            (f"claude.exe  :  {claude_now}", 'claude'),
+            (f"Effort      :  {eff}   (preselected in launch options)", 'effort'),
+            (f"Model       :  {mod}   (preselected in launch options)", 'model'),
+            (f"{'─' * W}", None),
+            (f"Back", 'back'),
+        ]
+        sel = menu(items, "SETTINGS")
+        if not sel or sel == 'back':
+            return
+
+        if sel == 'editor':
+            v = text_input("Editor path (blank = auto-detect):", default=s['editor'])
+            if v is not None:
+                if v and not os.path.exists(v):
+                    flash(f"Path not found: {v}", ok=False, secs=1.2)
+                else:
+                    s['editor'] = v
+                    save_settings(s)
+                    flash("Saved")
+        elif sel == 'claude':
+            v = text_input("claude.exe path (blank = auto-detect):", default=s['claude_exe'])
+            if v is not None:
+                if v and not os.path.exists(v):
+                    flash(f"Path not found: {v}", ok=False, secs=1.2)
+                else:
+                    s['claude_exe'] = v
+                    save_settings(s)
+                    flash("Saved")
+        elif sel in ('effort', 'model'):
+            values, labels = (EFFORTS, EFFORT_LABELS) if sel == 'effort' else (MODELS, MODEL_LABELS)
+            pick = menu([(l, v if v else '__default__') for l, v in zip(labels, values)],
+                        f"DEFAULT {sel.upper()}")
+            if pick is not None:
+                s[f'default_{sel}'] = '' if pick == '__default__' else pick
+                save_settings(s)
+                flash("Saved")
+
+
 # ── feature menus ────────────────────────────────────────────
 
 def paths_menu(proj_folder, project_name):
@@ -271,11 +352,12 @@ def paths_menu(proj_folder, project_name):
                 redraw = True
 
 
-def launch_options_menu(project_name):
+def launch_options_menu(project_name, default_effort='', default_model=''):
     """Returns (effort: str, model: str), empty = global default.
-    Returns None on ESC (caller should go back instead of launching)."""
-    effort_idx = 0
-    model_idx  = 0
+    Returns None on ESC (caller should go back instead of launching).
+    default_effort/default_model preselect the fields when valid."""
+    effort_idx = EFFORTS.index(default_effort) if default_effort in EFFORTS else 0
+    model_idx  = MODELS.index(default_model)  if default_model  in MODELS  else 0
     field = 0
 
     while True:

@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install test dependencies
+        run: python -m pip install pytest
+      - name: Run tests
+        run: python -m pytest tests/ -v
+      - name: Verify package imports
+        run: python -c "import sys; sys.path.insert(0, '.'); import claude_sessions.main, claude_sessions.ui, claude_sessions.mcp, claude_sessions.claude_md, claude_sessions.session_menu, claude_sessions.system_prompt; print('imports OK')"

@@ -3,7 +3,7 @@ import subprocess
 import threading
 import time
 
-from .config import W, global_claude_md
+from .config import W, global_claude_md, get_claude_exe, open_in_editor
 from .sessions import get_session_info
 from .ui import menu, _cls, pause
 
@@ -12,7 +12,9 @@ from .ui import menu, _cls, pause
 
 def get_mcp_status():
     """Run 'claude mcp list', return list of (name, status) tuples."""
-    claude_exe = os.path.join(os.environ['USERPROFILE'], '.local', 'bin', 'claude.exe')
+    claude_exe = get_claude_exe()
+    if not claude_exe:
+        return []
     try:
         r = subprocess.run(
                 [claude_exe, 'mcp', 'list'],
@@ -51,7 +53,9 @@ threading.Thread(target=_mcp_background, daemon=True).start()
 
 def analyze_mcp_tools(mcp_name):
     """Run claude --print to get MCP tool list. Shows progress. Returns markdown string."""
-    claude_exe = os.path.join(os.environ['USERPROFILE'], '.local', 'bin', 'claude.exe')
+    claude_exe = get_claude_exe()
+    if not claude_exe:
+        return ''
     prompt = (
         f"Using the {mcp_name} MCP server, call the tools/list endpoint and list every available tool. "
         f"For each tool output: tool name, one-line description, and key parameters. "
@@ -105,7 +109,7 @@ def global_claude_md_menu():
     for name, status in mcp_servers:
         icon = '✔' if status == 'ok' else '☆'
         mcp_items.append((f"{icon}  {name}", f'mcp:{name}'))
-    mcp_items += [(f"{'─' * W}", None), ('📝  Edit global CLAUDE.md in Notepad', '__edit__')]
+    mcp_items += [(f"{'─' * W}", None), ('📝  Edit global CLAUDE.md in editor', '__edit__')]
 
     while True:
         sel = menu(mcp_items, "GLOBAL CLAUDE.md  /  Select MCP to analyze")
@@ -115,7 +119,7 @@ def global_claude_md_menu():
             if not os.path.exists(global_claude_md):
                 with open(global_claude_md, 'w', encoding='utf-8') as f:
                     f.write('# Global Claude Context\n<!-- This file is read by Claude in every session -->\n\n')
-            subprocess.Popen([r'C:\Program Files\Notepad++\notepad++.exe',global_claude_md])
+            open_in_editor(global_claude_md)
             return
         if sel.startswith('mcp:'):
             mcp_name = sel[4:]
@@ -126,7 +130,7 @@ def global_claude_md_menu():
                 if ok:
                     print(f"\n  ✔ Written to {global_claude_md}\n")
                     print(f"  Claude will see {mcp_name} tool docs in every session.\n")
-                    subprocess.Popen([r'C:\Program Files\Notepad++\notepad++.exe',global_claude_md])
+                    open_in_editor(global_claude_md)
                 else:
                     print(f"\n  ✘ Failed to write {global_claude_md}\n")
             else:

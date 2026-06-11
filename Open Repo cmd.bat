@@ -2,9 +2,16 @@
 setlocal enabledelayedexpansion
 set "CHOICE_FILE=%temp%\choice_claude.txt"
 set "CLAUDE=%USERPROFILE%\.local\bin\claude.exe"
+if not exist "%CLAUDE%" (
+    where claude.exe >nul 2>&1
+    if not errorlevel 1 (
+        set "CLAUDE=claude.exe"
+    )
+)
 
 if exist "%CHOICE_FILE%" del "%CHOICE_FILE%"
 
+set "CLAUDECTL_BAT=1"
 py "%~dp0claude-sessions.py"
 
 if not exist "%CHOICE_FILE%" (
@@ -72,5 +79,6 @@ if "!ACTION!"=="new" (
     "!CLAUDE!" -r !SID! !EFFORT_FLAG! !MODEL_FLAG! !SPFILE_FLAG!
     if errorlevel 1 (echo. & echo [claude exited with error %ERRORLEVEL%] & pause)
 ) else (
+    echo Unknown action: "!ACTION!" -- opening plain terminal instead.
     cmd /k
 )

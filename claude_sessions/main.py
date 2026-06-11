@@ -1,11 +1,13 @@
 import os
 import sys
+import subprocess
 
 from .config import projects_dir, choice_file, global_claude_md
 from .config import C_RESET, C_STAR, C_DIM, C_TITLE, C_BOLD
+from .config import get_claude_exe, load_settings, save_settings
 from .paths import find_actual_path
 from .sessions import get_session_info, load_recent_sessions, save_last_session, format_age
-from .ui import menu, launch_options_menu, pause
+from .ui import menu, launch_options_menu, pause, help_screen, settings_menu
 from .session_menu import sessions_menu
 from .mcp import mcp_status_line, global_claude_md_menu, mcp_servers
 from .ui import _cls
@@ -18,6 +20,18 @@ def run():
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     except Exception:
         pass
+
+    # ── claude.exe availability check ─────────────────────────────
+    if not get_claude_exe():
+        _cls()
+        print(f"\n  {C_TITLE}{C_BOLD}claude.exe not found{C_RESET}\n")
+        print(f"  claudectl could not locate Claude Code. Checked:")
+        print(f"    - %USERPROFILE%\\.local\\bin\\claude.exe")
+        print(f"    - PATH (claude / claude.exe)")
+        print(f"    - settings override (~/.claude/claudectl.json)\n")
+        print(f"  Install Claude Code:  https://docs.anthropic.com/claude-code")
+        print(f"  Or set the path in Settings (⚙) after continuing.\n")
+        pause("  Press Enter to continue anyway...")
 
     # ── discover projects ─────────────────────────────────────────
 
@@ -58,7 +72,12 @@ def run():
     else:
         full_items = project_items
 
-    full_items = full_items + [(f"{'─' * W}", None), ('⚙  Global CLAUDE.md  /  MCP Analysis', '__global_claude_md__')]
+    full_items = full_items + [
+        (f"{'─' * W}", None),
+        ('⚙  Global CLAUDE.md  /  MCP Analysis', '__global_claude_md__'),
+        ('⚙  Settings', '__settings__'),
+        ('?  Help', '__help__'),
+    ]
 
     # ── main loop ─────────────────────────────────────────────────
 
@@ -80,6 +99,14 @@ def run():
 
         elif sel == '__global_claude_md__':
             global_claude_md_menu()
+            continue
+
+        elif sel == '__settings__':
+            settings_menu()
+            continue
+
+        elif sel == '__help__':
+            help_screen()
             continue
 
         else:
@@ -106,11 +133,23 @@ def run():
         # Launch options (skip for terminal); ESC = back to main menu
         if choice == 'terminal':
             break
-        opts = launch_options_menu(os.path.basename(path) or path)
+        settings = load_settings()
+        proj_def = settings.get('project_defaults', {}).get(encoded_name or '', {})
+        opts = launch_options_menu(
+            os.path.basename(path) or path,
+            default_effort=proj_def.get('effort', settings.get('default_effort', '')),
+            default_model=proj_def.get('model', settings.get('default_model', '')),
+        )
         if opts is None:
             choice = None
             continue
         effort, model = opts
+        # Remember per-project launch choices for next time
+        if encoded_name:
+            settings.setdefault('project_defaults', {})[encoded_name] = {
+                'effort': effort, 'model': model,
+            }
+            save_settings(settings)
         break
 
     # Persist last session for quick-resume (resume/fork only)
@@ -120,5 +159,80 @@ def run():
         if sid:
             save_last_session(path, encoded_name, sid)
 
-    with open(choice_file, 'w', encoding='utf-8') as f:
-        f.write(f"{path}|{encoded_name}|{choice}|{effort}|{model}")
+    # Validate action format before handing to the bat launcher
+    valid = (
+        choice in ('terminal', 'new')
+        or (choice.startswith('resume:') and len(choice) > 7)
+        or (choice.startswith('fork:') and len(choice) > 5)
+        or (choice.startswith('resume-named::') and '::' in choice[14:])
+    )
+    if not valid:
+        _cls()
+        print(f"\n  Internal error — invalid action: {choice!r}")
+        pause("\n  Press Enter to exit...")
+        sys.exit(1)
+    if '|' in f"{path}{encoded_name}{choice}":
+        _cls()
+        print(f"\n  Internal error — '|' not allowed in launch data.")
+        pause("\n  Press Enter to exit...")
+        sys.exit(1)
+
+    with open(choice_file, 'w', encoding='utf-8', newline='') as f:
+        f.write(f"{path}|{encoded_name}|{choice}|{effort}|{model}\r\n")
+
+    # When run via 'Open Repo cmd.bat' the bat reads the choice file and
+    # launches claude itself. When run standalone (pipx / `claudectl`),
+    # launch directly from Python.
+    if os.environ.get('CLAUDECTL_BAT') != '1':
+        _direct_launch(path, encoded_name, choice, effort, model)
+
+
+def _direct_launch(path, encoded_name, choice, effort, model):
+    """Launch claude.exe (or a terminal) directly — used when not started via the bat."""
+    from .sessions import read_extra_paths
+
+    proj_folder = os.path.join(projects_dir, encoded_name) if encoded_name else None
+
+    env = os.environ.copy()
+    extra = read_extra_paths(proj_folder)
+    if extra:
+        env['PATH'] = ';'.join(extra) + ';' + env.get('PATH', '')
+
+    if choice == 'terminal':
+        subprocess.call('cmd /k', cwd=path, env=env, shell=True)
+        return
+
+    claude = get_claude_exe()
+    if not claude:
+        _cls()
+        print(f"\n  ✘ claude.exe not found — cannot launch.")
+        pause("\n  Press Enter to exit...")
+        sys.exit(1)
+
+    args = [claude]
+    if choice.startswith('resume:'):
+        args += ['-r', choice[7:]]
+    elif choice.startswith('resume-named::'):
+        args += ['-r', choice[14:].split('::', 1)[0]]
+    elif choice.startswith('fork:'):
+        args += ['-r', choice[5:], '--fork-session']
+    # 'new' → no extra args
+
+    if effort:
+        args += ['--effort', effort]
+    if model:
+        args += ['--model', model]
+    sp_file = os.path.join(proj_folder, 'system-prompt.txt') if proj_folder else ''
+    if sp_file and os.path.exists(sp_file):
+        args += ['--system-prompt-file', sp_file]
+
+    _cls()
+    print(f"  Location: {path}")
+    print(f"  Action:   {choice}")
+    print(f"  {'-' * 42}\n")
+    try:
+        subprocess.call(args, cwd=path, env=env)
+    except Exception as e:
+        print(f"\n  ✘ Launch failed: {e}")
+        pause("\n  Press Enter to exit...")
+        sys.exit(1)

@@ -2,13 +2,18 @@ import os
 import subprocess
 import time
 
-from .config import W
+from .config import W, get_claude_exe, open_in_editor, find_editor
 from .ui import text_input, menu, _cls, pause
 
 
 def ai_generate_system_prompt(sp_path, project_name, project_path, proj_folder):
     """Use Claude --print to generate a system prompt for this project."""
-    claude_exe = os.path.join(os.environ['USERPROFILE'], '.local', 'bin', 'claude.exe')
+    claude_exe = get_claude_exe()
+    if not claude_exe:
+        _cls()
+        print(f"\n  ✘ claude.exe not found — cannot generate.\n")
+        pause("  Press Enter...")
+        return
 
     # Read existing CLAUDE.md for context
     md_path = os.path.join(project_path, 'CLAUDE.md')
@@ -63,9 +68,9 @@ def ai_generate_system_prompt(sp_path, project_name, project_path, proj_folder):
                 f.write(content)
             _cls()
             print(f"\n  ✔ System prompt generated for {project_name}\n")
-            print(f"  Opening in Notepad++ to review...\n")
+            print(f"  Opening in editor to review...\n")
             time.sleep(1)
-            subprocess.Popen([r'C:\Program Files\Notepad++\notepad++.exe', sp_path])
+            open_in_editor(sp_path)
         else:
             _cls()
             print(f"\n  ✘ No output from Claude.\n")
@@ -83,7 +88,7 @@ def edit_system_prompt(proj_folder, project_name, project_path=None):
     exists = os.path.exists(sp_path)
     action_items = [
         ('✦  Generate with AI' + (' (update existing)' if exists else ' (fresh)'), 'ai'),
-        ('📝  Edit manually in Notepad++', 'manual'),
+        ('📝  Edit manually in editor', 'manual'),
     ]
     sel = menu(action_items, f"SYSTEM PROMPT  /  {project_name}")
     if not sel:
@@ -103,7 +108,7 @@ def edit_system_prompt(proj_folder, project_name, project_path=None):
                         f"# Passed via --system-prompt-file on every launch for this project.\n\n")
         except Exception:
             return
-    try:
-        subprocess.Popen([r'C:\Program Files\Notepad++\notepad++.exe', sp_path])
-    except Exception:
-        pass
+    if not open_in_editor(sp_path):
+        _cls()
+        print(f"\n  ✘ No editor found. Edit manually: {sp_path}\n")
+        pause("  Press Enter...")
