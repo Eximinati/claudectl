@@ -1,5 +1,6 @@
 import os
 import sys
+import atexit
 import subprocess
 
 from .config import projects_dir, choice_file, global_claude_md
@@ -11,6 +12,7 @@ from .ui import menu, launch_options_menu, pause, help_screen, settings_menu
 from .session_menu import sessions_menu
 from .mcp import mcp_status_line, global_claude_md_menu, mcp_servers
 from .ui import _cls
+from . import render
 
 
 def run():
@@ -20,6 +22,11 @@ def run():
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     except Exception:
         pass
+
+    # Alternate screen buffer + hidden cursor for the whole TUI session.
+    # Restored before claude.exe takes the console (atexit = safety net).
+    render.screen_init()
+    atexit.register(render.screen_restore)
 
     # ── claude.exe availability check ─────────────────────────────
     if not get_claude_exe():
@@ -66,7 +73,11 @@ def run():
             lr_preview = sess.get('preview', '') or sess['session_id'][:8] + '...'
             lr_age     = format_age(sess['timestamp'])
             star = '★' if i == 0 else '☆'
-            label = f"{C_STAR}{star}{C_RESET}  {lr_proj:<16}  {lr_preview[:38]}  {C_DIM}({lr_age}){C_RESET}"
+            label = render.cols(
+                [f"{C_STAR}{star}{C_RESET}", lr_proj, lr_preview,
+                 f"{C_DIM}({lr_age.strip()}){C_RESET}"],
+                [3, 18, None, 7],
+                aligns=['left', 'left', 'left', 'right'])
             qr_items.append((label, f"__quickresume_{i}__"))
         full_items = qr_items + [(f"{'─' * W}", None)] + project_items
     else:
@@ -177,6 +188,9 @@ def run():
         pause("\n  Press Enter to exit...")
         sys.exit(1)
 
+    # Leave the alt screen before anything else owns the console
+    render.screen_restore()
+
     with open(choice_file, 'w', encoding='utf-8', newline='') as f:
         f.write(f"{path}|{encoded_name}|{choice}|{effort}|{model}\r\n")
 
@@ -190,6 +204,8 @@ def run():
 def _direct_launch(path, encoded_name, choice, effort, model):
     """Launch claude.exe (or a terminal) directly — used when not started via the bat."""
     from .sessions import read_extra_paths
+
+    render.screen_restore()   # idempotent — console must be clean for claude
 
     proj_folder = os.path.join(projects_dir, encoded_name) if encoded_name else None
 

@@ -2,9 +2,10 @@ import os
 import shutil
 from datetime import datetime
 
-from .config import W, C_RESET, C_TITLE, C_SEL, C_DIM, C_SRCH, C_BOLD
+from .config import W, C_RESET, C_TITLE, C_SEL, C_DIM, C_SRCH, C_BOLD, C_NAME
 from .sessions import load_name, save_name, format_age, get_session_info, get_session_title
 from .ui import text_input, paths_menu, _cls, wait_event, help_screen, flash
+from . import render
 from .claude_md import scaffold_claude_md, ai_scaffold_claude_md
 from .system_prompt import edit_system_prompt
 
@@ -29,21 +30,24 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
         return [s for s in sessions if fl in (names.get(s[1], '') + s[2]).lower()]
 
     def build_rows(active):
-        rows = [(f"{'─' * W}", None), (f"  + New Chat", 'new'), (f"{'─' * W}", None)]
+        rows = [(f"{'─' * W}", None), (f"+ New Chat", 'new'), (f"{'─' * W}", None)]
         for i, (mtime, sid, preview, count) in enumerate(active, 1):
-            age  = format_age(mtime)
+            age  = format_age(mtime).strip()
             date = datetime.fromtimestamp(mtime).strftime('%d %b %Y')
             name = names.get(sid, '')
-            badge = f"[{count}] " if count else ''
+            badge = f"{C_DIM}[{count}]{C_RESET} " if count else ''
             if name:
-                disp = f"\033[97m{name}\033[0m  \033[90m{preview[:35] if preview else date}\033[0m"
+                disp = f"{C_NAME}{render.trunc(name, 30)}{C_RESET}  {C_DIM}{preview if preview else date}{C_RESET}"
             elif preview:
                 disp = f"{badge}{preview}"
             else:
                 disp = f"{badge}{C_DIM}(no preview — {date}){C_RESET}"
             val = f"resume-named::{sid}::{name}" if name else f"resume:{sid}"
-            rows.append((f"  {C_DIM}#{i:<2}  {age}{C_RESET}  {disp}", val))
-        rows += [(f"{'─' * W}", None), (f"  {C_DIM}Terminal only{C_RESET}", 'terminal')]
+            label = render.cols(
+                [f"{C_DIM}#{i}{C_RESET}", f"{C_DIM}{age}{C_RESET}", disp],
+                [5, 7, None])
+            rows.append((label, val))
+        rows += [(f"{'─' * W}", None), (f"{C_DIM}Terminal only{C_RESET}", 'terminal')]
         return rows
 
     while True:
@@ -53,31 +57,32 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
         if nav_pos >= len(nav_indices):
             nav_pos = 0
 
-        _cls()
-        print(f"\n  {C_TITLE}{C_BOLD}SESSIONS  /  {project_name}{C_RESET}\n")
+        frame = [render.header('CLAUDECTL', project_name, 'SESSIONS'), '']
 
         # Search bar — always visible; focused = cursor + blinking input indicator
         if search_focused:
-            print(f"  {C_SEL}>{C_RESET} {C_SRCH}[ {filter_str}▌ ]{C_RESET}\n")
+            frame.append(f"  {C_SEL}▸{C_RESET} {C_SRCH}[ {filter_str}▌ ]{C_RESET}")
         elif filter_str:
-            print(f"    {C_SRCH}[ {filter_str} ]{C_RESET}  {C_DIM}(↑ to edit, ESC to clear){C_RESET}\n")
+            frame.append(f"    {C_SRCH}[ {filter_str} ]{C_RESET}  {C_DIM}(↑ to edit, ESC to clear){C_RESET}")
         else:
-            print(f"    {C_DIM}[ search... ]{C_RESET}  {C_DIM}(↑ from top to search){C_RESET}\n")
+            frame.append(f"    {C_DIM}[ search... ]{C_RESET}  {C_DIM}(↑ from top to search){C_RESET}")
+        frame.append('')
 
         cur = nav_indices[nav_pos]
         for i, (label, val) in enumerate(rows):
             if val is None:
-                print(f"  {C_DIM}{label}{C_RESET}")
-            elif i == cur and not search_focused:
-                print(f"  {C_SEL}>{C_RESET}{label}")
+                frame.append(f"  {C_DIM}{render.trunc(label, render.content_width() - 2)}{C_RESET}")
             else:
-                print(f"   {label}")
+                frame.append(render.row(label, selected=(i == cur and not search_focused)))
 
+        frame.append('')
         if search_focused:
-            print(f"\n  {C_DIM}type to search   ↓/ENTER go to list   ESC clear / exit{C_RESET}")
+            frame.append(render.hint_bar("type to search   ↓/ENTER go to list   ESC clear / exit"))
         else:
-            print(f"\n  {C_DIM}r rename  d delete  f fork  p paths  c claude.md  a ai-analyze  s sys-prompt  ? help{C_RESET}")
-            print(f"  {C_DIM}↑↓ navigate   ENTER select   ESC back   ↑ from top → search{C_RESET}")
+            frame.append(render.hint_bar(
+                "r rename  d delete  f fork  p paths  c claude.md  a ai-analyze  s sys-prompt  ? help"))
+            frame.append(render.hint_bar("↑↓ navigate   ENTER select   ESC back   ↑ from top → search"))
+        render.render_frame(frame)
 
         ev = wait_event()
 

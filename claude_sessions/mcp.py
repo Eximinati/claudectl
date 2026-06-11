@@ -105,9 +105,10 @@ def update_global_claude_md_mcp(mcp_name, tools_doc):
 
 def global_claude_md_menu():
     """Sub-menu: pick MCP to analyze, or edit global CLAUDE.md."""
+    from . import config as _c
     mcp_items = []
     for name, status in mcp_servers:
-        icon = '✔' if status == 'ok' else '☆'
+        icon = f'{_c.C_OK}✔{_c.C_RESET}' if status == 'ok' else f'{_c.C_WARN}!{_c.C_RESET}'
         mcp_items.append((f"{icon}  {name}", f'mcp:{name}'))
     mcp_items += [(f"{'─' * W}", None), ('📝  Edit global CLAUDE.md in editor', '__edit__')]
 
@@ -141,11 +142,11 @@ def global_claude_md_menu():
 
 
 def mcp_status_line():
-    from .config import C_RESET, C_DIM, C_GREEN
+    from . import config as _c
     if not _mcp_ready:
-        return f'  \033[90mMCP: checking...\033[0m'
+        return f'  {_c.C_DIM}MCP: checking...{_c.C_RESET}'
     connected = [name for name, status in mcp_servers if status == 'ok']
     if not connected:
         return ''
-    servers = '   '.join(f'\033[92m✔\033[0m {n}' for n in connected)
-    return f'  \033[90mMCP:\033[0m {servers}'
+    servers = '   '.join(f'{_c.C_OK}✔{_c.C_RESET} {n}' for n in connected)
+    return f'  {_c.C_DIM}MCP:{_c.C_RESET} {servers}'

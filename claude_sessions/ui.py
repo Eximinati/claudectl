@@ -7,7 +7,9 @@ import ctypes
 from .config import W, EFFORTS, EFFORT_LABELS, MODELS, MODEL_LABELS
 from .config import C_RESET, C_TITLE, C_SEL, C_DIM, C_SRCH, C_BOLD, C_GREEN
 from .config import load_settings, save_settings, find_editor, get_claude_exe, settings_file
+from .config import use_16color_fallback
 from .sessions import load_extra_paths, save_extra_paths
+from . import render
 
 
 # ── VT mode ──────────────────────────────────────────────────
@@ -25,15 +27,23 @@ def _enable_vt_mode():
                 _VT_ENABLED = True
     except Exception:
         pass
+    if not _VT_ENABLED:
+        use_16color_fallback()
 
 _enable_vt_mode()
 
 
 def _cls():
-    """Clear screen — ANSI (instant, no subprocess) if VT enabled, else fallback."""
+    """Clear screen — ANSI (instant, no subprocess) if VT enabled, else fallback.
+    Also invalidates the frame cache: any raw-print screen that starts with
+    _cls() forces the next render_frame() to repaint fully."""
+    render.invalidate()
     if _VT_ENABLED:
-        sys.stdout.write('\x1b[2J\x1b[H')
-        sys.stdout.flush()
+        try:
+            sys.stdout.write('\x1b[2J\x1b[H')
+            sys.stdout.flush()
+        except Exception:
+            pass
     else:
         os.system('cls')
 
@@ -81,20 +91,32 @@ def flush_input():
 
 
 def pause(msg='  Press Enter to continue...'):
-    """Event-based pause."""
-    print(msg)
+    """Event-based pause (raw output — invalidates the frame cache)."""
+    try:
+        print(msg)
+    except Exception:
+        pass
     flush_input()
     while wait_event()[0] not in ('enter', 'esc'):
         pass
+    render.invalidate()
 
 
 def flash(msg, ok=True, secs=0.8):
     """One-line transient feedback shown after an action (✔/✘ + message)."""
     icon = f"{C_GREEN}✔{C_RESET}" if ok else "✘"
-    sys.stdout.write(f"\n  {icon} {msg}\n")
-    sys.stdout.flush()
+    try:
+        if render.screen_active():
+            rows = render.frame_height()
+            sys.stdout.write(f'\x1b[{rows};1H\x1b[K  {icon} {render.trunc(msg, render.content_width() - 6)}')
+        else:
+            sys.stdout.write(f"\n  {icon} {msg}\n")
+        sys.stdout.flush()
+    except Exception:
+        pass
     time.sleep(secs)
     flush_input()
+    render.invalidate()
 
 
 # ── UI primitives ────────────────────────────────────────────
@@ -103,10 +125,16 @@ def text_input(prompt, default=''):
     flush_input()
     buf = list(default)
     while True:
-        _cls()
-        print(f"\n  {C_TITLE}{prompt}{C_RESET}")
-        print(f"\n  {C_SEL}>{C_RESET} {''.join(buf)}_")
-        print(f"\n  {C_DIM}ENTER confirm   ESC cancel   BACKSPACE delete{C_RESET}")
+        frame = [
+            render.header('CLAUDECTL', 'INPUT'),
+            '',
+            f"  {C_TITLE}{prompt}{C_RESET}",
+            '',
+            f"  {C_SEL}>{C_RESET} {''.join(buf)}{C_SRCH}▌{C_RESET}",
+            '',
+            render.hint_bar("ENTER confirm   ESC cancel   BACKSPACE delete"),
+        ]
+        render.render_frame(frame)
         ev = wait_event()
         if ev[0] == 'enter':
             return ''.join(buf).strip()
@@ -139,53 +167,38 @@ def menu(items, title, footer='', footer_fn=None):
     def _nav_idx(disp):
         return [i for i, (_, v) in enumerate(disp) if v is not None]
 
-    def _draw(current_footer):
+    def _build(current_footer):
         disp = _filtered()
         ni   = _nav_idx(disp)
-        if not ni:
-            return
-        pos = min(nav_pos, len(ni) - 1)
-        cur = ni[pos]
+        cur  = ni[min(nav_pos, len(ni) - 1)] if ni else -1
 
-        _cls()
-        print(f"\n  {C_TITLE}{C_BOLD}{title}{C_RESET}\n")
+        frame = [render.header('CLAUDECTL', title), '']
 
-        # Search bar — always visible
         if search_str:
-            print(f"  {C_SRCH}[ {search_str}▌ ]{C_RESET}\n")
+            frame.append(f"  {C_SRCH}[ {search_str}▌ ]{C_RESET}")
         else:
-            print(f"  {C_DIM}[ search... ]{C_RESET}\n")
+            frame.append(f"  {C_DIM}[ search... ]{C_RESET}")
+        frame.append('')
 
         for i, (label, val) in enumerate(disp):
             if val is None:
-                print(f"  {C_DIM}{label}{C_RESET}")
-            elif i == cur:
-                print(f"  {C_SEL}>{C_RESET} {label}")
+                frame.append(f"  {C_DIM}{render.trunc(label, render.content_width() - 2)}{C_RESET}")
             else:
-                print(f"    {label}")
+                frame.append(render.row(label, selected=(i == cur)))
 
+        frame.append('')
         if search_str:
-            hint = f"  {C_DIM}↑↓ navigate   ENTER select   BACKSPACE delete   ESC clear{C_RESET}"
+            hint = "↑↓ navigate   ENTER select   BACKSPACE delete   ESC clear"
         else:
-            hint = f"  {C_DIM}↑↓ navigate   ENTER select   type to search   ESC back{C_RESET}"
-        print(f"\n{hint}")
-        if current_footer:
-            print(f"\n{current_footer}")
+            hint = "↑↓ navigate   ENTER select   type to search   ESC back"
+        frame.append(render.hint_bar(hint))
+        frame.append(current_footer if current_footer else '')   # stable footer slot
+        return frame
 
     current_footer = footer_fn() if footer_fn else footer
-    _draw(current_footer)
+    render.render_frame(_build(current_footer))
     _last_footer = current_footer
     _footer_done = False   # True after MCP resolves — stop polling
-
-    def _update_footer_inline(new_footer):
-        """Update only the footer line using ANSI cursor — no full redraw, no flash."""
-        if not _VT_ENABLED:
-            return   # skip; footer shows on next keypress redraw
-        line = new_footer if new_footer else ''
-        sys.stdout.write('\x1b[1A\x1b[G\x1b[2K')
-        sys.stdout.write(line)
-        sys.stdout.write('\n')
-        sys.stdout.flush()
 
     while True:
         ev = poll_event()
@@ -195,7 +208,7 @@ def menu(items, title, footer='', footer_fn=None):
                 if current != _last_footer:
                     _last_footer = current
                     _footer_done = True   # update exactly once
-                    _update_footer_inline(current)
+                    render.render_frame(_build(current))   # diff = footer line only
             time.sleep(0.05)
             continue
 
@@ -224,45 +237,52 @@ def menu(items, title, footer='', footer_fn=None):
             search_str += ev[1]
             nav_pos    = 0
 
-        _draw(_last_footer)
+        render.render_frame(_build(_last_footer))
 
 
 def help_screen():
-    """Static hotkey reference. Any key returns."""
-    _cls()
-    print(f"\n  {C_TITLE}{C_BOLD}HELP  /  keyboard shortcuts{C_RESET}\n")
-    print(f"  {C_DIM}{'─' * W}{C_RESET}")
-    print(f"  {C_BOLD}Main screen{C_RESET}")
-    print(f"    ↑↓ navigate    ENTER open project / resume    ESC exit")
-    print(f"    type to search projects    ★/☆ quick-resume recent sessions")
-    print()
-    print(f"  {C_BOLD}Sessions screen{C_RESET}")
-    print(f"    ↑↓ navigate    ENTER resume    ESC back    type to filter")
-    print(f"    r  rename session         d  delete session")
-    print(f"    f  fork session           p  extra PATH entries")
-    print(f"    c  scaffold CLAUDE.md     a  AI-generate CLAUDE.md")
-    print(f"    s  system prompt          ?  this help")
-    print()
-    print(f"  {C_BOLD}Launch options{C_RESET}")
-    print(f"    ↑↓ switch field    ← → cycle value    ENTER launch    ESC back")
-    print(f"  {C_DIM}{'─' * W}{C_RESET}")
-    print(f"\n  {C_DIM}Settings file: {settings_file}{C_RESET}")
-    pause("\n  Press Enter to go back...")
+    """Static hotkey reference. ENTER/ESC returns."""
+    frame = [
+        render.header('CLAUDECTL', 'HELP'),
+        '',
+        f"  {C_BOLD}Main screen{C_RESET}",
+        f"    ↑↓ navigate    ENTER open project / resume    ESC exit",
+        f"    type to search projects    ★/☆ quick-resume recent sessions",
+        '',
+        f"  {C_BOLD}Sessions screen{C_RESET}",
+        f"    ↑↓ navigate    ENTER resume    ESC back    type to filter",
+        f"    r  rename session         d  delete session",
+        f"    f  fork session           p  extra PATH entries",
+        f"    c  scaffold CLAUDE.md     a  AI-generate CLAUDE.md",
+        f"    s  system prompt          ?  this help",
+        '',
+        f"  {C_BOLD}Launch options{C_RESET}",
+        f"    ↑↓ switch field    ← → cycle value    ENTER launch    ESC back",
+        '',
+        f"  {C_DIM}Settings file: {render.trunc(settings_file, render.content_width() - 20)}{C_RESET}",
+        '',
+        render.hint_bar("ENTER / ESC go back"),
+    ]
+    render.render_frame(frame)
+    flush_input()
+    while wait_event()[0] not in ('enter', 'esc'):
+        pass
 
 
 def settings_menu():
     """Edit ~/.claude/claudectl.json interactively."""
     while True:
         s = load_settings()
-        editor_now = s['editor'] or (find_editor() or 'NOT FOUND')
-        claude_now = s['claude_exe'] or (get_claude_exe() or 'NOT FOUND')
+        wv = render.content_width() - 22
+        editor_now = render.trunc(s['editor'] or (find_editor() or 'NOT FOUND'), wv)
+        claude_now = render.trunc(s['claude_exe'] or (get_claude_exe() or 'NOT FOUND'), wv)
         eff = s['default_effort'] or 'default'
         mod = s['default_model'] or 'default'
         items = [
             (f"Editor      :  {editor_now}", 'editor'),
             (f"claude.exe  :  {claude_now}", 'claude'),
-            (f"Effort      :  {eff}   (preselected in launch options)", 'effort'),
-            (f"Model       :  {mod}   (preselected in launch options)", 'model'),
+            (f"Effort      :  {eff}   {C_DIM}(preselected in launch options){C_RESET}", 'effort'),
+            (f"Model       :  {mod}   {C_DIM}(preselected in launch options){C_RESET}", 'model'),
             (f"{'─' * W}", None),
             (f"Back", 'back'),
         ]
@@ -305,26 +325,25 @@ def paths_menu(proj_folder, project_name):
         paths = load_extra_paths(proj_folder)
         items = [(f"{'─' * W}", None)]
         for p in paths:
-            items.append((f"  {p}", f"path:{p}"))
+            items.append((render.trunc(p, render.content_width() - 8), f"path:{p}"))
         if not paths:
-            items.append((f"  (no extra paths configured)", None))
-        items += [(f"{'─' * W}", None), (f"  + Add new path", 'add'), (f"  Back", 'back')]
+            items.append((f"(no extra paths configured)", None))
+        items += [(f"{'─' * W}", None), (f"+ Add new path", 'add'), (f"Back", 'back')]
 
         nav_indices = [i for i, (_, v) in enumerate(items) if v is not None]
         nav_pos = 0
         redraw = False
         while not redraw:
             cur = nav_indices[nav_pos]
-            _cls()
-            print(f"\n  {C_TITLE}{C_BOLD}EXTRA PATHS  /  {project_name}{C_RESET}\n")
+            frame = [render.header('CLAUDECTL', project_name, 'EXTRA PATHS'), '']
             for i, (label, val) in enumerate(items):
                 if val is None:
-                    print(f"  {C_DIM}{label}{C_RESET}")
-                elif i == cur:
-                    print(f"  {C_SEL}>{C_RESET} {label}")
+                    frame.append(f"  {C_DIM}{label}{C_RESET}")
                 else:
-                    print(f"    {label}")
-            print(f"\n  {C_DIM}↑↓ navigate   ENTER select   DEL remove   ESC back{C_RESET}")
+                    frame.append(render.row(label, selected=(i == cur)))
+            frame.append('')
+            frame.append(render.hint_bar("↑↓ navigate   ENTER select   DEL remove   ESC back"))
+            render.render_frame(frame)
 
             ev = wait_event()
             activate = None
@@ -361,15 +380,19 @@ def launch_options_menu(project_name, default_effort='', default_model=''):
     field = 0
 
     while True:
-        _cls()
-        print(f"\n  {C_TITLE}{C_BOLD}LAUNCH OPTIONS  /  {project_name}{C_RESET}")
-        print(f"\n  {C_DIM}{'─' * W}{C_RESET}")
         e_sel = C_SEL if field == 0 else C_DIM
         m_sel = C_SEL if field == 1 else C_DIM
-        print(f"  {e_sel}{'>' if field == 0 else ' '}  Effort :  [ {EFFORT_LABELS[effort_idx]:<10} ]{C_RESET}   {C_DIM}← → cycle{C_RESET}")
-        print(f"  {m_sel}{'>' if field == 1 else ' '}  Model  :  [ {MODEL_LABELS[model_idx]:<15} ]{C_RESET}   {C_DIM}← → cycle{C_RESET}")
-        print(f"  {C_DIM}{'─' * W}{C_RESET}")
-        print(f"\n  {C_DIM}↑↓ switch field   ← → cycle   ENTER launch   ESC back{C_RESET}")
+        frame = [
+            render.header('CLAUDECTL', project_name, 'LAUNCH OPTIONS'),
+            '',
+            render.hline(),
+            f"  {e_sel}{'▸' if field == 0 else ' '}  Effort :  [ {EFFORT_LABELS[effort_idx]:<10} ]{C_RESET}   {C_DIM}← → cycle{C_RESET}",
+            f"  {m_sel}{'▸' if field == 1 else ' '}  Model  :  [ {MODEL_LABELS[model_idx]:<15} ]{C_RESET}   {C_DIM}← → cycle{C_RESET}",
+            render.hline(),
+            '',
+            render.hint_bar("↑↓ switch field   ← → cycle   ENTER launch   ESC back"),
+        ]
+        render.render_frame(frame)
 
         ev = wait_event()
         if ev[0] in ('up', 'down'):

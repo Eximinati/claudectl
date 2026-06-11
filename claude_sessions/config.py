@@ -107,6 +107,25 @@ C_GREEN  = '\033[92m'     # green — MCP connected
 C_BOLD   = '\033[1m'      # bold
 C_SRCH   = '\033[96;1m'   # bright cyan bold — active search bar
 
+# ── theme palette (256-color; see use_16color_fallback) ─────
+C_ACCENT    = '\033[38;5;117m'              # light blue accent
+C_SEL_BG    = '\033[48;5;237m\033[97m'      # selected row: gray bg, bright fg
+C_HEADER_BG = '\033[48;5;24m\033[38;5;231m' # header bar: deep blue bg, white fg
+C_OK        = '\033[38;5;114m'              # soft green — connected / success
+C_WARN      = '\033[38;5;215m'              # orange — needs attention
+C_ERR       = '\033[91m'                    # red — errors
+C_NAME      = '\033[97m'                    # bright white — session names
+
+
+def use_16color_fallback():
+    """Swap 256-color theme entries for classic 16-color codes (old conhost)."""
+    global C_ACCENT, C_SEL_BG, C_HEADER_BG, C_OK, C_WARN
+    C_ACCENT    = '\033[96m'
+    C_SEL_BG    = '\033[7m'        # reverse video
+    C_HEADER_BG = '\033[46;30m'    # cyan bg, black fg
+    C_OK        = '\033[92m'
+    C_WARN      = '\033[93m'
+
 BAD_PREFIXES = ('<', '[', 'I0', 'W0', 'E0', 'Caveat', 'Base directory', 'session')
 BAD_CONTAINS = ['.claude', 'plugins', 'interrupted by user', 'tool use', 'local-command']
 W = 62
