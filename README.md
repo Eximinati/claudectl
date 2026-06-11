@@ -1,22 +1,31 @@
 # claudectl
 
-Windows terminal UI for managing Claude Code sessions.
+A Windows workspace manager for Claude Code — project memory, MCP awareness, and multi-project workflows in a fast terminal UI.
+
+Claude Code treats your work as a collection of chats. claudectl treats each project as a **persistent workspace**: sessions stay browsable and searchable, project context lives in maintained CLAUDE.md files, MCP servers are visible at a glance, and every launch is configured per project. Switching projects stops feeling like losing the agent's memory.
 
 ---
 
 ## Features
 
-- **Session browser** — lists all Claude Code projects and their sessions sorted by recency
-- **Quick-resume** — ★ (most recent) and ☆ (older) shortcuts at the top of the main screen for instant session resume
-- **Type-to-filter** — type any text in the sessions menu to filter live by session name or preview
+**Session management**
+- **Session browser** — every Claude Code project and session, sorted by recency
+- **Quick-resume** — ★/☆ shortcuts on the main screen jump straight back into recent sessions across all projects
+- **Search** — type to filter sessions live by name or preview
 - **Rename / Delete / Fork** — manage individual sessions with R / D / F keys
-- **AI CLAUDE.md generation** — press A to run Claude CLI to deeply analyze your project and write or update CLAUDE.md
-- **Scaffold CLAUDE.md** — press C to build CLAUDE.md from git repos, recent commits, READMEs, and session topics
-- **System prompt generation** — press S to AI-generate or manually edit a per-project system prompt
-- **MCP status** — background-polls `claude mcp list` on startup; connected servers shown in footer
-- **Global CLAUDE.md** — ⚙ menu item to analyze any MCP server's tools and write documentation into `~/.claude/CLAUDE.md`
-- **Effort / model selector** — choose thinking effort level and model override before launching each session
-- **Extra PATH entries** — per-project additional PATH dirs injected when launching Claude
+
+**Project memory**
+- **Scaffold CLAUDE.md** (C) — build project context mechanically from git repos, recent commits, READMEs, and prior session topics
+- **AI CLAUDE.md generation** (A) — Claude itself deep-analyzes the codebase and writes or updates a comprehensive CLAUDE.md; you review before anything is written
+- **System prompts** (S) — AI-generate or hand-edit a per-project system prompt injected on every launch
+
+**MCP awareness**
+- **MCP status** — connected servers shown in the footer on startup
+- **MCP documentation** — analyze any MCP server's tools and write the docs into the global `~/.claude/CLAUDE.md` so Claude knows them in every session
+
+**Per-project launch control**
+- **Effort / model selector** — choose reasoning effort and model override before each launch
+- **Extra PATH entries** — per-project PATH dirs injected into Claude's environment
 
 ---
 
