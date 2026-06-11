@@ -5,7 +5,7 @@ import time
 
 from .config import W, global_claude_md
 from .sessions import get_session_info
-from .ui import menu
+from .ui import menu, _cls
 
 
 # ── MCP status ────────────────────────────────────────────────
@@ -14,8 +14,12 @@ def get_mcp_status():
     """Run 'claude mcp list', return list of (name, status) tuples."""
     claude_exe = os.path.join(os.environ['USERPROFILE'], '.local', 'bin', 'claude.exe')
     try:
-        r = subprocess.run([claude_exe, 'mcp', 'list'],
-                           capture_output=True, text=True, timeout=10)
+        r = subprocess.run(
+                [claude_exe, 'mcp', 'list'],
+                capture_output=True, text=True, timeout=10,
+                stdin=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
         lines = (r.stdout + r.stderr).splitlines()
         servers = []
         for line in lines:
@@ -53,7 +57,7 @@ def analyze_mcp_tools(mcp_name):
         f"For each tool output: tool name, one-line description, and key parameters. "
         f"Format as markdown. Be concise. No intro text."
     )
-    os.system('cls')
+    _cls()
     print(f"\n  Analyzing {mcp_name} MCP tools via Claude...\n  (this may take 15-30s)\n")
     try:
         r = subprocess.run([claude_exe, '--print', prompt],
@@ -118,7 +122,7 @@ def global_claude_md_menu():
             tools_doc = analyze_mcp_tools(mcp_name)
             if tools_doc:
                 ok = update_global_claude_md_mcp(mcp_name, tools_doc)
-                os.system('cls')
+                _cls()
                 if ok:
                     print(f"\n  ✔ Written to {global_claude_md}\n")
                     print(f"  Claude will see {mcp_name} tool docs in every session.\n")
@@ -126,16 +130,18 @@ def global_claude_md_menu():
                 else:
                     print(f"\n  ✘ Failed to write {global_claude_md}\n")
             else:
-                os.system('cls')
+                _cls()
                 print(f"\n  ✘ No output from Claude — MCP may need authentication.\n")
             input("  Press Enter to continue...")
             return
 
 
 def mcp_status_line():
+    from .config import C_RESET, C_DIM, C_GREEN
     if not _mcp_ready:
-        return '  MCP: checking...'
+        return f'  \033[90mMCP: checking...\033[0m'
     connected = [name for name, status in mcp_servers if status == 'ok']
     if not connected:
         return ''
-    return '  MCP: ' + '   '.join(f'✔ {n}' for n in connected)
+    servers = '   '.join(f'\033[92m✔\033[0m {n}' for n in connected)
+    return f'  \033[90mMCP:\033[0m {servers}'

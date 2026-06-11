@@ -10,7 +10,7 @@ import shutil
 
 from .config import (W, _AUTOGEN_START, _AUTOGEN_END, _SESSIONS_START, _SESSIONS_END, _AI_MARKER)
 from .sessions import get_session_info, get_session_rich_summary, read_extra_paths, format_age
-from .ui import text_input
+from .ui import text_input, _cls
 
 
 def find_git_repos(root, max_depth=2):
@@ -297,7 +297,7 @@ def _pager_confirm(title, content):
     total_pages = max(1, (len(lines) + PAGE - 1) // PAGE)
     page = 0
     while True:
-        os.system('cls')
+        _cls()
         start = page * PAGE
         chunk = lines[start:start + PAGE]
         print(f"\n  {title}  (page {page+1}/{total_pages})\n")
@@ -356,7 +356,7 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
             pass
 
     # ── Confirmation screen ──────────────────────────────────────
-    os.system('cls')
+    _cls()
     print(f"\n  AI ANALYZE  /  {name}\n")
     if is_update:
         md_age = format_age(os.path.getmtime(md_path))
@@ -372,7 +372,7 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
     while True:
         key = ord(msvcrt.getch())
         if key == 13:   # ENTER — show extra prompt input
-            os.system('cls')
+            _cls()
             print(f"\n  AI ANALYZE  /  {name}\n")
             print(f"  Optional: add extra instructions for Claude (ENTER to skip)\n")
             print(f"  Example: 'focus on API endpoints' / 'add client-facing language rules'\n")
@@ -386,7 +386,7 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
         # ignore any other key — require explicit ENTER
 
     # Gather context
-    os.system('cls')
+    _cls()
     print(f"\n  AI ANALYZE  /  {name}\n")
     print(f"  Gathering project context...", flush=True)
     context = _build_ai_context(project_path, proj_folder)
@@ -453,7 +453,7 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
         scaffold_claude_md(project_path, proj_folder)
         return
 
-    os.system('cls')
+    _cls()
     print(f"\n  AI ANALYZE  /  {name}  — generating...\n")
     print(f"  {'─' * W}")
     print(f"  Press ESC to cancel.\n", flush=True)
@@ -614,7 +614,7 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
 
     # Preview full final content (with injected AUTOGEN/SESSIONS) — approve or reject
     if not _pager_confirm(f"AI ANALYZE  /  {name}  — approve to write CLAUDE.md", final):
-        os.system('cls')
+        _cls()
         print(f"\n  Rejected — CLAUDE.md not written.\n")
         time.sleep(1)
         return

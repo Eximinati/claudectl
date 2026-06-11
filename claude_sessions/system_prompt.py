@@ -4,7 +4,7 @@ import time
 import msvcrt
 
 from .config import W
-from .ui import text_input, menu
+from .ui import text_input, menu, _cls
 
 
 def ai_generate_system_prompt(sp_path, project_name, project_path, proj_folder):
@@ -21,13 +21,13 @@ def ai_generate_system_prompt(sp_path, project_name, project_path, proj_folder):
             pass
 
     # Optional extra instructions
-    os.system('cls')
+    _cls()
     print(f"\n  AI SYSTEM PROMPT  /  {project_name}\n")
     print(f"  Optional: extra instructions for generation (ENTER to skip)\n")
     print(f"  Example: 'always respond in Italian' / 'focus on build system rules'\n")
     extra = text_input("Extra instructions:", default='') or ''
 
-    os.system('cls')
+    _cls()
     print(f"\n  AI SYSTEM PROMPT  /  {project_name}  — generating...\n", flush=True)
 
     existing = ''
@@ -62,17 +62,17 @@ def ai_generate_system_prompt(sp_path, project_name, project_path, proj_folder):
         if content:
             with open(sp_path, 'w', encoding='utf-8') as f:
                 f.write(content)
-            os.system('cls')
+            _cls()
             print(f"\n  ✔ System prompt generated for {project_name}\n")
             print(f"  Opening in Notepad++ to review...\n")
             time.sleep(1)
             subprocess.Popen([r'C:\Program Files\Notepad++\notepad++.exe', sp_path])
         else:
-            os.system('cls')
+            _cls()
             print(f"\n  ✘ No output from Claude.\n")
             input("  Press Enter...")
     except Exception as e:
-        os.system('cls')
+        _cls()
         print(f"\n  ✘ Error: {e}\n")
         input("  Press Enter...")
 

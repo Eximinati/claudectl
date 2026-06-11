@@ -2,11 +2,13 @@ import os
 import sys
 
 from .config import projects_dir, choice_file, global_claude_md
+from .config import C_RESET, C_STAR, C_DIM, C_TITLE, C_BOLD
 from .paths import find_actual_path
 from .sessions import get_session_info, load_recent_sessions, save_last_session, format_age
 from .ui import menu, launch_options_menu
 from .session_menu import sessions_menu
 from .mcp import mcp_status_line, global_claude_md_menu, mcp_servers
+from .ui import _cls
 
 
 def run():
@@ -34,7 +36,7 @@ def run():
     entries.sort(reverse=True)
 
     if not entries:
-        os.system('cls')
+        _cls()
         print(f"  No Claude sessions found.\n  Scanned: {projects_dir}")
         input("\n  Press Enter to exit...")
         sys.exit(0)
@@ -50,7 +52,7 @@ def run():
             lr_preview = sess.get('preview', '') or sess['session_id'][:8] + '...'
             lr_age     = format_age(sess['timestamp'])
             star = '★' if i == 0 else '☆'
-            label = f"{star}  {lr_proj:<16}  {lr_preview[:38]}  ({lr_age})"
+            label = f"{C_STAR}{star}{C_RESET}  {lr_proj:<16}  {lr_preview[:38]}  {C_DIM}({lr_age}){C_RESET}"
             qr_items.append((label, f"__quickresume_{i}__"))
         full_items = qr_items + [(f"{'─' * W}", None)] + project_items
     else:

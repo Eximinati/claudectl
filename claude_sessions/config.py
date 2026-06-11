@@ -6,6 +6,16 @@ last_session_file = os.path.join(projects_dir, 'last-session.json')
 
 global_claude_md = os.path.join(os.environ['USERPROFILE'], '.claude', 'CLAUDE.md')
 
+# ── ANSI colors ──────────────────────────────────────────────
+C_RESET  = '\033[0m'
+C_TITLE  = '\033[96m'     # cyan — titles / headers
+C_SEL    = '\033[93m'     # yellow — selected > marker
+C_DIM    = '\033[90m'     # dark gray — separators, hints, age
+C_STAR   = '\033[93m'     # yellow — ★☆ stars
+C_GREEN  = '\033[92m'     # green — MCP connected
+C_BOLD   = '\033[1m'      # bold
+C_SRCH   = '\033[96;1m'   # bright cyan bold — active search bar
+
 BAD_PREFIXES = ('<', '[', 'I0', 'W0', 'E0', 'Caveat', 'Base directory', 'session')
 BAD_CONTAINS = ['.claude', 'plugins', 'interrupted by user', 'tool use', 'local-command']
 W = 62
