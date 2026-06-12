@@ -16,12 +16,21 @@ global_claude_md = os.path.join(_USERPROFILE, '.claude', 'CLAUDE.md')
 settings_file = os.path.join(_USERPROFILE, '.claude', 'claudectl.json')
 
 _DEFAULT_SETTINGS = {
-    'editor': '',           # path to preferred text editor ('' = auto-detect)
-    'claude_exe': '',       # path to claude.exe ('' = auto-detect)
-    'default_effort': '',   # preselected effort in launch options
-    'default_model': '',    # preselected model in launch options
-    'project_defaults': {}, # encoded_name -> {'effort': ..., 'model': ...}
+    'editor': '',              # path to preferred text editor ('' = auto-detect)
+    'claude_exe': '',          # path to claude.exe ('' = auto-detect)
+    'default_effort': '',      # preselected effort in launch options
+    'default_model': '',       # preselected model in launch options
+    'default_permission': '',  # preselected --permission-mode
+    'project_defaults': {},    # encoded_name -> {'effort','model','permission'}
+    'cost_table': {},          # user overrides for COST_PER_MTOK
 }
+
+
+def _norm_model(m):
+    """Migrate legacy bare model strings ('sonnet-4-6') to full ids."""
+    if m and not m.startswith('claude-'):
+        return 'claude-' + m
+    return m
 
 
 def load_settings():
@@ -34,6 +43,13 @@ def load_settings():
             s.update({k: v for k, v in data.items() if k in _DEFAULT_SETTINGS})
     except Exception:
         pass
+    # normalize legacy model ids saved by older versions
+    s['default_model'] = _norm_model(s.get('default_model', ''))
+    pd = s.get('project_defaults')
+    if isinstance(pd, dict):
+        for v in pd.values():
+            if isinstance(v, dict) and v.get('model'):
+                v['model'] = _norm_model(v['model'])
     return s
 
 
@@ -132,8 +148,24 @@ W = 62
 
 EFFORTS       = ['',        'low', 'medium', 'high', 'xhigh', 'max']
 EFFORT_LABELS = ['default', 'low', 'medium', 'high', 'xhigh', 'max']
-MODELS        = ['',          'haiku-4-5', 'sonnet-4-6', 'opus-4-8', 'fable-5']
-MODEL_LABELS  = ['default',   'haiku-4-5', 'sonnet-4-6', 'opus-4-8', 'fable-5']
+# Full model ids — claude.exe rejects bare version strings like 'sonnet-4-6'
+MODELS        = ['', 'claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-fable-5']
+MODEL_LABELS  = ['default', 'haiku-4-5', 'sonnet-4-6', 'opus-4-8', 'fable-5']
+PERMS         = ['',        'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk']
+PERM_LABELS   = ['default', 'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk']
+PERM_RISKY    = {'bypassPermissions', 'dontAsk'}   # shown with warning tint
+
+# ── cost estimation ($ per MTok; substring-matched on message.model) ──
+COST_PER_MTOK = {
+    'fable-5':    {'in': 10.0, 'out': 50.0},
+    'opus-4':     {'in': 5.0,  'out': 25.0},
+    'sonnet-4-6': {'in': 3.0,  'out': 15.0},
+    'sonnet':     {'in': 3.0,  'out': 15.0},
+    'haiku-4-5':  {'in': 1.0,  'out': 5.0},
+    'haiku':      {'in': 1.0,  'out': 5.0},
+}
+CACHE_READ_MULT  = 0.1
+CACHE_WRITE_MULT = 1.25
 
 _AUTOGEN_START  = '<!-- AUTOGEN:START -->'
 _AUTOGEN_END    = '<!-- AUTOGEN:END -->'

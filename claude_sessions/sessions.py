@@ -34,13 +34,30 @@ def _good_text(text):
     return True
 
 
+_EMPTY_STATS = {
+    'preview': '', 'count': 0, 'title': '',
+    'usage_by_model': {}, 'models': [],
+    'first_ts': None, 'last_ts': None,
+    'branch': '', 'cwd': '', 'api_errors': 0,
+}
+
+
+def _iso_to_epoch(ts):
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(ts.replace('Z', '+00:00')).timestamp()
+    except Exception:
+        return None
+
+
 def _parse_session(jsonl_path):
-    """Single-pass parse, cached by (mtime, size).
-    Returns (last_user_preview: str, msg_count: int, ai_title: str)."""
+    """Single-pass parse, cached by (mtime, size). Returns a stats dict:
+    preview, count, title, usage_by_model, models, first_ts, last_ts,
+    branch, cwd, api_errors. JSON-serializable (feeds the disk cache)."""
     try:
         st = os.stat(jsonl_path)
     except OSError:
-        return '', 0, ''
+        return dict(_EMPTY_STATS)
     key = (st.st_mtime_ns, st.st_size)
     cached = _info_cache.get(jsonl_path)
     if cached and cached[0] == key:
@@ -50,11 +67,11 @@ def _parse_session(jsonl_path):
         with open(jsonl_path, 'r', encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
     except Exception:
-        return '', 0, ''
+        return dict(_EMPTY_STATS)
 
-    count = 0
-    title = ''
-    preview = ''
+    s = dict(_EMPTY_STATS)
+    s['usage_by_model'] = {}
+    s['models'] = []
     for line in lines:
         ls = line.strip()
         if not ls:
@@ -63,31 +80,68 @@ def _parse_session(jsonl_path):
             obj = json.loads(ls)
         except Exception:
             continue
-        if obj.get('type') == 'ai-title' and not title:
-            title = (obj.get('title', '') or obj.get('content', '')).strip()
-        role = obj.get('role') or obj.get('message', {}).get('role', '')
+
+        if obj.get('type') == 'ai-title' and not s['title']:
+            s['title'] = (obj.get('title', '') or obj.get('content', '')).strip()
+
+        ts = obj.get('timestamp')
+        if isinstance(ts, str):
+            ep = _iso_to_epoch(ts)
+            if ep is not None:
+                if s['first_ts'] is None or ep < s['first_ts']:
+                    s['first_ts'] = ep
+                if s['last_ts'] is None or ep > s['last_ts']:
+                    s['last_ts'] = ep
+
+        if obj.get('gitBranch'):
+            s['branch'] = obj['gitBranch']
+        if obj.get('cwd'):
+            s['cwd'] = obj['cwd']
+        if obj.get('isApiErrorMessage'):
+            s['api_errors'] += 1
+
+        msg  = obj.get('message') or {}
+        role = obj.get('role') or msg.get('role', '')
         if role in ('user', 'assistant'):
-            count += 1
+            s['count'] += 1
         if role == 'user':
             for text in _extract_texts(obj):
                 if _good_text(text):
-                    preview = text[:65].replace('\n', ' ')   # last good one wins
+                    s['preview'] = text[:65].replace('\n', ' ')   # last good one wins
                     break
+        elif role == 'assistant':
+            model = msg.get('model', '')
+            if model.startswith('<'):   # '<synthetic>' internal marker
+                model = ''
+            usage = msg.get('usage') or {}
+            if model and model not in s['models']:
+                s['models'].append(model)
+            if usage and model:
+                u = s['usage_by_model'].setdefault(
+                    model, {'in': 0, 'out': 0, 'cache_read': 0, 'cache_create': 0})
+                u['in']           += usage.get('input_tokens', 0) or 0
+                u['out']          += usage.get('output_tokens', 0) or 0
+                u['cache_read']   += usage.get('cache_read_input_tokens', 0) or 0
+                u['cache_create'] += usage.get('cache_creation_input_tokens', 0) or 0
 
-    result = (preview, count, title)
-    _info_cache[jsonl_path] = (key, result)
-    return result
+    _info_cache[jsonl_path] = (key, s)
+    return s
 
 
 def get_session_info(jsonl_path):
     """Returns (last_user_preview: str, msg_count: int). Cached by mtime+size."""
-    preview, count, _ = _parse_session(jsonl_path)
-    return preview, count
+    s = _parse_session(jsonl_path)
+    return s['preview'], s['count']
 
 
 def get_session_title(jsonl_path):
     """AI-generated session title from the transcript, '' if none. Cached."""
-    return _parse_session(jsonl_path)[2]
+    return _parse_session(jsonl_path)['title']
+
+
+def get_session_stats(jsonl_path):
+    """Full per-session stats dict (tokens, models, timestamps, branch...). Cached."""
+    return _parse_session(jsonl_path)
 
 
 def get_session_rich_summary(jsonl_path, max_user_msgs=15):
@@ -176,6 +230,41 @@ def load_extra_paths(proj_folder):
 def save_extra_paths(proj_folder, paths):
     with open(os.path.join(proj_folder, 'extra-paths.txt'), 'w', encoding='utf-8') as f:
         f.write('\n'.join(paths))
+
+
+def load_add_dirs(proj_folder):
+    """Per-project --add-dir entries from add-dirs.txt."""
+    if not proj_folder:
+        return []
+    try:
+        with open(os.path.join(proj_folder, 'add-dirs.txt'), 'r', encoding='utf-8') as f:
+            return [l.strip() for l in f if l.strip() and not l.startswith('#')]
+    except Exception:
+        return []
+
+
+def save_add_dirs(proj_folder, dirs):
+    with open(os.path.join(proj_folder, 'add-dirs.txt'), 'w', encoding='utf-8') as f:
+        f.write('\n'.join(dirs))
+
+
+def scan_sessions(folder):
+    """List sessions in a project folder. Returns [(mtime, sid, preview, count)] newest-first."""
+    sessions = []
+    if not folder or not os.path.isdir(folder):
+        return sessions
+    for f in os.listdir(folder):
+        if not f.endswith('.jsonl'):
+            continue
+        fpath = os.path.join(folder, f)
+        try:
+            mtime = os.path.getmtime(fpath)
+        except OSError:
+            continue
+        preview, count = get_session_info(fpath)
+        sessions.append((mtime, f[:-6], preview, count))
+    sessions.sort(reverse=True)
+    return sessions
 
 
 def read_extra_paths(proj_folder):

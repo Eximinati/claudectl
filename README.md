@@ -11,8 +11,11 @@ Claude Code treats your work as a collection of chats. claudectl treats each pro
 **Session management**
 - **Session browser** — every Claude Code project and session, sorted by recency
 - **Quick-resume** — ★/☆ shortcuts on the main screen jump straight back into recent sessions across all projects
-- **Search** — type to filter sessions live by name or preview
-- **Rename / Delete / Fork** — manage individual sessions with R / D / F keys
+- **Search** — type to filter sessions live; **🔍 Search all sessions** finds and resumes any session across every project
+- **Transcript viewer & export** — read any session in a pager (`v`), export to markdown (`e`)
+- **Session info** — per-session tokens, est. cost, models, git branch, duration (`i`)
+- **Archive** — move sessions to a restorable `archived/` folder instead of deleting (`d`, toggle view with `A`)
+- **Rename / Fork / Continue** — rename (`r`), fork (`f`), or continue the latest session (`claude -c`)
 
 **Project memory**
 - **Scaffold CLAUDE.md** (C) — build project context mechanically from git repos, recent commits, READMEs, and prior session topics
@@ -23,9 +26,14 @@ Claude Code treats your work as a collection of chats. claudectl treats each pro
 - **MCP status** — connected servers shown in the footer on startup
 - **MCP documentation** — analyze any MCP server's tools and write the docs into the global `~/.claude/CLAUDE.md` so Claude knows them in every session
 
+**Usage analytics**
+- **Usage stats dashboard** — tokens (in/out/cache) and estimated cost per project and per session, parsed from local transcripts; cached for instant reopening
+
 **Per-project launch control**
-- **Effort / model selector** — choose reasoning effort and model override before each launch; last choice remembered per project
+- **Effort / model / permissions** — reasoning effort, model override, and `--permission-mode` preset before each launch; last choice remembered per project
+- **New-session options** — name the session (`-n`) and launch in a git worktree (`-w`)
 - **Extra PATH entries** — per-project PATH dirs injected into Claude's environment
+- **Add directories** — per-project `--add-dir` list for extra context roots
 
 **Quality of life**
 - **AI session titles** — sessions without a manual name show their AI-generated transcript title
@@ -123,13 +131,19 @@ Opens a sub-menu listing all connected MCP servers. Select any server to run Cla
 | ↑ / ↓ | Navigate |
 | ENTER | Select / confirm |
 | ESC | Back / cancel (clears filter first if active) |
-| R | Rename session |
-| D | Delete session (prompts for confirmation) |
-| F | Fork session |
-| C | Scaffold CLAUDE.md (git + sessions) |
-| A | AI-generate CLAUDE.md (Claude CLI) |
-| S | Edit / generate system prompt |
-| P | Manage extra PATH entries |
+| r | Rename session |
+| d | Archive or delete session |
+| f | Fork session |
+| v | View transcript |
+| e | Export transcript to markdown |
+| i | Session info (tokens, cost, models, branch) |
+| u | Project usage stats |
+| A | Toggle archived sessions view |
+| c | Scaffold CLAUDE.md (git + sessions) |
+| a | AI-generate CLAUDE.md (Claude CLI) |
+| s | Edit / generate system prompt |
+| p | Manage extra PATH entries |
+| x | Manage --add-dir directories |
 | ? | Help / keyboard reference |
 | BACKSPACE | Delete last filter character |
 | Type text | Filter sessions live by name or preview |
@@ -138,8 +152,8 @@ Opens a sub-menu listing all connected MCP servers. Select any server to run Cla
 
 | Key | Action |
 |-----|--------|
-| ↑ / ↓ | Switch between Effort and Model fields |
-| ← / → | Cycle through values for the selected field |
+| ↑ / ↓ | Switch fields (Effort / Model / Permissions / Worktree / Name) |
+| ← / → | Cycle values; edit Name/Worktree |
 | ENTER | Launch with selected options |
 | ESC | Back to main menu (no launch) |
 
@@ -152,9 +166,11 @@ Each project gets a folder at `~/.claude/projects/<encoded-name>/`. claudectl re
 | File | Purpose |
 |------|---------|
 | `<session-id>.jsonl` | Claude Code session transcript (managed by Claude Code) |
-| `<session-id>.name` | Custom display name you set with R |
+| `<session-id>.name` | Custom display name you set with r |
 | `extra-paths.txt` | Additional PATH directories added when launching Claude |
+| `add-dirs.txt` | Directories passed via `--add-dir` on every launch |
 | `system-prompt.txt` | System prompt injected via `--system-prompt-file` on every launch |
+| `archived/` | Archived sessions (restorable from the A view) |
 
 ---
 

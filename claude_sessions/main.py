@@ -7,7 +7,7 @@ from .config import projects_dir, choice_file, global_claude_md
 from .config import C_RESET, C_STAR, C_DIM, C_TITLE, C_BOLD
 from .config import get_claude_exe, load_settings, save_settings
 from .paths import find_actual_path
-from .sessions import get_session_info, load_recent_sessions, save_last_session, format_age
+from .sessions import get_session_info, load_recent_sessions, save_last_session, format_age, scan_sessions
 from .ui import menu, launch_options_menu, pause, help_screen, settings_menu
 from .session_menu import sessions_menu
 from .mcp import mcp_status_line, global_claude_md_menu, mcp_servers
@@ -85,6 +85,8 @@ def run():
 
     full_items = full_items + [
         (f"{'─' * W}", None),
+        ('🔍  Search all sessions', '__search_all__'),
+        ('⚙  Usage stats', '__usage_stats__'),
         ('⚙  Global CLAUDE.md  /  MCP Analysis', '__global_claude_md__'),
         ('⚙  Settings', '__settings__'),
         ('?  Help', '__help__'),
@@ -93,7 +95,7 @@ def run():
     # ── main loop ─────────────────────────────────────────────────
 
     path = encoded_name = proj_folder = choice = None
-    effort, model = '', ''
+    opts = {'effort': '', 'model': '', 'perm': '', 'name': '', 'worktree': ''}
 
     while True:
         sel = menu(full_items, "SELECT PROJECT", footer_fn=mcp_status_line)
@@ -107,6 +109,20 @@ def run():
             encoded_name = sess['encoded_name']
             proj_folder  = os.path.join(projects_dir, encoded_name)
             choice       = f"resume:{sess['session_id']}"
+
+        elif sel == '__search_all__':
+            from .search import global_search
+            hit = global_search(entries)
+            if not hit:
+                continue
+            _, path, encoded_name, sid = hit
+            proj_folder = os.path.join(projects_dir, encoded_name)
+            choice      = f"resume:{sid}"
+
+        elif sel == '__usage_stats__':
+            from .stats import usage_dashboard
+            usage_dashboard(entries)
+            continue
 
         elif sel == '__global_claude_md__':
             global_claude_md_menu()
@@ -125,16 +141,7 @@ def run():
             encoded_name = next((n for _, p, n in entries if p == path), None)
             proj_folder  = os.path.join(projects_dir, encoded_name) if encoded_name else None
 
-            sessions = []
-            if proj_folder and os.path.exists(proj_folder):
-                for f in os.listdir(proj_folder):
-                    if not f.endswith('.jsonl'):
-                        continue
-                    fpath = os.path.join(proj_folder, f)
-                    mtime = os.path.getmtime(fpath)
-                    preview, count = get_session_info(fpath)
-                    sessions.append((mtime, f[:-6], preview, count))
-                sessions.sort(reverse=True)
+            sessions = scan_sessions(proj_folder)
 
             project_name = os.path.basename(path) or path
             choice = sessions_menu(sessions, proj_folder, project_name, path)
@@ -148,23 +155,30 @@ def run():
         proj_def = settings.get('project_defaults', {}).get(encoded_name or '', {})
         opts = launch_options_menu(
             os.path.basename(path) or path,
-            default_effort=proj_def.get('effort', settings.get('default_effort', '')),
-            default_model=proj_def.get('model', settings.get('default_model', '')),
+            defaults={
+                'effort':     proj_def.get('effort', settings.get('default_effort', '')),
+                'model':      proj_def.get('model', settings.get('default_model', '')),
+                'permission': proj_def.get('permission', settings.get('default_permission', '')),
+            },
+            is_new=(choice == 'new'),
         )
         if opts is None:
             choice = None
             continue
-        effort, model = opts
         # Remember per-project launch choices for next time
         if encoded_name:
             settings.setdefault('project_defaults', {})[encoded_name] = {
-                'effort': effort, 'model': model,
+                'effort': opts['effort'], 'model': opts['model'],
+                'permission': opts['perm'],
             }
             save_settings(settings)
         break
 
+    if choice == 'terminal':
+        opts = {'effort': '', 'model': '', 'perm': '', 'name': '', 'worktree': ''}
+
     # Persist last session for quick-resume (resume/fork only)
-    if choice and choice not in ('terminal', 'new'):
+    if choice and choice not in ('terminal', 'new', 'continue'):
         sid = choice.split('::')[1] if '::' in choice else \
               (choice.split(':')[1] if ':' in choice else '')
         if sid:
@@ -172,7 +186,7 @@ def run():
 
     # Validate action format before handing to the bat launcher
     valid = (
-        choice in ('terminal', 'new')
+        choice in ('terminal', 'new', 'continue')
         or (choice.startswith('resume:') and len(choice) > 7)
         or (choice.startswith('fork:') and len(choice) > 5)
         or (choice.startswith('resume-named::') and '::' in choice[14:])
@@ -182,28 +196,45 @@ def run():
         print(f"\n  Internal error — invalid action: {choice!r}")
         pause("\n  Press Enter to exit...")
         sys.exit(1)
-    if '|' in f"{path}{encoded_name}{choice}":
+    if '|' in f"{path}{encoded_name}{choice}{opts['name']}{opts['worktree']}":
         _cls()
         print(f"\n  Internal error — '|' not allowed in launch data.")
         pause("\n  Press Enter to exit...")
         sys.exit(1)
 
+    # cmd reads the choice file in the ANSI codepage — keep bat-bound
+    # name/worktree ASCII-safe (direct launch is unaffected).
+    if os.environ.get('CLAUDECTL_BAT') == '1':
+        opts['name']     = opts['name'].encode('ascii', 'ignore').decode()
+        opts['worktree'] = opts['worktree'].encode('ascii', 'ignore').decode()
+
     # Leave the alt screen before anything else owns the console
     render.screen_restore()
 
     with open(choice_file, 'w', encoding='utf-8', newline='') as f:
-        f.write(f"{path}|{encoded_name}|{choice}|{effort}|{model}\r\n")
+        f.write(build_choice_line(path, encoded_name, choice, opts) + '\r\n')
 
     # When run via 'Open Repo cmd.bat' the bat reads the choice file and
     # launches claude itself. When run standalone (pipx / `claudectl`),
     # launch directly from Python.
     if os.environ.get('CLAUDECTL_BAT') != '1':
-        _direct_launch(path, encoded_name, choice, effort, model)
+        _direct_launch(path, encoded_name, choice, opts)
 
 
-def _direct_launch(path, encoded_name, choice, effort, model):
+def build_choice_line(path, encoded_name, choice, opts):
+    """v2 choice-file line. Sentinel '-' for empty fields: cmd's for /f
+    collapses consecutive delimiters, which silently shifted fields in the
+    old 5-field format (empty effort + set model -> model became effort)."""
+    def sv(x):
+        return x if x else '-'
+    return '|'.join(['v2', path, encoded_name or '-', choice,
+                     sv(opts['effort']), sv(opts['model']), sv(opts['perm']),
+                     sv(opts['name']), sv(opts['worktree'])])
+
+
+def _direct_launch(path, encoded_name, choice, opts):
     """Launch claude.exe (or a terminal) directly — used when not started via the bat."""
-    from .sessions import read_extra_paths
+    from .sessions import read_extra_paths, load_add_dirs
 
     render.screen_restore()   # idempotent — console must be clean for claude
 
@@ -226,7 +257,9 @@ def _direct_launch(path, encoded_name, choice, effort, model):
         sys.exit(1)
 
     args = [claude]
-    if choice.startswith('resume:'):
+    if choice == 'continue':
+        args += ['-c']
+    elif choice.startswith('resume:'):
         args += ['-r', choice[7:]]
     elif choice.startswith('resume-named::'):
         args += ['-r', choice[14:].split('::', 1)[0]]
@@ -234,13 +267,25 @@ def _direct_launch(path, encoded_name, choice, effort, model):
         args += ['-r', choice[5:], '--fork-session']
     # 'new' → no extra args
 
-    if effort:
-        args += ['--effort', effort]
-    if model:
-        args += ['--model', model]
+    if opts['effort']:
+        args += ['--effort', opts['effort']]
+    if opts['model']:
+        args += ['--model', opts['model']]
+    if opts['perm']:
+        args += ['--permission-mode', opts['perm']]
+    if choice == 'new':
+        if opts['name']:
+            args += ['-n', opts['name']]
+        if opts['worktree'] == '*':
+            args += ['-w']
+        elif opts['worktree']:
+            args += ['-w', opts['worktree']]
     sp_file = os.path.join(proj_folder, 'system-prompt.txt') if proj_folder else ''
     if sp_file and os.path.exists(sp_file):
         args += ['--system-prompt-file', sp_file]
+    add_dirs = [d for d in load_add_dirs(proj_folder) if os.path.isdir(d)]
+    if add_dirs:
+        args += ['--add-dir', *add_dirs]
 
     _cls()
     print(f"  Location: {path}")

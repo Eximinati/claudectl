@@ -5,6 +5,7 @@ import time
 import ctypes
 
 from .config import W, EFFORTS, EFFORT_LABELS, MODELS, MODEL_LABELS
+from .config import PERMS, PERM_LABELS, PERM_RISKY
 from .config import C_RESET, C_TITLE, C_SEL, C_DIM, C_SRCH, C_BOLD, C_GREEN
 from .config import load_settings, save_settings, find_editor, get_claude_exe, settings_file
 from .config import use_16color_fallback
@@ -248,16 +249,21 @@ def help_screen():
         f"  {C_BOLD}Main screen{C_RESET}",
         f"    ↑↓ navigate    ENTER open project / resume    ESC exit",
         f"    type to search projects    ★/☆ quick-resume recent sessions",
+        f"    🔍 search all sessions    ⚙ usage stats / settings / MCP docs",
         '',
         f"  {C_BOLD}Sessions screen{C_RESET}",
         f"    ↑↓ navigate    ENTER resume    ESC back    type to filter",
-        f"    r  rename session         d  delete session",
-        f"    f  fork session           p  extra PATH entries",
+        f"    r  rename                 d  archive / delete",
+        f"    f  fork                   v  view transcript",
+        f"    e  export markdown        i  session info (tokens, cost, model)",
+        f"    u  project usage stats    A  toggle archived view",
+        f"    p  extra PATH entries     x  add-dirs (--add-dir)",
         f"    c  scaffold CLAUDE.md     a  AI-generate CLAUDE.md",
         f"    s  system prompt          ?  this help",
         '',
         f"  {C_BOLD}Launch options{C_RESET}",
-        f"    ↑↓ switch field    ← → cycle value    ENTER launch    ESC back",
+        f"    ↑↓ field    ← → change    ENTER launch    ESC back",
+        f"    fields: effort, model, permissions (+ worktree, name for new sessions)",
         '',
         f"  {C_DIM}Settings file: {render.trunc(settings_file, render.content_width() - 20)}{C_RESET}",
         '',
@@ -278,11 +284,13 @@ def settings_menu():
         claude_now = render.trunc(s['claude_exe'] or (get_claude_exe() or 'NOT FOUND'), wv)
         eff = s['default_effort'] or 'default'
         mod = s['default_model'] or 'default'
+        perm = s['default_permission'] or 'default'
         items = [
             (f"Editor      :  {editor_now}", 'editor'),
             (f"claude.exe  :  {claude_now}", 'claude'),
             (f"Effort      :  {eff}   {C_DIM}(preselected in launch options){C_RESET}", 'effort'),
             (f"Model       :  {mod}   {C_DIM}(preselected in launch options){C_RESET}", 'model'),
+            (f"Permissions :  {perm}   {C_DIM}(--permission-mode){C_RESET}", 'permission'),
             (f"{'─' * W}", None),
             (f"Back", 'back'),
         ]
@@ -308,8 +316,12 @@ def settings_menu():
                     s['claude_exe'] = v
                     save_settings(s)
                     flash("Saved")
-        elif sel in ('effort', 'model'):
-            values, labels = (EFFORTS, EFFORT_LABELS) if sel == 'effort' else (MODELS, MODEL_LABELS)
+        elif sel in ('effort', 'model', 'permission'):
+            values, labels = {
+                'effort':     (EFFORTS, EFFORT_LABELS),
+                'model':      (MODELS, MODEL_LABELS),
+                'permission': (PERMS, PERM_LABELS),
+            }[sel]
             pick = menu([(l, v if v else '__default__') for l, v in zip(labels, values)],
                         f"DEFAULT {sel.upper()}")
             if pick is not None:
@@ -318,16 +330,68 @@ def settings_menu():
                 flash("Saved")
 
 
+def pager(crumbs, lines, hint='', header_lines=None, extra_keys=()):
+    """Scrollable frame-rendered pager.
+    crumbs: breadcrumb tuple for the header bar.
+    lines: pre-wrapped content lines (ANSI ok).
+    header_lines: optional pinned lines under the header.
+    extra_keys: chars returned to the caller when pressed (e.g. ('i','e')).
+    Returns None on exit, or the pressed extra key."""
+    top = 0
+    header_lines = header_lines or []
+    while True:
+        page = max(4, render.frame_height() - len(header_lines) - 6)
+        top = max(0, min(top, max(0, len(lines) - page)))
+        pos = f"{min(top + page, len(lines))}/{len(lines)}"
+        frame = [render.header(*crumbs), '']
+        frame += header_lines
+        if header_lines:
+            frame.append(render.hline())
+        for ln in lines[top:top + page]:
+            frame.append(render.fit('  ' + ln, render.content_width()))
+        frame += ['', render.hint_bar(
+            f"{pos}   ↑↓ scroll   ←→/SPACE page   ESC back" + (f"   {hint}" if hint else ''))]
+        render.render_frame(frame)
+
+        ev = wait_event()
+        if ev[0] == 'up':
+            top -= 1
+        elif ev[0] == 'down':
+            top += 1
+        elif ev[0] == 'left':
+            top -= page
+        elif ev[0] == 'right':
+            top += page
+        elif ev[0] == 'char' and ev[1] == ' ':
+            top += page
+        elif ev[0] in ('esc', 'enter'):
+            return None
+        elif ev[0] == 'char' and ev[1] in extra_keys:
+            return ev[1]
+
+
 # ── feature menus ────────────────────────────────────────────
 
-def paths_menu(proj_folder, project_name):
+def paths_menu(proj_folder, project_name, filename='extra-paths.txt', title='EXTRA PATHS'):
+    """Edit a per-project line-list file (extra-paths.txt or add-dirs.txt)."""
+    def _load():
+        try:
+            with open(os.path.join(proj_folder, filename), 'r', encoding='utf-8') as f:
+                return [l.strip() for l in f if l.strip()]
+        except Exception:
+            return []
+
+    def _save(paths):
+        with open(os.path.join(proj_folder, filename), 'w', encoding='utf-8') as f:
+            f.write('\n'.join(paths))
+
     while True:
-        paths = load_extra_paths(proj_folder)
+        paths = _load()
         items = [(f"{'─' * W}", None)]
         for p in paths:
             items.append((render.trunc(p, render.content_width() - 8), f"path:{p}"))
         if not paths:
-            items.append((f"(no extra paths configured)", None))
+            items.append((f"(none configured)", None))
         items += [(f"{'─' * W}", None), (f"+ Add new path", 'add'), (f"Back", 'back')]
 
         nav_indices = [i for i, (_, v) in enumerate(items) if v is not None]
@@ -335,7 +399,7 @@ def paths_menu(proj_folder, project_name):
         redraw = False
         while not redraw:
             cur = nav_indices[nav_pos]
-            frame = [render.header('CLAUDECTL', project_name, 'EXTRA PATHS'), '']
+            frame = [render.header('CLAUDECTL', project_name, title), '']
             for i, (label, val) in enumerate(items):
                 if val is None:
                     frame.append(f"  {C_DIM}{label}{C_RESET}")
@@ -354,7 +418,7 @@ def paths_menu(proj_folder, project_name):
             elif ev[0] == 'del':
                 val = items[cur][1]
                 if val and val.startswith('path:'):
-                    save_extra_paths(proj_folder, [p for p in paths if p != val[5:]])
+                    _save([p for p in paths if p != val[5:]])
                     redraw = True
             elif ev[0] == 'enter':
                 activate = items[cur][1]
@@ -367,41 +431,96 @@ def paths_menu(proj_folder, project_name):
                 new_path = text_input("Enter Windows path to add (e.g. C:\\tools\\bin):")
                 if new_path and new_path not in paths:
                     paths.append(new_path)
-                    save_extra_paths(proj_folder, paths)
+                    _save(paths)
                 redraw = True
 
 
-def launch_options_menu(project_name, default_effort='', default_model=''):
-    """Returns (effort: str, model: str), empty = global default.
-    Returns None on ESC (caller should go back instead of launching).
-    default_effort/default_model preselect the fields when valid."""
-    effort_idx = EFFORTS.index(default_effort) if default_effort in EFFORTS else 0
-    model_idx  = MODELS.index(default_model)  if default_model  in MODELS  else 0
+def launch_options_menu(project_name, defaults=None, is_new=False):
+    """Launch configuration screen.
+    Returns None on ESC, else dict {'effort','model','perm','name','worktree'}.
+    'worktree': '' = off, '*' = auto-named, other = custom name (new sessions only).
+    defaults: optional dict with preselected 'effort'/'model'/'permission'."""
+    d = defaults or {}
+    effort_idx = EFFORTS.index(d.get('effort', '')) if d.get('effort', '') in EFFORTS else 0
+    model_idx  = MODELS.index(d.get('model', ''))   if d.get('model', '')  in MODELS  else 0
+    perm_idx   = PERMS.index(d.get('permission', '')) if d.get('permission', '') in PERMS else 0
+    wt_state   = ''      # '' off | '*' auto | custom name
+    name_val   = ''
+
+    n_fields = 5 if is_new else 3
     field = 0
 
+    def _wt_label():
+        if not wt_state:    return 'off'
+        if wt_state == '*': return 'auto'
+        return wt_state
+
     while True:
-        e_sel = C_SEL if field == 0 else C_DIM
-        m_sel = C_SEL if field == 1 else C_DIM
+        def sel_c(i):
+            return C_SEL if field == i else C_DIM
+
+        perm_label = PERM_LABELS[perm_idx]
+        perm_color = '\033[93m' if PERM_LABELS[perm_idx] in PERM_RISKY else ''
         frame = [
             render.header('CLAUDECTL', project_name, 'LAUNCH OPTIONS'),
             '',
             render.hline(),
-            f"  {e_sel}{'▸' if field == 0 else ' '}  Effort :  [ {EFFORT_LABELS[effort_idx]:<10} ]{C_RESET}   {C_DIM}← → cycle{C_RESET}",
-            f"  {m_sel}{'▸' if field == 1 else ' '}  Model  :  [ {MODEL_LABELS[model_idx]:<15} ]{C_RESET}   {C_DIM}← → cycle{C_RESET}",
+            f"  {sel_c(0)}{'▸' if field == 0 else ' '}  Effort      :  [ {EFFORT_LABELS[effort_idx]:<18} ]{C_RESET}   {C_DIM}← → cycle{C_RESET}",
+            f"  {sel_c(1)}{'▸' if field == 1 else ' '}  Model       :  [ {MODEL_LABELS[model_idx]:<18} ]{C_RESET}   {C_DIM}← → cycle{C_RESET}",
+            f"  {sel_c(2)}{'▸' if field == 2 else ' '}  Permissions :  [ {perm_color}{perm_label:<18}{C_RESET}{sel_c(2)} ]{C_RESET}   {C_DIM}← → cycle{C_RESET}",
+        ]
+        if is_new:
+            frame += [
+                f"  {sel_c(3)}{'▸' if field == 3 else ' '}  Worktree    :  [ {render.trunc(_wt_label(), 18):<18} ]{C_RESET}   {C_DIM}← → cycle, → on 'custom'{C_RESET}",
+                f"  {sel_c(4)}{'▸' if field == 4 else ' '}  Name        :  [ {render.trunc(name_val or '(none)', 18):<18} ]{C_RESET}   {C_DIM}→ edit{C_RESET}",
+            ]
+        frame += [
             render.hline(),
             '',
-            render.hint_bar("↑↓ switch field   ← → cycle   ENTER launch   ESC back"),
+            render.hint_bar("↑↓ field   ← → change   ENTER launch   ESC back"),
         ]
         render.render_frame(frame)
 
         ev = wait_event()
-        if ev[0] in ('up', 'down'):
-            field = (field + 1) % 2
+        if ev[0] == 'up':
+            field = (field - 1) % n_fields
+        elif ev[0] == 'down':
+            field = (field + 1) % n_fields
         elif ev[0] in ('left', 'right'):
             step = -1 if ev[0] == 'left' else 1
-            if field == 0: effort_idx = (effort_idx + step) % len(EFFORTS)
-            else:           model_idx  = (model_idx  + step) % len(MODELS)
+            if field == 0:
+                effort_idx = (effort_idx + step) % len(EFFORTS)
+            elif field == 1:
+                model_idx = (model_idx + step) % len(MODELS)
+            elif field == 2:
+                perm_idx = (perm_idx + step) % len(PERMS)
+            elif field == 3:
+                # cycle off -> auto -> custom… -> off
+                if not wt_state:
+                    if step > 0:
+                        wt_state = '*'
+                    else:
+                        v = text_input("Worktree name (blank = cancel):")
+                        wt_state = v if v else ''
+                elif wt_state == '*':
+                    if step > 0:
+                        v = text_input("Worktree name (blank = cancel):")
+                        wt_state = v if v else '*'
+                    else:
+                        wt_state = ''
+                else:
+                    wt_state = '' if step > 0 else '*'
+            elif field == 4:
+                v = text_input("Session name (blank = none):", default=name_val)
+                if v is not None:
+                    name_val = v
         elif ev[0] == 'enter':
-            return EFFORTS[effort_idx], MODELS[model_idx]
+            return {
+                'effort': EFFORTS[effort_idx],
+                'model':  MODELS[model_idx],
+                'perm':   PERMS[perm_idx],
+                'name':   name_val if is_new else '',
+                'worktree': wt_state if is_new else '',
+            }
         elif ev[0] == 'esc':
             return None
