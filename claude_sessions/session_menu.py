@@ -153,11 +153,25 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
         frame.append('')
 
         cur = nav_indices[nav_pos]
-        for i, (label, val) in enumerate(rows):
+        # window rows so hints always fit the terminal height
+        fixed = 2 + 2 + 3   # header+blank, search+blank, blank+hint(2)
+        avail = max(3, render.frame_height() - fixed)
+        n = len(rows)
+        start, end = 0, n
+        if n > avail:
+            vis = max(1, avail - 2)
+            start = min(max(cur - vis // 2, 0), n - vis)
+            end = start + vis
+        if start > 0:
+            frame.append(f"  {C_DIM}… {start} more ↑{C_RESET}")
+        for i in range(start, end):
+            label, val = rows[i]
             if val is None:
-                frame.append(f"  {C_DIM}{render.trunc(label, render.content_width() - 2)}{C_RESET}")
+                frame.append(render.sep_line(label))
             else:
                 frame.append(render.row(label, selected=(i == cur and not search_focused)))
+        if end < n:
+            frame.append(f"  {C_DIM}… {n - end} more ↓{C_RESET}")
 
         frame.append('')
         if search_focused:

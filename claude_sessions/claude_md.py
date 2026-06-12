@@ -291,37 +291,57 @@ def _build_ai_context(project_path, proj_folder):
 
 
 def _pager_confirm(title, content):
-    """Page through content in terminal. Returns True=approve, False=reject."""
+    """Review content in a flicker-free scrollable pager.
+    Returns True=approve, False=reject."""
+    from .ui import flush_input, wait_event, poll_event
+    from . import render
+
+    flush_input()   # discard keys buffered during generation
     lines = content.splitlines()
-    PAGE = 28
-    total_pages = max(1, (len(lines) + PAGE - 1) // PAGE)
-    page = 0
+    top = 0
     while True:
-        _cls()
-        start = page * PAGE
-        chunk = lines[start:start + PAGE]
-        print(f"\n  {title}  (page {page+1}/{total_pages})\n")
-        print(f"  {'─' * W}")
-        for ln in chunk:
-            # indent and truncate to terminal width
-            print(f"  {ln[:W+10]}")
-        print(f"  {'─' * W}")
-        if page < total_pages - 1:
-            print(f"\n  SPACE next page   ENTER approve   ESC reject")
-        else:
-            print(f"\n  (end of content)")
-            print(f"  ENTER approve & write   ESC reject & discard   LEFT back")
+        page = max(4, render.frame_height() - 6)
+        top = max(0, min(top, max(0, len(lines) - page)))
+        at_end = top + page >= len(lines)
+
+        frame = [render.header('CLAUDECTL', title, 'REVIEW'), '']
+        for ln in lines[top:top + page]:
+            frame.append(render.fit('  ' + ln, render.content_width()))
+        frame.append('')
+        frame.append(render.hint_bar(
+            f"{min(top + page, len(lines))}/{len(lines)}"
+            + ("  (end)" if at_end else "")
+            + "   ↑↓ scroll   ←→/SPACE page   ENTER approve & write   ESC reject"))
+        render.render_frame(frame)
+
         ev = wait_event()
-        if ev[0] in ('left', 'back') and page > 0:
-            page -= 1
-        elif ev[0] == 'right' and page < total_pages - 1:
-            page += 1
-        elif ev[0] == 'char' and ev[1] == ' ' and page < total_pages - 1:
-            page += 1
+        if ev[0] == 'up':
+            top -= 1
+        elif ev[0] == 'down':
+            top += 1
+        elif ev[0] in ('left', 'back'):
+            top -= page
+        elif ev[0] == 'right':
+            top += page
+        elif ev[0] == 'char' and ev[1] == ' ':
+            top += page
         elif ev[0] == 'enter':
             return True
         elif ev[0] == 'esc':
             return False
+        # coalesce queued repeats (held arrows / wheel) into one redraw
+        while True:
+            nxt = poll_event()
+            if not nxt:
+                break
+            if nxt[0] == 'up':
+                top -= 1
+            elif nxt[0] == 'down':
+                top += 1
+            elif nxt[0] == 'enter':
+                return True
+            elif nxt[0] == 'esc':
+                return False
 
 
 def ai_scaffold_claude_md(project_path, proj_folder=None):
@@ -449,14 +469,10 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
         scaffold_claude_md(project_path, proj_folder)
         return
 
-    _cls()
-    print(f"\n  AI ANALYZE  /  {name}  — generating...\n")
-    print(f"  {'─' * W}")
-    print(f"  Press ESC to cancel.\n", flush=True)
-
     stderr_lines = []
     cancelled = False
     ai_content = ''
+    start_t = time.time()
 
     try:
         proc = subprocess.Popen(
@@ -485,7 +501,6 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
 
         printed_len = 0
         spin_i = 0
-        spinner = ['|', '/', '-', '\\']
         done = False
 
         while not done:
@@ -530,12 +545,10 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
 
                     if etype in ('assistant', 'result', 'text', 'content_block_delta', 'message'):
                         if len(text) > printed_len:
-                            print(text[printed_len:], end='', flush=True)
                             printed_len = len(text)
                             ai_content = text
                         elif text and not ai_content:
                             # delta mode — append
-                            print(text, end='', flush=True)
                             ai_content += text
                             printed_len = len(ai_content)
 
@@ -543,15 +556,37 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
                 pass
 
             if not done:
-                # Show spinner while waiting for next event
-                print(f"\r  {spinner[spin_i % 4]} ", end='', flush=True)
+                # Progress frame: animated bar + elapsed + received size
+                from . import render
+                from .config import C_DIM, C_RESET
+                preview = render.trunc(ai_content.strip().split('\n')[-1] if ai_content else '',
+                                       render.content_width() - 6)
+                render.render_frame([
+                    render.header('CLAUDECTL', name, 'AI ANALYZE'),
+                    '',
+                    f"  Claude is analyzing the project and writing CLAUDE.md...",
+                    '',
+                    '  ' + render.progress_bar(spin_i),
+                    f"  {C_DIM}{int(time.time() - start_t)}s elapsed · "
+                    f"{len(ai_content)} chars received{C_RESET}",
+                    '',
+                    (f"  {C_DIM}{preview}{C_RESET}" if preview else ''),
+                    '',
+                    render.hint_bar("ESC cancel (falls back to standard scaffold)"),
+                ])
                 spin_i += 1
                 time.sleep(0.1)
-                ev = poll_event()
-                if ev and ev[0] == 'esc':
-                    proc.terminate()
-                    cancelled = True
-                    done = True
+                # Drain ALL pending input — wheel/held arrows otherwise pile up
+                # and replay into the next screen
+                while True:
+                    ev = poll_event()
+                    if not ev:
+                        break
+                    if ev[0] == 'esc':
+                        proc.terminate()
+                        cancelled = True
+                        done = True
+                        break
 
         _dbg_f.close()
 

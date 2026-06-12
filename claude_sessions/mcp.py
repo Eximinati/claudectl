@@ -5,7 +5,7 @@ import time
 
 from .config import W, global_claude_md, get_claude_exe, open_in_editor
 from .sessions import get_session_info
-from .ui import menu, _cls, pause
+from .ui import menu, _cls, pause, run_with_progress
 
 
 # ── MCP status ────────────────────────────────────────────────
@@ -59,18 +59,19 @@ def analyze_mcp_tools(mcp_name):
     prompt = (
         f"Using the {mcp_name} MCP server, call the tools/list endpoint and list every available tool. "
         f"For each tool output: tool name, one-line description, and key parameters. "
-        f"Format as markdown. Be concise. No intro text."
+        f"Format as markdown. Be concise. No intro text. "
+        f"Do not create, write, or edit any files — output the markdown directly."
     )
-    _cls()
-    print(f"\n  Analyzing {mcp_name} MCP tools via Claude...\n  (this may take 15-30s)\n")
-    try:
-        r = subprocess.run([claude_exe, '--print', prompt],
-                           capture_output=True, text=True, timeout=60)
-        return r.stdout.strip()
-    except subprocess.TimeoutExpired:
+    # prompt BEFORE --disallowedTools (variadic flag would swallow it)
+    out, cancelled = run_with_progress(
+        [claude_exe, '--print', prompt,
+         '--disallowedTools', 'Write,Edit,NotebookEdit,Bash'],
+        ('CLAUDECTL', mcp_name, 'MCP ANALYSIS'),
+        f'Analyzing {mcp_name} MCP tools via Claude...  (15-60s)',
+        timeout=120)
+    if cancelled:
         return ''
-    except Exception as e:
-        return ''
+    return (out or '').strip()
 
 
 def update_global_claude_md_mcp(mcp_name, tools_doc):

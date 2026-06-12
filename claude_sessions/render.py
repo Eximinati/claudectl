@@ -113,12 +113,12 @@ def _flush():
 
 
 def content_width():
-    """Usable frame width."""
+    """Usable frame width — full terminal width (min 40)."""
     try:
         cols = shutil.get_terminal_size().columns
     except Exception:
         cols = 80
-    return min(max(cols - 1, 40), 100)
+    return max(cols - 1, 40)
 
 
 def invalidate():
@@ -218,6 +218,14 @@ def hline(width=None):
     return f'  {C_DIM}{"─" * max(0, w - 4)}{C_RESET}'
 
 
+def sep_line(label):
+    """Render a separator item: fixed-width '────' labels stretch to the
+    current terminal width; anything else renders as a dim label."""
+    if label and set(label.strip()) == {'─'}:
+        return hline()
+    return f"  {C_DIM}{trunc(label, content_width() - 2)}{C_RESET}"
+
+
 def row(label, selected=False):
     """List row. Selected = full-line background highlight (with > glyph
     kept so the 16-color/reverse-video fallback still reads clearly)."""
@@ -232,6 +240,27 @@ def hint_bar(text):
     """Bottom hint/status line."""
     w = content_width()
     return f'{C_DIM}{fit("  " + strip_ansi(text).strip(), w)}{C_RESET}'
+
+
+def progress_bar(tick, width=36):
+    """Indeterminate (knight-rider) progress bar string. Animate by passing
+    an incrementing tick."""
+    seg = 6
+    span = max(1, width - seg)
+    pos = tick % (2 * span)
+    if pos >= span:
+        pos = 2 * span - pos
+    return (f"{C_DIM}{'·' * pos}{C_RESET}"
+            f"{_c.C_ACCENT}{'━' * seg}{C_RESET}"
+            f"{C_DIM}{'·' * (span - pos)}{C_RESET}")
+
+
+def meter(pct, width=10, color=''):
+    """Determinate progress bar: ▕████░░░░░░▏ filled to pct (0-100)."""
+    pct = max(0.0, min(100.0, pct))
+    filled = round(width * pct / 100)
+    return (f"{C_DIM}▕{C_RESET}{color}{'█' * filled}{C_RESET}"
+            f"{C_DIM}{'░' * (width - filled)}▏{C_RESET}")
 
 
 def cols(parts, widths, aligns=None):

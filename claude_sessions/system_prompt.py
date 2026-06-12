@@ -3,7 +3,7 @@ import subprocess
 import time
 
 from .config import W, get_claude_exe, open_in_editor, find_editor
-from .ui import text_input, menu, _cls, pause
+from .ui import text_input, menu, _cls, pause, run_with_progress, flash
 
 
 def ai_generate_system_prompt(sp_path, project_name, project_path, proj_folder):
@@ -31,9 +31,6 @@ def ai_generate_system_prompt(sp_path, project_name, project_path, proj_folder):
     print(f"  Example: 'always respond in Italian' / 'focus on build system rules'\n")
     extra = text_input("Extra instructions:", default='') or ''
 
-    _cls()
-    print(f"\n  AI SYSTEM PROMPT  /  {project_name}  — generating...\n", flush=True)
-
     existing = ''
     if os.path.exists(sp_path):
         try:
@@ -46,38 +43,50 @@ def ai_generate_system_prompt(sp_path, project_name, project_path, proj_folder):
     extra_block = f"ADDITIONAL INSTRUCTIONS: {extra}\n\n" if extra else ''
 
     prompt = (
-        f"Generate a system-prompt.txt file for a Claude Code project named '{project_name}'.\n\n"
+        f"Compose the text of a system prompt for a Claude Code project named '{project_name}'.\n\n"
         f"{context_block}"
         f"{existing_block}"
         f"{extra_block}"
         f"The system prompt is injected before every Claude session in this project via --system-prompt-file.\n"
-        f"Write it as plain text (no markdown code fences). Include:\n"
+        f"Plain text (no markdown code fences). Include:\n"
         f"- Role/persona for Claude (what kind of engineer, what platform)\n"
         f"- Key codebase rules and conventions specific to this project\n"
         f"- Behavior guidelines (how to respond, what to avoid)\n"
         f"- Any language/tone rules\n\n"
+        f"Do NOT create, write, or edit any files and do not use any tools — "
+        f"return the system prompt text directly as your response.\n"
         f"Output ONLY the system prompt text. No preamble, no explanation, no code fences."
     )
 
-    try:
-        r = subprocess.run([claude_exe, '--print', prompt],
-                           capture_output=True, text=True, timeout=60)
-        content = r.stdout.strip()
-        if content:
+    # prompt BEFORE --disallowedTools: the flag is variadic and would
+    # otherwise swallow the prompt as tool names
+    out, cancelled = run_with_progress(
+        [claude_exe, '--print', prompt,
+         '--disallowedTools', 'Write,Edit,NotebookEdit,Bash'],
+        ('CLAUDECTL', project_name, 'AI SYSTEM PROMPT'),
+        'Generating system prompt with Claude...  (15-60s)',
+        timeout=120)
+    if cancelled:
+        flash("Generation cancelled", ok=False)
+        return
+    content = (out or '').strip()
+    if content:
+        try:
             with open(sp_path, 'w', encoding='utf-8') as f:
                 f.write(content)
+        except Exception as e:
             _cls()
-            print(f"\n  ✔ System prompt generated for {project_name}\n")
-            print(f"  Opening in editor to review...\n")
-            time.sleep(1)
-            open_in_editor(sp_path)
-        else:
-            _cls()
-            print(f"\n  ✘ No output from Claude.\n")
+            print(f"\n  ✘ Error writing file: {e}\n")
             pause("  Press Enter...")
-    except Exception as e:
+            return
         _cls()
-        print(f"\n  ✘ Error: {e}\n")
+        print(f"\n  ✔ System prompt generated for {project_name}\n")
+        print(f"  Opening in editor to review...\n")
+        time.sleep(1)
+        open_in_editor(sp_path)
+    else:
+        _cls()
+        print(f"\n  ✘ No output from Claude (timeout or empty response).\n")
         pause("  Press Enter...")
 
 

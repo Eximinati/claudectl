@@ -71,12 +71,39 @@ def _key_event():
     return None
 
 
+_term_size = None
+
+
+def _size_changed():
+    """True when the terminal was resized since the last check."""
+    global _term_size
+    import shutil
+    try:
+        sz = shutil.get_terminal_size()
+    except Exception:
+        return False
+    if _term_size is None:
+        _term_size = sz
+        return False
+    if sz != _term_size:
+        _term_size = sz
+        return True
+    return False
+
+
 def wait_event():
-    """Block until a meaningful input event arrives."""
+    """Wait for input. Returns a key event, or ('resize',) when the terminal
+    size changes — screen loops redraw on any unhandled event, so resizes
+    propagate automatically."""
     while True:
-        ev = _key_event()
-        if ev:
-            return ev
+        if msvcrt.kbhit():
+            ev = _key_event()
+            if ev:
+                return ev
+            continue
+        if _size_changed():
+            return ('resize',)
+        time.sleep(0.03)
 
 
 def poll_event():
@@ -120,6 +147,59 @@ def flash(msg, ok=True, secs=0.8):
     render.invalidate()
 
 
+def run_with_progress(args, crumbs, label, timeout=120, cwd=None):
+    """Run a subprocess while showing an animated progress bar; ESC cancels.
+    Returns (stdout: str | None, cancelled: bool) — stdout None on
+    cancel/timeout/launch failure."""
+    import subprocess
+    import threading
+
+    try:
+        proc = subprocess.Popen(
+            args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, encoding='utf-8', errors='ignore', cwd=cwd,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except Exception:
+        return None, False
+
+    # drain stdout on a thread so the pipe can't fill up and deadlock
+    chunks = []
+    reader = threading.Thread(target=lambda: chunks.append(proc.stdout.read()),
+                              daemon=True)
+    reader.start()
+
+    flush_input()
+    start = time.time()
+    tick = 0
+    while proc.poll() is None:
+        if time.time() - start > timeout:
+            proc.kill()
+            return None, False
+        # drain all pending input so keys don't backlog into the next screen
+        while True:
+            ev = poll_event()
+            if not ev:
+                break
+            if ev[0] == 'esc':
+                proc.kill()
+                return None, True
+        render.render_frame([
+            render.header(*crumbs),
+            '',
+            f"  {label}",
+            '',
+            '  ' + render.progress_bar(tick),
+            f"  {C_DIM}{int(time.time() - start)}s elapsed{C_RESET}",
+            '',
+            render.hint_bar("ESC cancel"),
+        ])
+        tick += 1
+        time.sleep(0.1)
+
+    reader.join(timeout=5)
+    return (chunks[0] if chunks else ''), False
+
+
 # ── UI primitives ────────────────────────────────────────────
 
 def text_input(prompt, default=''):
@@ -147,20 +227,26 @@ def text_input(prompt, default=''):
             buf.append(ev[1])
 
 
-def menu(items, title, footer='', footer_fn=None):
+def menu(items, title, footer='', footer_fn=None, banner_fn=None):
     """Arrow-key menu with live footer and persistent search bar.
     items: list of (label, value). value=None = non-selectable separator.
-    Any printable key goes to the search bar (no hotkeys in main menu)."""
+    label may be a callable returning str — evaluated on every draw, so
+    width-dependent layouts adapt to terminal resizes.
+    Any printable key goes to the search bar (no hotkeys in main menu).
+    banner_fn: live status line(s) rendered at the TOP, under the header."""
 
     nav_pos    = 0
     search_str = ''
+
+    def _lab(l):
+        return l() if callable(l) else l
 
     def _filtered():
         if not search_str:
             return items
         fl = search_str.lower()
         result = [(l, v) for l, v in items
-                  if v is not None and fl in l.lower()]
+                  if v is not None and fl in _lab(l).lower()]
         extras = [(l, v) for l, v in items
                   if v == '__global_claude_md__' and (l, v) not in result]
         return (result + extras) if result else items
@@ -168,12 +254,16 @@ def menu(items, title, footer='', footer_fn=None):
     def _nav_idx(disp):
         return [i for i, (_, v) in enumerate(disp) if v is not None]
 
-    def _build(current_footer):
+    def _build(current_footer, current_banner=''):
         disp = _filtered()
         ni   = _nav_idx(disp)
         cur  = ni[min(nav_pos, len(ni) - 1)] if ni else -1
 
         frame = [render.header('CLAUDECTL', title), '']
+        if current_banner:
+            for bl in current_banner.split('\n'):
+                frame.append(bl)
+            frame.append('')
 
         if search_str:
             frame.append(f"  {C_SRCH}[ {search_str}▌ ]{C_RESET}")
@@ -181,11 +271,29 @@ def menu(items, title, footer='', footer_fn=None):
             frame.append(f"  {C_DIM}[ search... ]{C_RESET}")
         frame.append('')
 
-        for i, (label, val) in enumerate(disp):
+        # window the item list so hint + footer always fit the terminal
+        banner_n = (len(current_banner.split('\n')) + 1) if current_banner else 0
+        footer_n = len(current_footer.split('\n')) if current_footer else 1
+        fixed = 2 + banner_n + 2 + 2 + footer_n   # header, banner, search, hint area, footer
+        avail = max(3, render.frame_height() - fixed)
+        n = len(disp)
+        start, end = 0, n
+        if n > avail:
+            vis = max(1, avail - 2)               # room for the … markers
+            ci = cur if cur >= 0 else 0
+            start = min(max(ci - vis // 2, 0), n - vis)
+            end = start + vis
+        if start > 0:
+            frame.append(f"  {C_DIM}… {start} more ↑{C_RESET}")
+        for i in range(start, end):
+            label, val = disp[i]
+            label = _lab(label)
             if val is None:
-                frame.append(f"  {C_DIM}{render.trunc(label, render.content_width() - 2)}{C_RESET}")
+                frame.append(render.sep_line(label))
             else:
                 frame.append(render.row(label, selected=(i == cur)))
+        if end < n:
+            frame.append(f"  {C_DIM}… {n - end} more ↓{C_RESET}")
 
         frame.append('')
         if search_str:
@@ -193,23 +301,36 @@ def menu(items, title, footer='', footer_fn=None):
         else:
             hint = "↑↓ navigate   ENTER select   type to search   ESC back"
         frame.append(render.hint_bar(hint))
-        frame.append(current_footer if current_footer else '')   # stable footer slot
+        # footer slot — may be multi-line ('\n'-joined status lines)
+        if current_footer:
+            for fl in current_footer.split('\n'):
+                frame.append(fl)
+        else:
+            frame.append('')
         return frame
 
     current_footer = footer_fn() if footer_fn else footer
-    render.render_frame(_build(current_footer))
-    _last_footer = current_footer
-    _footer_done = False   # True after MCP resolves — stop polling
+    current_banner = banner_fn() if banner_fn else ''
+    render.render_frame(_build(current_footer, current_banner))
+    _last_status = (current_footer, current_banner)
+    _last_poll = time.time()
 
     while True:
         ev = poll_event()
         if ev is None:
-            if footer_fn and not _footer_done:
-                current = footer_fn()
-                if current != _last_footer:
-                    _last_footer = current
-                    _footer_done = True   # update exactly once
-                    render.render_frame(_build(current))   # diff = footer line only
+            if _size_changed():
+                render.render_frame(_build(*_last_status))   # adapt to resize
+                time.sleep(0.05)
+                continue
+            # poll live status sources (MCP / plan usage) twice a second;
+            # diff renderer makes the re-render a no-op unless a line changed
+            if (footer_fn or banner_fn) and time.time() - _last_poll >= 0.5:
+                _last_poll = time.time()
+                current_footer = footer_fn() if footer_fn else footer
+                current_banner = banner_fn() if banner_fn else ''
+                if (current_footer, current_banner) != _last_status:
+                    _last_status = (current_footer, current_banner)
+                    render.render_frame(_build(current_footer, current_banner))
             time.sleep(0.05)
             continue
 
@@ -238,7 +359,7 @@ def menu(items, title, footer='', footer_fn=None):
             search_str += ev[1]
             nav_pos    = 0
 
-        render.render_frame(_build(_last_footer))
+        render.render_frame(_build(*_last_status))
 
 
 def help_screen():
@@ -355,6 +476,7 @@ def pager(crumbs, lines, hint='', header_lines=None, extra_keys=(),
     Returns None on exit, or the pressed extra key."""
     import bisect
 
+    flush_input()   # discard keys buffered during whatever ran before
     top = 0
     header_lines = header_lines or []
     query = ''
@@ -431,6 +553,22 @@ def pager(crumbs, lines, hint='', header_lines=None, extra_keys=(),
             return None
         elif ev[0] == 'char' and ev[1] in extra_keys:
             return ev[1]
+
+        # coalesce queued scroll repeats (held arrows / wheel) into one redraw
+        while True:
+            nxt = poll_event()
+            if not nxt:
+                break
+            if nxt[0] == 'up':
+                top -= 1
+            elif nxt[0] == 'down':
+                top += 1
+            elif nxt[0] in ('esc', 'enter'):
+                if nxt[0] == 'esc' and query:
+                    query = ''
+                    matches = []
+                else:
+                    return None
 
 
 # ── feature menus ────────────────────────────────────────────

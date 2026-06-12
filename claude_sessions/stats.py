@@ -140,9 +140,15 @@ def iter_all_sessions(entries, title='SCANNING SESSIONS'):
         names = [f for f in (os.listdir(folder) if os.path.isdir(folder) else [])
                  if f.endswith('.jsonl')]
         for f in names:
-            ev = ui.poll_event()
-            if ev and ev[0] == 'esc':
-                stopped = True
+            # drain all pending input; keys must not backlog into the dashboard
+            while True:
+                ev = ui.poll_event()
+                if not ev:
+                    break
+                if ev[0] == 'esc':
+                    stopped = True
+                    break
+            if stopped:
                 break
             fpath = os.path.join(folder, f)
             try:

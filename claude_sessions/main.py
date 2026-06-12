@@ -11,6 +11,7 @@ from .sessions import get_session_info, load_recent_sessions, save_last_session,
 from .ui import menu, launch_options_menu, pause, help_screen, settings_menu
 from .session_menu import sessions_menu
 from .mcp import mcp_status_line, global_claude_md_menu, mcp_servers
+from .usage import usage_status_line
 from .ui import _cls
 from . import render
 
@@ -73,11 +74,13 @@ def run():
             lr_preview = sess.get('preview', '') or sess['session_id'][:8] + '...'
             lr_age     = format_age(sess['timestamp'])
             star = '★' if i == 0 else '☆'
-            label = render.cols(
-                [f"{C_STAR}{star}{C_RESET}", lr_proj, lr_preview,
-                 f"{C_DIM}({lr_age.strip()}){C_RESET}"],
-                [3, 18, None, 7],
-                aligns=['left', 'left', 'left', 'right'])
+            # callable label → re-laid-out on every draw (adapts to resize)
+            label = (lambda star=star, proj=lr_proj, prev=lr_preview, age=lr_age:
+                     render.cols(
+                         [f"{C_STAR}{star}{C_RESET}", proj, prev,
+                          f"{C_DIM}({age.strip()}){C_RESET}"],
+                         [3, 18, None, 7],
+                         aligns=['left', 'left', 'left', 'right']))
             qr_items.append((label, f"__quickresume_{i}__"))
         full_items = qr_items + [(f"{'─' * W}", None)] + project_items
     else:
@@ -98,7 +101,8 @@ def run():
     opts = {'effort': '', 'model': '', 'perm': '', 'name': '', 'worktree': ''}
 
     while True:
-        sel = menu(full_items, "SELECT PROJECT", footer_fn=mcp_status_line)
+        sel = menu(full_items, "SELECT PROJECT",
+                   footer_fn=mcp_status_line, banner_fn=usage_status_line)
         if not sel:
             sys.exit(0)
 
