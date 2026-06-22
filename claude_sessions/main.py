@@ -16,7 +16,24 @@ from .ui import _cls
 from . import render
 
 
+def _workspace_status_cli():
+    """`claudectl workspace status` — resolve the project from cwd and print."""
+    from .paths import encode_component
+    from . import workspace
+    cwd = os.path.abspath(os.getcwd())
+    encoded = encode_component(cwd)
+    proj_folder = os.path.join(projects_dir, encoded)
+    if not os.path.isdir(proj_folder):
+        proj_folder = None
+    workspace.print_workspace_status(cwd, proj_folder)
+
+
 def run():
+    # `claudectl workspace status` — scriptable, no TUI
+    if sys.argv[1:3] == ['workspace', 'status']:
+        _workspace_status_cli()
+        return
+
     # ── UTF-8 console ─────────────────────────────────────────────
     os.system('chcp 65001 >nul 2>&1')
     try:
@@ -389,6 +406,13 @@ def _direct_launch(path, encoded_name, choice, opts):
     add_dirs = [d for d in load_add_dirs(proj_folder) if os.path.isdir(d)]
     if add_dirs:
         args += ['--add-dir', *add_dirs]
+
+    try:
+        from . import workspace
+        workspace.update_manifest(path, proj_folder, 'launch', choice=choice,
+                                  opts={k: opts.get(k) for k in ('effort', 'model', 'perm')})
+    except Exception:
+        pass
 
     _cls()
     print(f"  Location: {path}")

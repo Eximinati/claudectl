@@ -16,3 +16,9 @@ Environment Start.bat
 setup environment.ico
 *.lnk
 .claude/worktrees/
+
+# Claude Code project agents (copied from the claudectl library, machine-local)
+.claude/agents/
+
+# Workspace provenance manifest (machine-local: paths, session counts)
+.claudectl/

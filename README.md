@@ -19,6 +19,7 @@ Claude Code treats your work as a collection of chats. claudectl treats each pro
   - [Key bindings](#key-bindings)
 - [Reference](#reference)
   - [Per-project files](#per-project-files)
+  - [Workspace status](#workspace-status)
   - [CLAUDE.md auto-generation](#claudemd-auto-generation)
   - [Global CLAUDE.md](#global-claudemd)
   - [Session encoding](#session-encoding)
@@ -58,6 +59,10 @@ Claude Code treats your work as a collection of chats. claudectl treats each pro
 - **AI CLAUDE.md generation** (`a`) — Claude deep-analyzes the codebase and writes/updates a comprehensive CLAUDE.md; reviewed before writing
 - **System prompts** (`s`) — AI-generate or hand-edit a per-project system prompt injected on every launch
 - **Memory map** (`M`) — see which CLAUDE.md files load for a project (user / project / .claude / local) and their `@import`s; open any in your editor
+
+### Workspace provenance & freshness
+- **Provenance manifest** — `<project>/.claudectl/workspace-manifest.json` records where generated context came from: repo HEAD, source-file hashes (CLAUDE.md/README/configs), sessions analyzed (count + range), CLAUDE.md files, MCP server snapshots + tool counts, and last-run timestamps for scaffold / AI-analyze / launch. Updated automatically after those operations (best-effort — never blocks them).
+- **Freshness check** — `claudectl workspace status` (run inside a repo) or `w` in the sessions menu shows 🟢 Fresh / 🟡 Stale / 🔴 Invalid per component and an overall freshness score. Detects when the repo HEAD moved, README changed, or new sessions accrued since the memory was generated, plus a `safe_to_launch` flag. Status is read-only — viewing never mutates the manifest.
 
 ### Hooks
 - **Template & toggle** — drop in ready-made hooks (prettier-on-edit, block-curl, notify-on-stop), enable/disable, or remove; edits `settings.json` safely
@@ -213,6 +218,7 @@ On launch, claudectl shows all projects Claude Code has ever opened, sorted by m
 | a | AI-generate CLAUDE.md (Claude CLI) |
 | s | Edit / generate system prompt |
 | g | Pick project agents (library checklist → `.claude/agents/`) |
+| w | Workspace status (provenance & freshness) |
 | p | Manage extra PATH entries |
 | x | Manage --add-dir directories |
 | ? | Help / keyboard reference |
@@ -274,8 +280,32 @@ In the project's **working directory** (not the encoded folder), claudectl also 
 |------|---------|
 | `.claude/agents/*.md` | Selected library agents, copied here so Claude auto-discovers them |
 | `.claude/agents/.claudectl-managed.json` | Filenames claudectl placed (so it never removes your own agents) |
+| `.claudectl/workspace-manifest.json` | Provenance & freshness manifest (repo HEAD, hashes, sessions, MCP, timestamps) |
 
 The agent library lives at `~/.claude/claudectl-agents/<category>/*.md` (account-wide, not auto-loaded); selecting agents for a project copies them into that project's `.claude/agents/`. A single lead agent can also come from `~/.claude/agents/`. Hooks and MCP servers are stored in `settings.json` / managed via `claude mcp`.
+
+### Workspace status
+
+claudectl tracks the **provenance and freshness** of the context it generates. After scaffold, AI-analyze, or launch, it writes `<project>/.claudectl/workspace-manifest.json` (falling back to the encoded `~/.claude/projects/<encoded>/.claudectl/` folder if the working dir is read-only). The manifest is schema-versioned and forward-compatible — old files load, unknown keys survive round-trips.
+
+View it from inside a repo:
+
+```
+$ claudectl workspace status
+  Workspace Status
+  ────────────────
+  Repo HEAD         5f39fcb  (main)
+  Sessions analyzed 20
+  MCP servers       3
+  CLAUDE.md status  🟢 Fresh
+  MCP docs status   🟢 Fresh
+  Repo changed      No
+  Safe to launch    Yes
+
+  Workspace freshness score: 96%  ▕███████████████████░▏
+```
+
+…or press `w` in the sessions menu for the same view as a TUI screen (`r` refreshes, ESC exits). Indicators: 🟢 Fresh · 🟡 Stale · 🔴 Invalid. A component goes **stale** when the repo HEAD moved, README/source hashes changed, or new sessions accrued since the memory was generated; **invalid** means a missing-after-generation CLAUDE.md or a corrupt manifest. `safe_to_launch` is false only when an invalid check is present. The freshness score is the weighted fraction of applicable checks that are fresh. Viewing status is **read-only** — it never rewrites the manifest.
 
 ### CLAUDE.md auto-generation
 
@@ -338,6 +368,7 @@ claudectl's `find_actual_path()` in `paths.py` reverses this by walking the file
     ├── mcp.py              # MCP manager + background status poll
     ├── agents.py           # agent library, per-project selection, scaffold/AI
     ├── hooks.py            # hooks template / toggle / remove
+    ├── workspace.py        # provenance manifest + freshness status
     ├── claude_md.py        # scaffold + AI CLAUDE.md, memory map
     └── system_prompt.py    # edit / AI-generate system prompt
 ```

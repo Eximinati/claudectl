@@ -475,6 +475,7 @@ def help_screen():
         f"    u  project usage          M  memory map (CLAUDE.md hierarchy)",
         f"    p  extra PATH entries     x  add-dirs (--add-dir)",
         f"    c  scaffold CLAUDE.md     a  AI-generate CLAUDE.md",
+        f"    g  project agents         w  workspace status (provenance/freshness)",
         f"    s  system prompt          A  archived view    ?  help",
         '',
         f"  {C_BOLD}Launch options{C_RESET}",

@@ -727,6 +727,11 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
         time.sleep(2)
         return
 
+    try:
+        from . import workspace
+        workspace.update_manifest(project_path, proj_folder, 'ai_analyze', is_update=is_update)
+    except Exception:
+        pass
     open_in_editor(md_path)
 
 
@@ -777,6 +782,11 @@ def scaffold_claude_md(project_path, proj_folder=None):
             f.write(final)
     except Exception:
         return
+    try:
+        from . import workspace
+        workspace.update_manifest(project_path, proj_folder, 'scaffold')
+    except Exception:
+        pass
     open_in_editor(md_path)
 
 
