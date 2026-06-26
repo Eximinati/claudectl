@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from harness import Sandbox, run_flow, ESC
+from harness import Sandbox, run_flow, ESC, ENTER
 
 from claude_sessions import diffview, config
 
@@ -74,10 +74,35 @@ def test_show_no_changes(monkeypatch, tmp_path):
     assert 'no changes' in cap.plain.lower()
 
 
-def test_show_if_changed_skips_first_creation(monkeypatch, tmp_path):
+def test_confirm_approve(monkeypatch, tmp_path):
     Sandbox(monkeypatch, tmp_path)
-    # old empty → nothing to diff → returns without entering the pager
-    called = []
-    monkeypatch.setattr(diffview, 'show', lambda *a, **k: called.append(a))
-    diffview.show_if_changed('', 'brand new content\n', 'CLAUDE.md')
-    assert called == []
+    res, cap, _ = run_flow(monkeypatch, ENTER, diffview.confirm,
+                           "old line\n", "new line\n", "CLAUDE.md")
+    assert res is True
+    assert 'REVIEW' in cap.plain
+
+
+def test_confirm_reject(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    res, _, _ = run_flow(monkeypatch, ESC, diffview.confirm,
+                         "old\n", "new\n", "CLAUDE.md")
+    assert res is False
+
+
+def test_confirm_toggle_full_then_approve(monkeypatch, tmp_path):
+    from harness import typed
+    Sandbox(monkeypatch, tmp_path)
+    keys = typed('f') + ENTER          # toggle diff→full, then approve
+    res, cap, _ = run_flow(monkeypatch, keys, diffview.confirm,
+                           "old\n", "brand new text\n", "CLAUDE.md")
+    assert res is True
+    assert 'brand new text' in cap.plain
+
+
+def test_confirm_first_creation_shows_full(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    # no old content → preview shows full proposed text; ENTER approves
+    res, cap, _ = run_flow(monkeypatch, ENTER, diffview.confirm,
+                           '', 'brand new content\n', 'CLAUDE.md')
+    assert res is True
+    assert 'brand new content' in cap.plain

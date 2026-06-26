@@ -4,10 +4,11 @@ import atexit
 import subprocess
 
 from .config import projects_dir, choice_file, global_claude_md, config_dir
-from .config import C_RESET, C_STAR, C_DIM, C_TITLE, C_BOLD
+from .config import C_RESET, C_STAR, C_DIM, C_TITLE, C_BOLD, C_NAME
 from .config import get_claude_exe, load_settings, save_settings
 from .paths import find_actual_path
-from .sessions import get_session_info, load_recent_sessions, save_last_session, format_age, scan_sessions
+from .sessions import (get_session_info, load_recent_sessions, save_last_session,
+                       format_age, scan_sessions, load_name, get_session_title)
 from .ui import menu, launch_options_menu, pause, help_screen, settings_menu
 from .session_menu import sessions_menu
 from .mcp import mcp_status_line, global_claude_md_menu, mcp_servers, mcp_manager_menu
@@ -88,13 +89,19 @@ def run():
         qr_items = []
         for i, sess in enumerate(recent):
             lr_proj    = os.path.basename(sess['project_path']) or sess['project_path']
-            lr_preview = sess.get('preview', '') or sess['session_id'][:8] + '...'
+            sid        = sess['session_id']
+            pf         = os.path.join(projects_dir, sess.get('encoded_name', ''))
+            jsonl      = os.path.join(pf, f"{sid}.jsonl")
+            # Session name: manual rename > AI transcript title > preview > id.
+            lr_name    = (load_name(pf, sid) or get_session_title(jsonl)
+                          or sess.get('preview', '') or sid[:8] + '…')
             lr_age     = format_age(sess['timestamp'])
             star = '★' if i == 0 else '☆'
             # callable label → re-laid-out on every draw (adapts to resize)
-            label = (lambda star=star, proj=lr_proj, prev=lr_preview, age=lr_age:
+            label = (lambda star=star, proj=lr_proj, nm=lr_name, age=lr_age:
                      render.cols(
-                         [f"{C_STAR}{star}{C_RESET}", proj, prev,
+                         [f"{C_STAR}{star}{C_RESET}", proj,
+                          f"{C_NAME}{nm}{C_RESET}",
                           f"{C_DIM}({age.strip()}){C_RESET}"],
                          [3, 18, None, 7],
                          aligns=['left', 'left', 'left', 'right']))

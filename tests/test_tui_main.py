@@ -87,6 +87,18 @@ def test_quickresume_enter_launches_resume(monkeypatch, tmp_path):
     assert line and f'resume:{sids[0]}' in line
 
 
+def test_quickresume_shows_session_name(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, sids = sb.add_project('alpha', n_sessions=1)
+    # make_jsonl seeds an AI title 'Session 0' for the first session
+    sb.write_last_sessions([{
+        'project_path': actual, 'encoded_name': enc,
+        'session_id': sids[0], 'preview': 'recent work', 'timestamp': time.time(),
+    }])
+    cap, _ = run_main(monkeypatch, sb, flat(ESC))
+    assert 'Session 0' in cap.plain          # session name shown, not just id
+
+
 def test_type_to_filter_projects(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     sb.add_project('alpha')

@@ -71,6 +71,13 @@ def ai_generate_system_prompt(sp_path, project_name, project_path, proj_folder):
         return
     content = (out or '').strip()
     if content:
+        # Preview the DIFF (old → proposed) before writing — approve or reject.
+        from . import diffview
+        if not diffview.confirm(existing, content, f"SYSTEM PROMPT  /  {project_name}"):
+            _cls()
+            print(f"\n  Rejected — system prompt not written.\n")
+            time.sleep(1)
+            return
         try:
             with open(sp_path, 'w', encoding='utf-8') as f:
                 f.write(content)
@@ -79,16 +86,14 @@ def ai_generate_system_prompt(sp_path, project_name, project_path, proj_folder):
             print(f"\n  ✘ Error writing file: {e}\n")
             pause("  Press Enter...")
             return
+        try:
+            diffview.record(project_path, proj_folder, 'system_prompt', existing, content)
+        except Exception:
+            pass
         _cls()
         print(f"\n  ✔ System prompt generated for {project_name}\n")
         print(f"  Opening in editor to review...\n")
         time.sleep(1)
-        try:
-            from . import diffview
-            diffview.record_and_show(project_path, proj_folder, 'system_prompt',
-                                     existing, content)
-        except Exception:
-            pass
         open_in_editor(sp_path)
     else:
         _cls()

@@ -118,8 +118,8 @@ def test_system_prompt_generate_writes(monkeypatch, tmp_path):
     monkeypatch.setattr(system_prompt, 'run_with_progress',
                         lambda *a, **k: ('You are a test assistant.', False))
     sp = os.path.join(folder, 'system-prompt.txt')
-    # menu: 'ai' is first item; ENTER selects it, then ENTER skips extra prompt
-    keys = flat(ENTER, ENTER)
+    # menu: 'ai' first → ENTER select, ENTER skip extra prompt, ENTER approve diff
+    keys = flat(ENTER, ENTER, ENTER)
     run_flow(monkeypatch, keys, system_prompt.edit_system_prompt, folder, 'alpha', proj)
     assert os.path.exists(sp)
     assert 'test assistant' in open(sp, encoding='utf-8').read()

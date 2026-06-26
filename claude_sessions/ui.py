@@ -579,7 +579,7 @@ def help_screen():
         f"    c  scaffold CLAUDE.md     a  AI-generate CLAUDE.md",
         f"    g  project agents         w  workspace status (provenance/freshness)",
         f"    s  system prompt          A  archived view    ?  help",
-        f"    {C_DIM}diffs shown after CLAUDE.md / prompt updates — re-view from w{C_RESET}",
+        f"    {C_DIM}AI updates preview a git-style diff before approve — re-view from w{C_RESET}",
         '',
         f"  {C_BOLD}Launch options{C_RESET}",
         f"    ↑↓ field    ← → change    ENTER launch    ESC back",

@@ -13,6 +13,7 @@ import time
 import difflib
 
 from . import config as _c
+from . import render
 
 _SNAP_SUBDIR = os.path.join('.claudectl', 'snapshots')
 _INDEX = 'index.json'
@@ -71,16 +72,61 @@ def show(old, new, title):
     pager(('CLAUDECTL', title, 'DIFF'), body, header_lines=header, hint='ESC back')
 
 
-def show_if_changed(old, new, title):
-    """Show a diff only when there is a prior version to compare against."""
-    if not (old or '').strip():
-        return                       # first creation — nothing to diff
-    if (old or '') == (new or ''):
-        return
-    try:
-        show(old, new, title)
-    except Exception:
-        _c.log.exception('diff show failed')
+def confirm(old, new, title):
+    """Preview a proposed change BEFORE writing: shows the colored diff
+    (old → new) so the user approves/rejects based on what changed. `f`
+    toggles between the diff and the full proposed content. ENTER approve,
+    ESC reject. Returns True (approve) / False (reject)."""
+    from .ui import flush_input, wait_event
+    has_old = bool((old or '').strip()) and old != new
+    added, removed = stat(old, new) if has_old else (0, 0)
+    diff_body = colorize(unified(old, new, title)) if has_old else []
+    full_body = (new or '').splitlines()
+    mode_diff = has_old
+
+    flush_input()
+    top = 0
+    pending = None
+    while True:
+        body = diff_body if mode_diff else full_body
+        page = max(4, render.frame_height() - 7)
+        top = max(0, min(top, max(0, len(body) - page)))
+        at_end = top + page >= len(body)
+        if has_old:
+            hdr = (f"{_c.C_OK}+{added}{_c.C_RESET}  {_c.C_ERR}-{removed}{_c.C_RESET}   "
+                   f"{_c.C_DIM}{title} — {'diff' if mode_diff else 'full proposed'}{_c.C_RESET}")
+        else:
+            hdr = f"{_c.C_DIM}{title} — new content (nothing to compare){_c.C_RESET}"
+        frame = [render.header('CLAUDECTL', title, 'REVIEW'), '', '  ' + hdr, render.hline()]
+        for ln in body[top:top + page]:
+            frame.append(render.fit('  ' + ln, render.content_width()))
+        frame.append('')
+        keys = [('↑↓', 'scroll'), ('←→/SPACE', 'page')]
+        if has_old:
+            keys.append(('f', 'full' if mode_diff else 'diff'))
+        keys += [('ENTER', 'approve & write'), ('ESC', 'reject')]
+        frame.append(render.hint_keys(
+            keys, prefix=f"{min(top + page, len(body))}/{len(body)}"
+                         + ("  (end)" if at_end else "")))
+        render.render_frame(frame)
+
+        ev = pending if pending else wait_event()
+        pending = None
+        if ev[0] == 'up':
+            top -= 1
+        elif ev[0] == 'down':
+            top += 1
+        elif ev[0] == 'left':
+            top -= page
+        elif ev[0] == 'right' or (ev[0] == 'char' and ev[1] == ' '):
+            top += page
+        elif ev[0] == 'char' and ev[1] == 'f' and has_old:
+            mode_diff = not mode_diff
+            top = 0
+        elif ev[0] == 'enter':
+            return True
+        elif ev[0] == 'esc':
+            return False
 
 
 # ── snapshot store ───────────────────────────────────────────
@@ -144,11 +190,3 @@ def last_change(project_path, proj_folder, key):
     return None
 
 
-def record_and_show(project_path, proj_folder, key, old, new):
-    """Snapshot the old version, then show the diff if anything changed."""
-    title = TITLES.get(key, key)
-    try:
-        record(project_path, proj_folder, key, old, new)
-    except Exception:
-        _c.log.exception('diff snapshot failed')
-    show_if_changed(old, new, title)

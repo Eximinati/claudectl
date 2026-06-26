@@ -712,8 +712,10 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
 
     final = pre + new_autogen + post
 
-    # Preview full final content (with injected AUTOGEN/SESSIONS) — approve or reject
-    if not _pager_confirm(f"AI ANALYZE  /  {name}  — approve to write CLAUDE.md", final):
+    # Preview the DIFF (old → proposed) so the user approves/rejects based on
+    # what actually changed. 'f' toggles to the full proposed content.
+    from . import diffview
+    if not diffview.confirm(existing_for_sessions, final, f"AI ANALYZE  /  {name}"):
         _cls()
         print(f"\n  Rejected — CLAUDE.md not written.\n")
         time.sleep(1)
@@ -748,8 +750,8 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
         pass
     try:
         from . import diffview
-        diffview.record_and_show(project_path, proj_folder, 'claude_md',
-                                 existing_for_sessions, final)
+        diffview.record(project_path, proj_folder, 'claude_md',
+                        existing_for_sessions, final)   # diff already shown pre-write
     except Exception:
         pass
     open_in_editor(md_path)
@@ -809,7 +811,7 @@ def scaffold_claude_md(project_path, proj_folder=None):
         pass
     try:
         from . import diffview
-        diffview.record_and_show(project_path, proj_folder, 'claude_md', existing, final)
+        diffview.record(project_path, proj_folder, 'claude_md', existing, final)
     except Exception:
         pass
     open_in_editor(md_path)
