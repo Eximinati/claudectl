@@ -83,6 +83,12 @@ def ai_generate_system_prompt(sp_path, project_name, project_path, proj_folder):
         print(f"\n  ✔ System prompt generated for {project_name}\n")
         print(f"  Opening in editor to review...\n")
         time.sleep(1)
+        try:
+            from . import diffview
+            diffview.record_and_show(project_path, proj_folder, 'system_prompt',
+                                     existing, content)
+        except Exception:
+            pass
         open_in_editor(sp_path)
     else:
         _cls()

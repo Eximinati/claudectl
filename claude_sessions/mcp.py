@@ -107,9 +107,14 @@ def update_global_claude_md_mcp(mcp_name, tools_doc):
     try:
         with open(global_claude_md, 'w', encoding='utf-8') as f:
             f.write(final)
-        return True
     except Exception:
         return False
+    try:
+        from . import diffview
+        diffview.record_and_show(None, None, 'global_claude_md', existing, final)
+    except Exception:
+        pass
+    return True
 
 
 def global_claude_md_menu():

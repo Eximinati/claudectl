@@ -494,6 +494,20 @@ def workspace_status_screen(project_path, proj_folder=None):
     """TUI screen for the sessions-menu `w` hotkey."""
     from .ui import wait_event
     name = os.path.basename(project_path) or project_path or 'workspace'
+    from . import diffview
+    from .sessions import format_age
+
+    def _current(key):
+        p = {'claude_md': os.path.join(project_path, 'CLAUDE.md') if project_path else '',
+             'system_prompt': os.path.join(proj_folder, 'system-prompt.txt') if proj_folder else '',
+             }.get(key, '')
+        if p and os.path.isfile(p):
+            try:
+                return open(p, encoding='utf-8', errors='ignore').read()
+            except Exception:
+                return ''
+        return ''
+
     while True:
         lines, m, score, safe = _status_lines(project_path, proj_folder)
         frame = [render.header('CLAUDECTL', name, 'WORKSPACE'), '', render.hline(), '']
@@ -502,10 +516,36 @@ def workspace_status_screen(project_path, proj_folder=None):
         last = max((o.get('last_run', '') for o in m['operations'].values()), default='')
         if last:
             frame.append(f"  {_c.C_DIM}last operation: {last}{_c.C_RESET}")
-        frame += ['', render.hint_keys([('r', 'refresh'), ('ENTER/ESC', 'back')])]
+
+        changes = [(k, diffview.last_change(project_path, proj_folder, k))
+                   for k in ('claude_md', 'system_prompt')]
+        changes = [(k, c) for k, c in changes if c]
+        diff_keys = set()
+        if changes:
+            frame += ['', f"  {_c.C_BOLD}Recent changes{_c.C_RESET}"]
+            for k, c in changes:
+                diff_keys.add(k)
+                age = format_age(c['ts'])
+                frame.append(
+                    f"    {diffview.TITLES[k]:<16} {_c.C_DIM}{age}{_c.C_RESET}  "
+                    f"{_c.C_OK}+{c['added']}{_c.C_RESET} {_c.C_ERR}-{c['removed']}{_c.C_RESET}")
+
+        keys = [('r', 'refresh')]
+        if 'claude_md' in diff_keys:
+            keys.append(('c', 'CLAUDE.md diff'))
+        if 'system_prompt' in diff_keys:
+            keys.append(('s', 'sys-prompt diff'))
+        keys.append(('ENTER/ESC', 'back'))
+        frame += ['', render.hint_keys(keys)]
         render.render_frame(frame)
         ev = wait_event()
         if ev[0] in ('enter', 'esc'):
             return
         if ev[0] == 'char' and ev[1] == 'r':
             continue
+        if ev[0] == 'char' and ev[1] == 'c' and 'claude_md' in diff_keys:
+            diffview.show(diffview.load_prev(project_path, proj_folder, 'claude_md'),
+                          _current('claude_md'), diffview.TITLES['claude_md'])
+        if ev[0] == 'char' and ev[1] == 's' and 'system_prompt' in diff_keys:
+            diffview.show(diffview.load_prev(project_path, proj_folder, 'system_prompt'),
+                          _current('system_prompt'), diffview.TITLES['system_prompt'])

@@ -531,12 +531,26 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
     start_t = time.time()
 
     try:
+        # Prompt goes via stdin, NOT argv: a large project context (e.g. a
+        # folder of many repos) overruns the Windows command-line limit
+        # (~32KB) → [WinError 206]. `claude -p` with no positional prompt
+        # reads the prompt from stdin.
         proc = subprocess.Popen(
-            [claude_exe, '-p', prompt, '--output-format', 'stream-json', '--verbose', '--allowedTools', ''],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            [claude_exe, '-p', '--output-format', 'stream-json', '--verbose', '--allowedTools', ''],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding='utf-8', errors='ignore',
             cwd=project_path
         )
+
+        # Writer thread: feed the prompt and close stdin. Threaded so a prompt
+        # larger than the pipe buffer can't deadlock against our stdout reads.
+        def _write_stdin():
+            try:
+                proc.stdin.write(prompt)
+                proc.stdin.close()
+            except Exception:
+                pass
+        threading.Thread(target=_write_stdin, daemon=True).start()
 
         # Reader thread feeds raw stdout lines into a queue
         line_q = queue.Queue()
@@ -732,6 +746,12 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
         workspace.update_manifest(project_path, proj_folder, 'ai_analyze', is_update=is_update)
     except Exception:
         pass
+    try:
+        from . import diffview
+        diffview.record_and_show(project_path, proj_folder, 'claude_md',
+                                 existing_for_sessions, final)
+    except Exception:
+        pass
     open_in_editor(md_path)
 
 
@@ -785,6 +805,11 @@ def scaffold_claude_md(project_path, proj_folder=None):
     try:
         from . import workspace
         workspace.update_manifest(project_path, proj_folder, 'scaffold')
+    except Exception:
+        pass
+    try:
+        from . import diffview
+        diffview.record_and_show(project_path, proj_folder, 'claude_md', existing, final)
     except Exception:
         pass
     open_in_editor(md_path)
