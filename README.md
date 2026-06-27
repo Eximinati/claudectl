@@ -60,6 +60,13 @@ Claude Code treats your work as a collection of chats. claudectl treats each pro
 - **System prompts** (`s`) — AI-generate or hand-edit a per-project system prompt injected on every launch
 - **Memory map** (`M`) — see which CLAUDE.md files load for a project (user / project / .claude / local) and their `@import`s; open any in your editor
 
+### Connections graph & semantic memory (`n`)
+- **Project connections graph** — visualize how a project hangs together as an interactive **plexus** network (force-directed, zoom/pan/hover, grid-approx physics that stays smooth at thousands of nodes). **Dependency edges across languages**: Python `import` (AST) + C/C++ `#include`, C# `using`→namespace, JS/TS `import`/`require` (regex) — so non-Python repos show real architecture, not just folders. Nodes are **clustered and colored per project/repo**; **filters** in the browser: per-type toggles, **dependencies-only** (hide containment → pure architecture), **search**, labels, Fit/Reset. **File view** (~300-file cap) or **module view** (`g`, one node per directory, depth-collapsed) which scales to any repo (large repos default to module view). Self-contained HTML (no CDN), opened in the browser; a TUI summary shows counts + most-connected nodes.
+- **Claude-powered persistent memory** — a cognee-style knowledge graph reimplemented natively (no extra dependency, no separate API key): `claude.exe` extracts entities + relationships from code, CLAUDE.md, and sessions into `<project>/.claudectl/memory/graph.json`, updated **incrementally by file hash**. Entities merge into the plexus graph (violet nodes).
+- **Memory → CLAUDE.md** — the digest is written into a `<!-- CLAUDECTL:MEMORY -->` block in the project CLAUDE.md (only that block; user/AUTOGEN content untouched), so **every Claude session loads the current semantic memory** as context. Toggle with the `memory_to_claudemd` setting (default on); the change is reviewable via the `w` workspace diff.
+- **Ask the project** — grounded Q&A over the memory graph: retrieves the relevant subgraph and asks Claude (`a` in the connections screen). No embeddings, no cloud — uses your existing Claude Code auth.
+- *(Inspired by [cognee](https://github.com/topoteretes/cognee), implemented from scratch — claudectl stays pure-stdlib and offline-friendly.)*
+
 ### Workspace provenance & freshness
 - **Provenance manifest** — `<project>/.claudectl/workspace-manifest.json` records where generated context came from: repo HEAD, source-file hashes (CLAUDE.md/README/configs), sessions analyzed (count + range), CLAUDE.md files, MCP server snapshots + tool counts, and last-run timestamps for scaffold / AI-analyze / launch. Updated automatically after those operations (best-effort — never blocks them).
 - **Freshness check** — `claudectl workspace status` (run inside a repo) or `w` in the sessions menu shows 🟢 Fresh / 🟡 Stale / 🔴 Invalid per component and an overall freshness score. Detects when the repo HEAD moved, README changed, or new sessions accrued since the memory was generated, plus a `safe_to_launch` flag. Status is read-only — viewing never mutates the manifest.
@@ -128,7 +135,7 @@ $lnk = $shell.CreateShortcut("$env:USERPROFILE\Desktop\Open Repo Claude.lnk")
 $lnk.TargetPath       = "C:\Windows\System32\cmd.exe"
 $lnk.Arguments        = "/c `"$PWD\Open Repo cmd.bat`""
 $lnk.WorkingDirectory = "$PWD"
-$lnk.IconLocation     = "$PWD\claude folder.ico, 0"
+$lnk.IconLocation     = "$PWD\claudectl.ico, 0"
 $lnk.Save()
 ```
 
@@ -219,6 +226,7 @@ On launch, claudectl shows all projects Claude Code has ever opened, sorted by m
 | a | AI-generate CLAUDE.md (Claude CLI) |
 | s | Edit / generate system prompt |
 | g | Pick project agents (library checklist → `.claude/agents/`) |
+| n | Connections graph + Claude project memory (plexus, ask) |
 | w | Workspace status (provenance & freshness) |
 | p | Manage extra PATH entries |
 | x | Manage --add-dir directories |
@@ -370,6 +378,9 @@ claudectl's `find_actual_path()` in `paths.py` reverses this by walking the file
     ├── agents.py           # agent library, per-project selection, scaffold/AI
     ├── hooks.py            # hooks template / toggle / remove
     ├── workspace.py        # provenance manifest + freshness status
+    ├── connections.py      # project connections graph + plexus HTML
+    ├── memory.py           # Claude-powered semantic memory (ECL + ask)
+    ├── diffview.py         # git-style diffs for generated files
     ├── claude_md.py        # scaffold + AI CLAUDE.md, memory map
     └── system_prompt.py    # edit / AI-generate system prompt
 ```

@@ -212,6 +212,61 @@ def run_with_progress(args, crumbs, label, timeout=120, cwd=None):
     return (chunks[0] if chunks else ''), False
 
 
+def run_with_progress_stdin(args, stdin_text, crumbs, label, timeout=240, cwd=None):
+    """Like run_with_progress but feeds the prompt via STDIN (avoids the
+    Windows command-line length limit for large prompts). ESC cancels.
+    Returns (stdout|None, cancelled)."""
+    import subprocess
+    import threading
+    try:
+        proc = subprocess.Popen(
+            args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, encoding='utf-8', errors='ignore',
+            cwd=cwd, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except Exception:
+        return None, False
+
+    def _feed():
+        try:
+            proc.stdin.write(stdin_text)
+            proc.stdin.close()
+        except Exception:
+            pass
+    threading.Thread(target=_feed, daemon=True).start()
+
+    chunks = []
+    reader = threading.Thread(target=lambda: chunks.append(proc.stdout.read()),
+                              daemon=True)
+    reader.start()
+
+    flush_input()
+    start = time.time()
+    tick = 0
+    while proc.poll() is None:
+        if time.time() - start > timeout:
+            proc.kill()
+            return None, False
+        while True:
+            ev = poll_event()
+            if not ev:
+                break
+            if ev[0] == 'esc':
+                proc.kill()
+                return None, True
+        render.render_frame([
+            render.header(*crumbs), '',
+            f"  {label}", '',
+            '  ' + render.progress_bar(tick),
+            f"  {C_DIM}{int(time.time() - start)}s elapsed{C_RESET}", '',
+            render.hint_keys([('ESC', 'cancel')]),
+        ])
+        tick += 1
+        time.sleep(0.1)
+
+    reader.join(timeout=5)
+    return (chunks[0] if chunks else ''), False
+
+
 # ── modal widgets ────────────────────────────────────────────
 
 def confirm(question, danger=False, yes_label='Yes', no_label='No'):
@@ -578,6 +633,7 @@ def help_screen():
         f"    p  extra PATH entries     x  add-dirs (--add-dir)",
         f"    c  scaffold CLAUDE.md     a  AI-generate CLAUDE.md",
         f"    g  project agents         w  workspace status (provenance/freshness)",
+        f"    n  connections graph + Claude project memory (plexus, ask)",
         f"    s  system prompt          A  archived view    ?  help",
         f"    {C_DIM}AI updates preview a git-style diff before approve — re-view from w{C_RESET}",
         '',

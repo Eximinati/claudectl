@@ -198,7 +198,7 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
                 ('d', 'archive'), ('e', 'export'), ('f', 'fork'),
                 ('⇧F', 'files'), ('g', 'agents'), ('i', 'info')]))
             frame.append(render.hint_keys([
-                ('⇧M', 'memory'), ('p', 'paths'), ('r', 'rename'),
+                ('⇧M', 'memory'), ('n', 'connections'), ('p', 'paths'), ('r', 'rename'),
                 ('s', 'sys-prompt'), ('t', 'tag'), ('u', 'usage'),
                 ('v', 'view'), ('w', 'workspace'), ('x', 'add-dirs'), ('?', 'help')]))
             frame.append(render.hint_bar(
@@ -399,6 +399,10 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
         elif ev[0] == 'char' and ev[1] == 'w' and not show_archived:
             from . import workspace
             workspace.workspace_status_screen(project_path, proj_folder)
+
+        elif ev[0] == 'char' and ev[1] == 'n' and not show_archived:
+            from . import connections
+            connections.connections_screen(project_path, proj_folder, project_name)
 
         elif ev[0] == 'char' and ev[1] == 'g' and not show_archived:
             from .agents import select_session_agents, sync_project_agents

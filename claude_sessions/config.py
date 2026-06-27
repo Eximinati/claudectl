@@ -45,6 +45,8 @@ _DEFAULT_SETTINGS = {
     'project_defaults': {},    # encoded_name -> {'effort','model','permission'}
     'cost_table': {},          # user overrides for COST_PER_MTOK
     'theme': 'default',        # named palette (see THEMES)
+    'memory_to_claudemd': True, # write semantic memory digest into CLAUDE.md
+    'memory_max_calls': None,   # cap Claude calls when building memory (None = all)
 }
 
 
@@ -266,6 +268,8 @@ _AUTOGEN_END    = '<!-- AUTOGEN:END -->'
 _SESSIONS_START = '<!-- SESSIONS:START -->'
 _SESSIONS_END   = '<!-- SESSIONS:END -->'
 _AI_MARKER      = '<!-- AI:ANALYZED -->'
+_MEMORY_START   = '<!-- CLAUDECTL:MEMORY:START -->'
+_MEMORY_END     = '<!-- CLAUDECTL:MEMORY:END -->'
 
 _GMCP_START = '<!-- MCP:{name}:START -->'
 _GMCP_END   = '<!-- MCP:{name}:END -->'

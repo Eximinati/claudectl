@@ -7,10 +7,44 @@ import threading
 import subprocess
 import shutil
 
-from .config import (W, _AUTOGEN_START, _AUTOGEN_END, _SESSIONS_START, _SESSIONS_END, _AI_MARKER)
+from .config import (W, _AUTOGEN_START, _AUTOGEN_END, _SESSIONS_START, _SESSIONS_END,
+                     _AI_MARKER, _MEMORY_START, _MEMORY_END)
 from .config import get_claude_exe, open_in_editor, config_dir
 from .sessions import get_session_info, get_session_rich_summary, read_extra_paths, format_age
 from .ui import text_input, _cls, wait_event, poll_event
+
+
+def write_memory_block(project_path, digest):
+    """Insert/replace the CLAUDECTL:MEMORY sentinel block in <project>/CLAUDE.md,
+    leaving all other content (user prose, AUTOGEN, SESSIONS, AI marker) intact.
+    Returns (ok, old_content, new_content)."""
+    md_path = os.path.join(project_path, 'CLAUDE.md')
+    old = ''
+    if os.path.exists(md_path):
+        try:
+            old = open(md_path, encoding='utf-8', errors='ignore').read()
+        except Exception:
+            old = ''
+    section = (f"{_MEMORY_START}\n## Project memory (claudectl — auto-maintained)\n"
+               f"<!-- Generated from the semantic graph; edits here are overwritten -->\n\n"
+               f"{digest}\n{_MEMORY_END}\n")
+    if _MEMORY_START in old and _MEMORY_END in old:
+        pre = old[:old.index(_MEMORY_START)]
+        post = old[old.index(_MEMORY_END) + len(_MEMORY_END):]
+        new = pre + section + post
+    elif old.strip():
+        new = old.rstrip('\n') + '\n\n' + section
+    else:
+        name = os.path.basename(project_path) or project_path
+        new = f"# {name}\n\n{section}"
+    if new == old:
+        return True, old, new
+    try:
+        with open(md_path, 'w', encoding='utf-8') as f:
+            f.write(new)
+        return True, old, new
+    except Exception:
+        return False, old, old
 
 
 def resolve_memory_files(project_path):
