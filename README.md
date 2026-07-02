@@ -171,6 +171,27 @@ $lnk.Save()
 
 Then right-click the Desktop shortcut → **Pin to taskbar**.
 
+**Elevated shortcut, no repeated UAC prompt** — if `claude.exe` or your project paths need admin rights, a plain "Run as administrator" shortcut checkbox triggers a UAC prompt on every launch. To elevate once and skip the prompt afterward, register a Scheduled Task that already runs at highest privilege, then point the shortcut at `schtasks /run`:
+
+```powershell
+# 1) register the task (one-time)
+$action    = New-ScheduledTaskAction -Execute "C:\Users\<you>\AppData\Local\Microsoft\WindowsApps\wt.exe" -Argument '-d "<repo>" powershell -NoExit -Command "& ''<repo>\Open Repo cmd.bat''"' -WorkingDirectory "<repo>"
+$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest -LogonType Interactive
+$settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+Register-ScheduledTask -TaskName "ClaudeCtl" -Action $action -Principal $principal -Settings $settings -Force
+
+# 2) point the shortcut at the task instead of launching directly
+$shell = New-Object -ComObject WScript.Shell
+$lnk = $shell.CreateShortcut("$env:USERPROFILE\Desktop\claudectl.lnk")
+$lnk.TargetPath       = "C:\Windows\System32\schtasks.exe"
+$lnk.Arguments        = '/run /tn "ClaudeCtl"'
+$lnk.WorkingDirectory = "<repo>"
+$lnk.IconLocation     = "<repo>\claudectl.ico, 0"
+$lnk.Save()
+```
+
+Leave the shortcut's own **"Run as administrator"** checkbox unticked — `schtasks.exe` itself doesn't need to be elevated, only the task it triggers. Launching via `wt.exe` (instead of `cmd.exe`/`powershell.exe` directly) also avoids the legacy-conhost fallback that elevated console apps can trigger, which otherwise makes the TUI render with broken colors/box-drawing under UAC.
+
 </details>
 
 ### Installing the agent library
