@@ -175,7 +175,7 @@ Then right-click the Desktop shortcut → **Pin to taskbar**.
 
 ```powershell
 # 1) register the task (one-time)
-$action    = New-ScheduledTaskAction -Execute "C:\Users\<you>\AppData\Local\Microsoft\WindowsApps\wt.exe" -Argument '-d "<repo>" powershell -NoExit -Command "& ''<repo>\Open Repo cmd.bat''"' -WorkingDirectory "<repo>"
+$action    = New-ScheduledTaskAction -Execute "C:\Users\<you>\AppData\Local\Microsoft\WindowsApps\wt.exe" -Argument '-d "<repo>" powershell -Command "& ''<repo>\Open Repo cmd.bat''"' -WorkingDirectory "<repo>"
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest -LogonType Interactive
 $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 Register-ScheduledTask -TaskName "ClaudeCtl" -Action $action -Principal $principal -Settings $settings -Force
