@@ -93,28 +93,25 @@ def _pct_color(pct):
 def _window_label(key):
     k = key.lower()
     if 'five' in k or '5h' in k:
-        return 'daily'
-    if 'seven_day_opus' in k:
-        return 'wk-opus'
-    if 'seven_day_sonnet' in k:
-        return 'wk-sonnet'
+        return 'session'
     if 'seven' in k or 'week' in k:
         return 'weekly'
     return key[:8]
 
 
 def _limit_label(item):
-    """Label a `limits[]` entry by its kind/group."""
+    """Label a `limits[]` entry. New usage shape: kind = session | weekly_all |
+    weekly_scoped (per-model, with scope.model.display_name, e.g. Fable)."""
     k = str(item.get('kind', '')).lower()
     g = str(item.get('group', '')).lower()
-    if 'opus' in k:
-        return 'wk-opus'
-    if 'sonnet' in k:
-        return 'wk-sonnet'
-    if g == 'weekly' or 'week' in k:
+    scope = item.get('scope') or {}
+    model = (scope.get('model') or {}) if isinstance(scope, dict) else {}
+    if k == 'weekly_scoped' or model.get('display_name'):
+        return model.get('display_name') or 'wk-model'
+    if k == 'session' or g == 'session' or 'five' in k or '5h' in k:
+        return 'session'
+    if k == 'weekly_all' or g == 'weekly' or 'week' in k:
         return 'weekly'
-    if g == 'session' or 'session' in k or 'five' in k or '5h' in k:
-        return 'daily'
     return (k or g)[:8]
 
 
@@ -156,8 +153,8 @@ def _extract_windows(data):
                 continue
             out.append((_window_label(key), pct, val.get('resets_at')))
 
-    order = {'daily': 0, 'weekly': 1, 'wk-sonnet': 2, 'wk-opus': 3}
-    out.sort(key=lambda w: order.get(w[0], 9))
+    order = {'session': 0, 'weekly': 1}   # session, all-models weekly, then per-model
+    out.sort(key=lambda w: order.get(w[0], 5))
     return out
 
 
@@ -174,7 +171,7 @@ def usage_status_line():
     if not windows:
         return ''
     parts = []
-    for label, pct, resets in windows[:3]:
+    for label, pct, resets in windows[:4]:
         col = _pct_color(pct)
         seg = (f"{_c.C_DIM}{label}{_c.C_RESET} "
                f"{render.meter(pct, width=10, color=col)} "

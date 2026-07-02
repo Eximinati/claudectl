@@ -245,8 +245,8 @@ W = 62
 EFFORTS       = ['',        'low', 'medium', 'high', 'xhigh', 'max']
 EFFORT_LABELS = ['default', 'low', 'medium', 'high', 'xhigh', 'max']
 # Full model ids — claude.exe rejects bare version strings like 'sonnet-4-6'
-MODELS        = ['', 'claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-fable-5']
-MODEL_LABELS  = ['default', 'haiku-4-5', 'sonnet-4-6', 'opus-4-8', 'fable-5']
+MODELS        = ['', 'claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-fable-5']
+MODEL_LABELS  = ['default', 'haiku-4-5', 'sonnet-5', 'opus-4-8', 'fable-5']
 PERMS         = ['',        'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk']
 PERM_LABELS   = ['default', 'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk']
 PERM_RISKY    = {'bypassPermissions', 'dontAsk'}   # shown with warning tint

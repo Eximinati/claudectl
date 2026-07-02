@@ -41,7 +41,7 @@ def test_cycle_effort_and_model(monkeypatch, tmp_path):
                 ENTER)
     result, _ = run_menu(monkeypatch, keys)
     assert result['effort'] == 'low'
-    assert result['model'] == 'claude-sonnet-4-6'
+    assert result['model'] == 'claude-sonnet-5'
 
 
 def test_cycle_wraps_backwards(monkeypatch, tmp_path):

@@ -30,7 +30,7 @@ def _as_dict(windows):
 
 def test_real_shape_uses_limits_array():
     w = _as_dict(_extract_windows(REAL))
-    assert w == {'daily': 18.0, 'weekly': 23.0}
+    assert w == {'session': 18.0, 'weekly': 23.0}
 
 
 def test_low_weekly_not_inflated_to_100_via_limits():
@@ -40,7 +40,7 @@ def test_low_weekly_not_inflated_to_100_via_limits():
 
 def test_fallback_dict_windows_0_to_100():
     data = {'five_hour': {'utilization': 30}, 'seven_day': {'utilization': 55}}
-    assert _as_dict(_extract_windows(data)) == {'daily': 30.0, 'weekly': 55.0}
+    assert _as_dict(_extract_windows(data)) == {'session': 30.0, 'weekly': 55.0}
 
 
 def test_regression_fractionlike_value_not_multiplied():

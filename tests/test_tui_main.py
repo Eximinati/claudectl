@@ -41,7 +41,7 @@ def test_smoke_main_menu_renders(monkeypatch, tmp_path):
     assert 'SELECT PROJECT' in plain
     assert 'type to search' in plain          # hint bar visible
     assert 'alpha' in plain
-    assert 'daily' in plain                   # usage banner
+    assert 'session' in plain                 # usage banner
     assert 'TestMCP' in plain                 # mcp footer
 
 

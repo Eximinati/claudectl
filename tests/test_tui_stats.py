@@ -144,6 +144,8 @@ def test_usage_no_data_empty_line(monkeypatch, tmp_path):
 
 
 def test_usage_label_mapping(monkeypatch, tmp_path):
-    assert usage_mod._window_label('five_hour') == 'daily'
+    assert usage_mod._window_label('five_hour') == 'session'
     assert usage_mod._window_label('seven_day') == 'weekly'
-    assert usage_mod._window_label('seven_day_opus') == 'wk-opus'
+    # per-model weekly limits now come from limits[].scope.model.display_name
+    assert usage_mod._limit_label({'kind': 'weekly_scoped',
+                                   'scope': {'model': {'display_name': 'Fable'}}}) == 'Fable'
