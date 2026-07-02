@@ -91,6 +91,26 @@ def test_resolve_memory_files(monkeypatch, tmp_path):
     assert proj_imports[0][1] is False           # not on disk
 
 
+def test_preserve_block_keeps_memory(monkeypatch, tmp_path):
+    from claude_sessions.config import _MEMORY_START, _MEMORY_END
+    mem = f"{_MEMORY_START}\n## Project memory\nENTITY x\n{_MEMORY_END}"
+    existing = f"# proj\n\n{mem}\n"
+    # AI rewrite dropped the memory block entirely → reinjected verbatim
+    ai_out = "# proj\n\n## Overview\nnew stuff\n"
+    final = claude_md._preserve_block(ai_out, existing)
+    assert _MEMORY_START in final and _MEMORY_END in final
+    assert 'ENTITY x' in final
+    # AI emitted a mangled block → replaced by the real one, no duplicate
+    ai_mangled = f"# proj\n\n{_MEMORY_START}\ngarbage\n{_MEMORY_END}\n"
+    final2 = claude_md._preserve_block(ai_mangled, existing)
+    assert final2.count(_MEMORY_START) == 1 and 'garbage' not in final2
+
+
+def test_preserve_block_noop_without_existing(monkeypatch, tmp_path):
+    ai_out = "# proj\n\ncontent\n"
+    assert claude_md._preserve_block(ai_out, "# proj\nno block") == ai_out
+
+
 def test_memory_map_menu_opens_editor(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(claude_md, 'config_dir', str(sb.cfg))

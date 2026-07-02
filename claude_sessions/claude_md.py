@@ -47,6 +47,19 @@ def write_memory_block(project_path, digest):
         return False, old, old
 
 
+def _preserve_block(final, existing, start=_MEMORY_START, end=_MEMORY_END):
+    """Carry a sentinel block from `existing` into `final` verbatim. AI analyze
+    rewrites the whole CLAUDE.md and would otherwise drop the machine-maintained
+    CLAUDECTL:MEMORY block (it lives after AUTOGEN/SESSIONS, so Claude never
+    sees it). Always keep it."""
+    if start not in existing or end not in existing:
+        return final
+    block = existing[existing.index(start):existing.index(end) + len(end)]
+    if start in final and end in final:  # drop any stray block the model emitted
+        final = final[:final.index(start)] + final[final.index(end) + len(end):]
+    return final.rstrip('\n') + '\n\n' + block.rstrip('\n') + '\n'
+
+
 def resolve_memory_files(project_path):
     """Which CLAUDE.md files load for a project, broadest→narrowest, with
     @import references resolved one level. Returns [(label, path, exists, imports)]."""
@@ -745,6 +758,9 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
         post = (post.rstrip('\n') + '\n\n' + new_sessions) if post.strip() else new_sessions
 
     final = pre + new_autogen + post
+
+    # Never drop the semantic-memory block — reinject it verbatim from the old file
+    final = _preserve_block(final, existing_for_sessions)
 
     # Preview the DIFF (old → proposed) so the user approves/rejects based on
     # what actually changed. 'f' toggles to the full proposed content.
