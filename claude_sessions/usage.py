@@ -213,4 +213,15 @@ def usage_status_line():
         if resets:
             seg += f" {_c.C_DIM}→ {_fmt_reset(resets)}{_c.C_RESET}"
         parts.append(seg)
-    return '  ' + f'  {_c.C_DIM}·{_c.C_RESET}  '.join(parts)
+    line = '  ' + f'  {_c.C_DIM}·{_c.C_RESET}  '.join(parts)
+    # optional daily-token alert badge (cache-only, cheap)
+    try:
+        alert = _c.load_settings().get('daily_token_alert', 0) or 0
+        if alert:
+            from .stats import today_tokens, fmt_tok
+            tot = today_tokens()
+            if tot >= alert:
+                line += f"  {_c.C_DIM}·{_c.C_RESET}  {_c.C_WARN}today {fmt_tok(tot)} tok ⚠{_c.C_RESET}"
+    except Exception:
+        pass
+    return line

@@ -169,7 +169,7 @@ def test_windowed_sessions_small_terminal(monkeypatch, tmp_path):
     result, cap, _ = open_menu(monkeypatch, sb, keys, folder)
     assert 'more' in cap.plain                # overflow marker
     assert 'r rename' in cap.plain            # hint line 1 visible
-    assert 'A archived' in cap.plain          # hint line 2 visible
+    assert 'm memory' in cap.plain            # hint line 2 (project row) visible
 
 
 def test_empty_project(monkeypatch, tmp_path):

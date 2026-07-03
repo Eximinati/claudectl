@@ -19,10 +19,12 @@ Claude Code treats your work as a stream of chats. **claudectl treats each proje
 
 **Why claudectl**
 
-- 🧠 **Persistent memory for the agent** — a knowledge graph of your project, extracted by Claude and written into CLAUDE.md, so every session starts with real context (not a blank slate).
+- 🧠 **Intelligent memory, not a memory dump** — nobody else does task-scoped, token-budgeted injection at the launcher: a micro-index always on (≤250 tok), per-module detail loaded only when Claude touches those files, and an optional per-prompt hook that injects just the subgraph relevant to what you asked.
+- 📚 **It learns from every session** — durable lessons (fixes, decisions, preferences) distilled from transcripts, human-reviewed, injected when relevant, decayed when stale.
 - 🕸️ **See your architecture** — an animated, expandable dependency graph (Python · C/C++ · C# · JS/TS) that opens at the project level and drills down to single files.
+- 🩺 **Auto-solves common Claude Code pain** — pre-launch health checks, context-loss insurance after `/compact`, permission-fatigue killer, token-burn advisor, daily usage tracking.
+- 🤖 **Adaptive agents** — the right subagents suggested (or auto-applied) per project from local signals.
 - 📦 **Workspace, not chats** — browse, search, tag, fork, resume, and archive every Claude Code session across every project.
-- 🔌 **Manage the whole surface** — MCP servers, subagents, hooks, system prompts, and per-project launch defaults from one TUI.
 - ⚡ **Zero runtime dependencies** — pure Python standard library, Windows-native, uses your existing Claude Code auth (no extra API key).
 
 ---
@@ -89,13 +91,34 @@ An interactive, **whole-project dependency graph** rendered as a self-contained 
 - **Reads as architecture** — each project sits in its **own contained bubble** (never overlaps others), nodes sized by importance (file count + dependency degree), colored per project, animated **rotating dodecahedra** with flowing connection particles on a neural-network-style canvas.
 - **Controls** — search (expands the path to matches), filters (dependency / containment / hulls / labels), Fit / Reset / Expand-all / Collapse; zoom-aware labels; hover highlights neighbors. Built graph is **cached** (`.claudectl/connections-cache.json`) so reopening is instant; `r` forces a rebuild.
 
-### Claude-powered project memory (`n` → `m`)
-A native, cognee-style **knowledge graph** of your project — no extra dependency, no separate API key (uses your Claude Code auth).
+### Intelligent project memory (`m`)
+The feature that makes claudectl unique: **task-scoped, token-budgeted memory injection at the launcher**. Claude remembers the whole project while paying the fewest possible tokens — three injection surfaces, zero duplication:
 
-- **Whole-project extraction** — `claude.exe` summarizes **every repo and its important modules** (interfaces, entry points, headers, largest/most-central files), producing entities + relationships, **incrementally by file hash** (only changed modules are re-analyzed). Progress bar, cancellable; stored in `<project>/.claudectl/memory/graph.json`.
-- **Memory → CLAUDE.md** — a structured digest (per repo → module → key entities) is written into a `<!-- CLAUDECTL:MEMORY -->` block in the project CLAUDE.md (only that block; your prose and AUTOGEN content untouched), so **every session loads the current project memory** as context. Toggle via `memory_to_claudemd`; the change is reviewable in the `w` workspace diff.
-- **Ask the project** (`n` → `a`) — grounded Q&A: retrieves the relevant subgraph and asks Claude. No embeddings, no cloud.
-- *(Inspired by [cognee](https://github.com/topoteretes/cognee), reimplemented from scratch so claudectl stays pure-stdlib and offline-friendly.)*
+| Surface | What Claude sees | Cost |
+|---|---|---|
+| CLAUDE.md micro-index | repo one-liners + module names + recall pointer | ≤250 tok, every session |
+| `.claude/rules/claudectl-mem-*.md` | per-module entities & relations, `globs:`-scoped | **0 until Claude touches those files** |
+| `UserPromptSubmit` hook (opt-in) | the subgraph relevant to *your current prompt*, budget-cut | ≤600 tok/prompt, <1s local |
+
+- **Whole-project extraction** — `claude.exe` summarizes every repo and module (incrementally by file hash), merged with the **real dependency graph** (cross-module edges + importance rank) from the connections engine. Stored in `.claudectl/memory/graph.json`.
+- **Recall engine** — local scoring (IDF keyword + path match + dependency rank + graph expansion), no embeddings, deterministic, <0.5s on 500 entities. On-demand CLI: `claudectl recall "<topic>"` — Claude itself can call it mid-session via Bash.
+- **Session learning** — after each session claudectl distills durable *lessons* (error→fix pairs, decisions, preferences) from the transcript. Lessons are pending until you approve/pin them (`⇧L` review screen); approved lessons boost recall and decay if unused. The project literally gets smarter the more you use it.
+- **Memory hub** (`m` in the sessions menu) — one screen for everything: status, build, ask, injection preview with live "what would my prompt inject?" probe, lessons, per-surface toggles.
+- **Ask the project** — grounded Q&A over the graph, answered by Claude with only the relevant subgraph as context.
+- *(Graph memory inspired by [cognee](https://github.com/topoteretes/cognee); retrieval budgeting inspired by [Aider's repo-map](https://aider.chat/docs/repomap.html); both reimplemented from scratch — pure stdlib.)*
+
+### Project health & auto-fixes (`w`)
+Launcher-side mitigations for the most common Claude Code problems (2026 field research):
+
+- **Pre-launch health card** — CLAUDE.md over-budget (loads every session!), missing `--add-dir`/PATH entries, non-UTF-8 CLAUDE.md, stale memory, MCP failures, session-window burn ≥70% (suggests cheaper model/effort for routine work).
+- **Context-loss insurance** — after every session a 5-line summary (goal + files touched) is appended to `.claudectl/session-log.md`, so the next session can recall what happened even after `/compact` wiped the context. Local, free.
+- **Permission fatigue killer** — `P` in the workspace screen scans your history for repeatedly-used Bash commands and proposes `permissions.allow` rules for the project settings.json (diff-previewed, you approve).
+
+### Adaptive agent selection (`g`)
+The agents screen opens with a **"Suggested for this project"** section — library agents ranked against the project's languages (from the dependency graph), memory entities, and name. Local scoring, instant, free. Setting `agents_auto: 'auto'` applies suggestions automatically on first open (your manual picks are never touched).
+
+### Daily token tracking (⚙ Usage stats → `d`)
+Per-day table of the last 14 days — tokens in/out/cache, est. cost, sessions, bar chart, today highlighted, live plan-window % alongside. Optional `daily_token_alert` badge on the main screen when today's tokens cross your threshold.
 
 ### Workspace provenance & freshness
 - **Provenance manifest** — `<project>/.claudectl/workspace-manifest.json` records where generated context came from: repo HEAD, source-file hashes (CLAUDE.md/README/configs), sessions analyzed (count + range), CLAUDE.md files, MCP server snapshots + tool counts, and last-run timestamps for scaffold / AI-analyze / launch. Updated automatically after those operations (best-effort — never blocks them).
@@ -271,6 +294,10 @@ On launch, claudectl shows all projects Claude Code has ever opened, sorted by m
 | F | Changed files (from session tool calls) |
 | t | Tag session |
 | u | Project usage stats |
+| m | Memory hub (build · ask · preview injection · lessons · toggles) |
+| L | Lessons review (approve / pin / evict session learnings) |
+| / | Action palette — every action, type-to-filter |
+| ! | One-key project setup (first open: CLAUDE.md + memory + rules) |
 | M | Memory map (CLAUDE.md hierarchy) |
 | A | Toggle archived sessions view |
 | c | Scaffold CLAUDE.md (git + sessions) |

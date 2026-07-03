@@ -40,6 +40,37 @@ def test_dashboard_renders_and_drills(monkeypatch, tmp_path):
     assert 'USAGE' in plain                   # drill-down screen header crumb
 
 
+def test_usage_by_day_buckets(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    a1, e1, f1, sids = sb.add_project('alpha', n_sessions=2)
+    rows = stats_mod.usage_by_day(entries_for(sb, [(a1, e1)]), days=3650)
+    assert rows                                     # sessions bucketed
+    day, u, cost, n = rows[0]
+    assert len(day) == 10 and n >= 1                # YYYY-MM-DD
+    assert u['in'] > 0 and u['out'] > 0
+    assert isinstance(cost, float)
+    # out of window → empty
+    assert stats_mod.usage_by_day(entries_for(sb, [(a1, e1)]), days=0) == []
+
+
+def test_daily_usage_screen_renders(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    a1, e1, f1, _ = sb.add_project('alpha', n_sessions=2)
+    _res, cap, _ = run_flow(monkeypatch, flat(typed('d'), ESC, ESC),
+                            stats_mod.usage_dashboard, entries_for(sb, [(a1, e1)]))
+    assert 'DAILY USAGE' in cap.plain                # daily view reachable via d
+    # fixture sessions are dated 2026-06-12 → outside the 14-day window
+    assert 'no sessions in the last 14 days' in cap.plain
+
+
+def test_today_tokens_cache_only(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    a1, e1, f1, _ = sb.add_project('alpha', n_sessions=1)
+    # warm the disk cache via a scan
+    stats_mod.usage_by_day(entries_for(sb, [(a1, e1)]))
+    assert stats_mod.today_tokens() >= 0             # no exception, int
+
+
 def test_dashboard_esc_shows_partial(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     a1, e1, f1, _ = sb.add_project('alpha', n_sessions=2)

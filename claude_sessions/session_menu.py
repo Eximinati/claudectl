@@ -90,11 +90,33 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
             unlearned = len(_pend)
     except Exception:
         unlearned = 0
+    # agents auto-mode: first open with no explicit selection → apply suggestions
+    try:
+        from .config import load_settings as _ls2
+        if _ls2().get('agents_auto') == 'auto' and proj_folder and project_path:
+            from .sessions import load_session_agents, save_session_agents
+            if '__project__' not in load_session_agents(proj_folder):
+                from .agents import suggest_agents, sync_project_agents
+                sug = [ref for ref, _r, _s in suggest_agents(project_path, proj_folder)]
+                if sug:
+                    save_session_agents(proj_folder, '__project__', sug)
+                    sync_project_agents(project_path, sug)
+    except Exception:
+        pass
     show_archived  = False
     arch_sessions  = None                # lazy scan
     filter_str     = ''
     search_focused = False   # True = cursor on search bar, typing goes there
     nav_pos        = 0       # index into nav_indices of current list item
+    pending_ev     = None    # synthesized event (action palette dispatch)
+    # first-open setup badge: no CLAUDE.md AND no memory graph
+    try:
+        not_set_up = (project_path
+                      and not os.path.isfile(os.path.join(project_path, 'CLAUDE.md'))
+                      and not os.path.isfile(os.path.join(
+                          project_path, '.claudectl', 'memory', 'graph.json')))
+    except Exception:
+        not_set_up = False
 
     # Display name: manual rename wins, else AI-generated transcript title.
     # Cache key includes folder — the same sid can exist in both the live
@@ -170,6 +192,9 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
         if unlearned and not show_archived:
             frame.append(f"  {C_WARN}● {unlearned} session{'s' if unlearned > 1 else ''} "
                          f"unlearned{C_RESET}  {C_DIM}press L to review/learn{C_RESET}")
+        if not_set_up and not show_archived:
+            frame.append(f"  {C_WARN}● project not set up{C_RESET}  "
+                         f"{C_DIM}press ! for one-key setup (CLAUDE.md + memory + rules){C_RESET}")
 
         # Search bar — always visible; focused = cursor + blinking input indicator
         if search_focused:
@@ -213,18 +238,21 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
                                             ('ESC', 'back')]))
         else:
             frame.append(render.hint_keys([
-                ('a', 'ai-analyze'), ('⇧A', 'archived'), ('c', 'claude.md'),
-                ('d', 'archive'), ('e', 'export'), ('f', 'fork'),
-                ('⇧F', 'files'), ('g', 'agents'), ('i', 'info')]))
+                ('v', 'view'), ('r', 'rename'), ('f', 'fork'),
+                ('t', 'tag'), ('d', 'archive'), ('e', 'export'), ('i', 'info'),
+                ('⇧F', 'files'), ('⇧A', 'archived')], prefix='session:'))
             frame.append(render.hint_keys([
-                ('⇧L', 'lessons'), ('⇧M', 'memory'), ('n', 'connections'), ('p', 'paths'),
-                ('r', 'rename'), ('s', 'sys-prompt'), ('t', 'tag'), ('u', 'usage'),
-                ('v', 'view'), ('w', 'workspace'), ('x', 'add-dirs'), ('?', 'help')]))
+                ('m', 'memory'), ('g', 'agents'), ('n', 'graph'),
+                ('a', 'ai-analyze'), ('c', 'claude.md'), ('s', 'sys-prompt'),
+                ('u', 'usage'), ('w', 'status')], prefix='project:'))
             frame.append(render.hint_bar(
-                f"{C_DIM}keys are case-sensitive — ⇧ = hold Shift (capital letter){C_RESET}"))
+                f"{C_DIM}/ all actions · ? help · ⇧ = Shift (capital){C_RESET}"))
         render.render_frame(frame)
 
-        ev = wait_event()
+        if pending_ev is not None:
+            ev, pending_ev = pending_ev, None
+        else:
+            ev = wait_event()
 
         # ── search bar focused ────────────────────────────────
         if search_focused:
@@ -423,6 +451,44 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
             from . import connections
             connections.connections_screen(project_path, proj_folder, project_name)
 
+        elif ev[0] == 'char' and ev[1] == 'm' and not show_archived:
+            from . import memhub
+            memhub.hub_screen(project_path, proj_folder, project_name)
+
+        elif ev[0] == 'char' and ev[1] == '!' and not show_archived and not_set_up:
+            # one-key project setup: CLAUDE.md scaffold → memory (rules sync inside)
+            if confirm("Set up project now? (scaffold CLAUDE.md + build memory with Claude)"):
+                from .claude_md import scaffold_claude_md
+                from . import memory as memory_mod
+                try:
+                    scaffold_claude_md(project_path, proj_folder)
+                    mem = memory_mod.refresh_memory(project_path, proj_folder, project_name)
+                    n = len(mem.get('entities', []))
+                    flash(f"Project set up: CLAUDE.md + {n} memory entities", ok=True, secs=2)
+                    not_set_up = False
+                except Exception as e:
+                    flash(f"Setup failed: {e}", ok=False, secs=2)
+
+        elif ev[0] == 'char' and ev[1] == '/' and not show_archived:
+            # Action palette — every action, discoverable, type-to-filter
+            actions = [
+                ('Memory hub (build, ask, preview, lessons)', 'm'),
+                ('View transcript', 'v'), ('Rename session', 'r'),
+                ('Fork session', 'f'), ('Tag session', 't'),
+                ('Archive session', 'd'), ('Export to markdown', 'e'),
+                ('Session info (tokens, cost)', 'i'), ('Changed files', 'F'),
+                ('Archived sessions view', 'A'), ('Lessons review', 'L'),
+                ('Architecture graph', 'n'), ('Project agents', 'g'),
+                ('AI-analyze CLAUDE.md', 'a'), ('Scaffold CLAUDE.md', 'c'),
+                ('System prompt', 's'), ('Memory files map', 'M'),
+                ('Project usage stats', 'u'), ('Workspace status', 'w'),
+                ('Extra PATH entries', 'p'), ('Add directories', 'x'),
+                ('Help', '?'),
+            ]
+            pick = menu(actions, "ACTIONS  (type to filter)")
+            if pick:
+                pending_ev = ('char', pick)
+
         elif ev[0] == 'char' and ev[1] == 'L' and not show_archived:
             from . import lessons as lessons_mod
             from . import memory as memory_mod
@@ -438,7 +504,9 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
             from .agents import select_session_agents, sync_project_agents
             from .sessions import load_session_agents, save_session_agents
             pre = load_session_agents(proj_folder).get('__project__', []) if proj_folder else []
-            refs = select_session_agents(project_name, pre)
+            refs = select_session_agents(project_name, pre,
+                                         project_path=project_path,
+                                         proj_folder=proj_folder)
             if refs is not None:
                 if proj_folder:
                     save_session_agents(proj_folder, '__project__', refs)

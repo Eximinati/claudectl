@@ -116,5 +116,5 @@ def test_sessions_two_hint_lines_fit_small_terminal(monkeypatch, tmp_path):
                          scan_sessions(folder), folder, 'alpha', actual)
     # both hint lines render even in a 14-row window
     assert 'r rename' in cap.plain
-    assert 'A archived' in cap.plain
+    assert 'm memory' in cap.plain     # second (project) hint row visible
     assert 'more' in cap.plain

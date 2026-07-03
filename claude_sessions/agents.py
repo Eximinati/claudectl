@@ -332,6 +332,65 @@ def find_library_agent(ref):
     return p if os.path.isfile(p) else None
 
 
+_LANG_HINTS = {
+    'C#': 'csharp dotnet aspnet',
+    'C/C++': 'cpp c++ systems embedded',
+    'C++': 'cpp c++ systems embedded',
+    'Python': 'python fastapi django pytest',
+    'JavaScript': 'javascript typescript node frontend react',
+    'TypeScript': 'typescript javascript node frontend react',
+    'Go': 'golang go',
+    'Rust': 'rust',
+    'Java': 'java spring kotlin',
+    'Docs': 'documentation markdown',
+}
+
+
+def suggest_agents(project_path, proj_folder, top_k=8):
+    """Rank library agents against the project's signals — languages (from the
+    cached dependency graph), semantic-memory entities, and project name.
+    Local scoring only (no Claude call). Returns [(ref, reason, score)]."""
+    from .recall import _tokenize
+    from . import memory as memory_mod
+
+    signals = {}                                    # token -> weight
+    def add(text, w):
+        for t in _tokenize(text or ''):
+            signals[t] = max(signals.get(t, 0), w)
+
+    add(os.path.basename(project_path or ''), 2.0)
+    try:
+        from . import connections
+        g = connections.build_hierarchy(project_path, proj_folder)   # cached
+        for lang, _cnt in (g.get('meta', {}).get('languages') or [])[:4]:
+            add(lang, 4.0)
+            add(_LANG_HINTS.get(lang, ''), 4.0)
+    except Exception:
+        pass
+    try:
+        mem = memory_mod.load_memory(project_path, proj_folder)
+        for e in mem.get('entities', [])[:60]:
+            if e.get('type') != 'lesson':
+                add(e.get('name', ''), 1.0)
+                add(e.get('summary', ''), 0.5)
+    except Exception:
+        pass
+    if not signals:
+        return []
+
+    scored = []
+    for cat, name, desc, _path in all_library_agents():
+        atok = _tokenize(name) | _tokenize(desc) | _tokenize(cat)
+        hit = [t for t in atok if t in signals]
+        score = sum(signals[t] for t in hit)
+        if score < 4.0:                              # noise floor
+            continue
+        top = sorted(hit, key=lambda t: -signals[t])[:3]
+        scored.append((f"{cat}/{name}", 'matches ' + ', '.join(top), score))
+    scored.sort(key=lambda x: (-x[2], x[0]))
+    return scored[:top_k]
+
+
 def build_agents_json(refs):
     """Build the --agents JSON object from library refs ['cat/name', ...].
     Returns a compact JSON string ({name: {description, prompt, ...}})."""
@@ -441,17 +500,30 @@ SAFE_AGENT_LIMIT = 10
 
 # ── per-session agent selection screen ───────────────────────
 
-def select_session_agents(project_name, preselected=None):
+def select_session_agents(project_name, preselected=None, project_path=None,
+                          proj_folder=None):
     """Category-grouped multi-select of library agents for a session.
     Returns a sorted list of 'category/name' refs, or None if cancelled.
-    Empty list = explicitly none."""
+    Empty list = explicitly none. When project_path is given, a 'Suggested
+    for this project' section (local signal matching) appears on top."""
     chosen = set(preselected or [])
     cats = list_categories()
     if not cats:
         flash("No agents in library — install some first", ok=False, secs=1.4)
         return []
+    suggested = []
+    if project_path:
+        try:
+            suggested = suggest_agents(project_path, proj_folder)
+        except Exception:
+            suggested = []
     while True:
         items = []
+        for ref, reason, _score in suggested:
+            mark = '☑' if ref in chosen else '☐'
+            items.append((f"{mark} ★ {ref}  {_c.C_DIM}{reason}{_c.C_RESET}", f'tog:{ref}'))
+        if suggested:
+            items.append((f"{'─' * W}", None))
         for cat in cats:
             n_total = len(list_library_agents(cat))
             n_sel = sum(1 for r in chosen if r.startswith(cat + '/'))
@@ -477,6 +549,9 @@ def select_session_agents(project_name, preselected=None):
             return sorted(chosen)
         if sel == '__clear__':
             chosen = set()
+        elif sel.startswith('tog:'):
+            ref = sel[4:]
+            chosen.symmetric_difference_update({ref})
         elif sel.startswith('cat:'):
             cat = sel[4:]
             agents = list_library_agents(cat)

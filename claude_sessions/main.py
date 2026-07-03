@@ -462,9 +462,24 @@ def _direct_launch(path, encoded_name, choice, opts):
     print(f"  Location: {path}")
     print(f"  Action:   {choice}")
     print(f"  {'-' * 42}\n")
+    import time as _time
+    _launch_t = _time.time()
     try:
         subprocess.call(args, cwd=path, env=env)
     except Exception as e:
         print(f"\n  ✘ Launch failed: {e}")
         pause("\n  Press Enter to exit...")
         sys.exit(1)
+
+    # context-loss insurance: log what this session did (goal + files touched)
+    # so the next session can recall it even after /compact
+    try:
+        from . import health
+        if proj_folder and os.path.isdir(proj_folder):
+            newest = max((f for f in os.listdir(proj_folder) if f.endswith('.jsonl')),
+                         key=lambda f: os.path.getmtime(os.path.join(proj_folder, f)),
+                         default=None)
+            if newest and os.path.getmtime(os.path.join(proj_folder, newest)) >= _launch_t:
+                health.append_session_log(path, proj_folder, newest[:-6])
+    except Exception:
+        pass

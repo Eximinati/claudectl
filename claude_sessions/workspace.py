@@ -512,6 +512,19 @@ def workspace_status_screen(project_path, proj_folder=None):
         lines, m, score, safe = _status_lines(project_path, proj_folder)
         frame = [render.header('CLAUDECTL', name, 'WORKSPACE'), '', render.hline(), '']
         frame += lines
+        # ── project health card (frequent Claude Code problems, auto-checked) ──
+        try:
+            from . import health
+            issues = health.check_project(project_path, proj_folder)
+        except Exception:
+            issues = []
+        if issues:
+            frame += ['', f"  {_c.C_BOLD}Project health{_c.C_RESET}"]
+            for sev, msg, hint in issues[:6]:
+                col = _c.C_WARN if sev == 'warn' else _c.C_DIM
+                frame.append(f"    {col}● {msg}{_c.C_RESET}")
+                if hint:
+                    frame.append(f"      {_c.C_DIM}{hint}{_c.C_RESET}")
         frame += ['', render.hline()]
         last = max((o.get('last_run', '') for o in m['operations'].values()), default='')
         if last:
@@ -535,6 +548,7 @@ def workspace_status_screen(project_path, proj_folder=None):
             keys.append(('c', 'CLAUDE.md diff'))
         if 'system_prompt' in diff_keys:
             keys.append(('s', 'sys-prompt diff'))
+        keys.append(('P', 'allowlist from history'))
         keys.append(('ENTER/ESC', 'back'))
         frame += ['', render.hint_keys(keys)]
         render.render_frame(frame)
@@ -543,6 +557,12 @@ def workspace_status_screen(project_path, proj_folder=None):
             return
         if ev[0] == 'char' and ev[1] == 'r':
             continue
+        if ev[0] == 'char' and ev[1] == 'P':
+            from .ui import flash
+            from . import health
+            n, err = health.propose_allowlist(project_path, proj_folder)
+            flash(f"Added {n} allow rules to project settings.json" if n
+                  else f"No changes: {err}", ok=bool(n), secs=2)
         if ev[0] == 'char' and ev[1] == 'c' and 'claude_md' in diff_keys:
             diffview.show(diffview.load_prev(project_path, proj_folder, 'claude_md'),
                           _current('claude_md'), diffview.TITLES['claude_md'])

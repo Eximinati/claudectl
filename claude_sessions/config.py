@@ -52,6 +52,8 @@ _DEFAULT_SETTINGS = {
     'memory_prompt_hook': False, # UserPromptSubmit recall hook (global default)
     'memory_lessons': 'prompt', # session learning: 'off' | 'prompt' | 'auto'
     'memory_lessons_ttl': 30,   # evict unpinned lessons unused for N sessions
+    'daily_token_alert': 0,     # warn badge when today's tokens cross this (0 = off)
+    'agents_auto': 'suggest',   # agent suggestions: 'off' | 'suggest' | 'auto'
 }
 
 
