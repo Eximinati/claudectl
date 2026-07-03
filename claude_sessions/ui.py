@@ -910,7 +910,7 @@ def paths_menu(proj_folder, project_name, filename='extra-paths.txt', title='EXT
 
 
 def launch_options_menu(project_name, defaults=None, is_new=False, agents=None,
-                        selected_session_agents=None):
+                        selected_session_agents=None, memory_status=''):
     """Launch configuration screen.
     Returns None on ESC, else dict {'effort','model','perm','name','worktree','agent'}.
     'worktree': '' = off, '*' = auto-named, other = custom name (new sessions only).
@@ -976,6 +976,8 @@ def launch_options_menu(project_name, defaults=None, is_new=False, agents=None,
                     line = (line + ' ' + piece) if line else piece
             if line:
                 frame.append(f"    {C_DIM}{line.rstrip(',')}{C_RESET}")
+        if memory_status:
+            frame.append(f"  {C_DIM}{memory_status}{C_RESET}")
         frame += [
             '',
             render.hint_keys([('↑↓', 'field'), ('← →', 'change'),

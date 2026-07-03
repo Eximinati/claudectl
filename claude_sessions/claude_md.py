@@ -47,6 +47,17 @@ def write_memory_block(project_path, digest):
         return False, old, old
 
 
+def _valid_claude_md(text):
+    """Reject model commentary/refusals masquerading as CLAUDE.md content.
+    Real output starts with a markdown title and has structure."""
+    t = (text or '').lstrip()
+    if not t.startswith('#') or len(t) < 200:
+        return False
+    if re.match(r"(?i)^\W*(i'll|i will|i've|here(?: is|'s)|sure|okay|certainly|edit pending)", t):
+        return False
+    return len(re.findall(r'^#{1,3} ', text, re.M)) >= 2
+
+
 def _preserve_block(final, existing, start=_MEMORY_START, end=_MEMORY_END):
     """Carry a sentinel block from `existing` into `final` verbatim. AI analyze
     rewrites the whole CLAUDE.md and would otherwise drop the machine-maintained
@@ -617,6 +628,7 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
         _dbg_f = open(_dbg_log, 'w', encoding='utf-8')
 
         printed_len = 0
+        result_content = ''
         spin_i = 0
         done = False
 
@@ -660,7 +672,12 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
                     if not text:
                         continue
 
-                    if etype in ('assistant', 'result', 'text', 'content_block_delta', 'message'):
+                    # The `result` event carries the final answer — it wins
+                    # outright (streamed assistant text can include tool chatter
+                    # or commentary that previously leaked into the file).
+                    if etype == 'result' and ev.get('result'):
+                        result_content = ev['result']
+                    elif etype in ('assistant', 'text', 'content_block_delta', 'message'):
                         if len(text) > printed_len:
                             printed_len = len(text)
                             ai_content = text
@@ -722,9 +739,19 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
         scaffold_claude_md(project_path, proj_folder)
         return
 
+    if result_content:
+        ai_content = result_content            # final result event wins
+
     if not ai_content or proc.returncode != 0:
         msg = ''.join(stderr_lines).strip()[:200] if stderr_lines else 'no output'
         print(f"\n\n  AI analysis failed: {msg}")
+        print(f"  Falling back to standard scaffold...")
+        time.sleep(2)
+        scaffold_claude_md(project_path, proj_folder)
+        return
+
+    if not _valid_claude_md(ai_content):
+        print(f"\n\n  AI output doesn't look like a CLAUDE.md (commentary/refusal detected).")
         print(f"  Falling back to standard scaffold...")
         time.sleep(2)
         scaffold_claude_md(project_path, proj_folder)

@@ -764,7 +764,8 @@ def connections_screen(project_path, proj_folder, project_name):
                 frame.append(f"    {render.trunc(nd['label'], 32):<32} {D}{nd.get('total_files', 0)} files · {nd.get('rank', 0)} deps{R}")
         frame += ['', render.hline(), '', render.hint_keys(
             [('o', 'open graph'), ('r', 'rebuild'), ('m', 'build memory (Claude)'),
-             ('a', 'ask'), ('ENTER/ESC', 'back')])]
+             ('a', 'ask'), ('p', 'preview injection'), ('h', 'prompt-hook on/off'),
+             ('ENTER/ESC', 'back')])]
         render.render_frame(frame)
         ev = wait_event()
         if ev[0] in ('enter', 'esc'):
@@ -781,11 +782,37 @@ def connections_screen(project_path, proj_folder, project_name):
                 from . import memory
                 mem = memory.refresh_memory(project_path, proj_folder, project_name)
                 n_ent = len(mem.get('entities', []))
-                flash(f"Memory built: {n_ent} entities" if n_ent
-                      else "Claude returned no entities (cancelled or empty)",
-                      ok=bool(n_ent), secs=1.8)
+                pend = mem.get('pending_units', 0)
+                msg = (f"Memory built: {n_ent} entities" if n_ent
+                       else "Claude returned no entities (cancelled or empty)")
+                if n_ent and pend:
+                    msg += f" — coverage incomplete ({pend} units pending, raise memory_max_calls)"
+                flash(msg, ok=bool(n_ent), secs=2.5 if pend else 1.8)
             except Exception as e:
                 flash(f"Memory build failed: {e}", ok=False, secs=2)
+        elif ev[0] == 'char' and ev[1] == 'p':
+            try:
+                from . import recall
+                recall.preview_screen(project_path, proj_folder, project_name)
+            except Exception as e:
+                flash(f"Preview failed: {e}", ok=False, secs=2)
+        elif ev[0] == 'char' and ev[1] == 'h':
+            try:
+                from .config import load_settings, save_settings
+                from .paths import encode_component
+                from . import hooks as hooks_mod
+                s = load_settings()
+                enc = encode_component(os.path.abspath(project_path))
+                proj = s.setdefault('project_defaults', {}).setdefault(enc, {})
+                new_state = not proj.get('memory_hook', s.get('memory_prompt_hook', False))
+                proj['memory_hook'] = new_state
+                save_settings(s)
+                if new_state and not hooks_mod.memory_hook_installed():
+                    hooks_mod.install_memory_hook()
+                flash(f"Per-prompt memory hook {'ENABLED' if new_state else 'disabled'} "
+                      f"for this project", ok=new_state, secs=1.8)
+            except Exception as e:
+                flash(f"Hook toggle failed: {e}", ok=False, secs=2)
         elif ev[0] == 'char' and ev[1] == 'a':
             q = text_input("Ask about this project:")
             if q:

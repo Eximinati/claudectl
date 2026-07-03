@@ -2,7 +2,7 @@ import os
 import shutil
 from datetime import datetime
 
-from .config import W, C_RESET, C_TITLE, C_SEL, C_DIM, C_SRCH, C_BOLD, C_NAME
+from .config import W, C_RESET, C_TITLE, C_SEL, C_DIM, C_SRCH, C_BOLD, C_NAME, C_WARN
 from .sessions import (load_name, save_name, format_age, get_session_title,
                        scan_sessions, load_tags, save_tags)
 from .ui import (text_input, paths_menu, _cls, wait_event, help_screen,
@@ -74,6 +74,22 @@ def _move_session(src_folder, dst_folder, sid):
 def sessions_menu(sessions_in, proj_folder, project_name, project_path):
     sessions       = list(sessions_in)   # (mtime, sid, preview, count)
     archived_dir   = os.path.join(proj_folder, 'archived') if proj_folder else None
+    # session-learning badge (cheap local scan; 'auto' mode extracts on entry)
+    unlearned = 0
+    try:
+        from .config import load_settings as _ls
+        from . import lessons as _lessons
+        from . import memory as _memory
+        _lmode = _ls().get('memory_lessons', 'prompt')
+        if _lmode != 'off':
+            _mem0 = _memory.load_memory(project_path, proj_folder)
+            _pend = _lessons.pending_sids(proj_folder, _mem0)
+            if _pend and _lmode == 'auto':
+                _lessons.scan_sessions(project_path, proj_folder, _pend)
+                _pend = []
+            unlearned = len(_pend)
+    except Exception:
+        unlearned = 0
     show_archived  = False
     arch_sessions  = None                # lazy scan
     filter_str     = ''
@@ -151,6 +167,9 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
 
         crumb = 'ARCHIVED' if show_archived else 'SESSIONS'
         frame = [render.header('CLAUDECTL', project_name, crumb), '']
+        if unlearned and not show_archived:
+            frame.append(f"  {C_WARN}● {unlearned} session{'s' if unlearned > 1 else ''} "
+                         f"unlearned{C_RESET}  {C_DIM}press L to review/learn{C_RESET}")
 
         # Search bar — always visible; focused = cursor + blinking input indicator
         if search_focused:
@@ -198,8 +217,8 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
                 ('d', 'archive'), ('e', 'export'), ('f', 'fork'),
                 ('⇧F', 'files'), ('g', 'agents'), ('i', 'info')]))
             frame.append(render.hint_keys([
-                ('⇧M', 'memory'), ('n', 'connections'), ('p', 'paths'), ('r', 'rename'),
-                ('s', 'sys-prompt'), ('t', 'tag'), ('u', 'usage'),
+                ('⇧L', 'lessons'), ('⇧M', 'memory'), ('n', 'connections'), ('p', 'paths'),
+                ('r', 'rename'), ('s', 'sys-prompt'), ('t', 'tag'), ('u', 'usage'),
                 ('v', 'view'), ('w', 'workspace'), ('x', 'add-dirs'), ('?', 'help')]))
             frame.append(render.hint_bar(
                 f"{C_DIM}keys are case-sensitive — ⇧ = hold Shift (capital letter){C_RESET}"))
@@ -403,6 +422,17 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
         elif ev[0] == 'char' and ev[1] == 'n' and not show_archived:
             from . import connections
             connections.connections_screen(project_path, proj_folder, project_name)
+
+        elif ev[0] == 'char' and ev[1] == 'L' and not show_archived:
+            from . import lessons as lessons_mod
+            from . import memory as memory_mod
+            if unlearned:
+                pend = lessons_mod.pending_sids(
+                    proj_folder, memory_mod.load_memory(project_path, proj_folder))
+                if pend:
+                    added, scanned = lessons_mod.scan_sessions(project_path, proj_folder, pend)
+                    unlearned = 0
+            lessons_mod.review_screen(project_path, proj_folder, project_name)
 
         elif ev[0] == 'char' and ev[1] == 'g' and not show_archived:
             from .agents import select_session_agents, sync_project_agents

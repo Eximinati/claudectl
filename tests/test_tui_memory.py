@@ -111,6 +111,18 @@ def test_preserve_block_noop_without_existing(monkeypatch, tmp_path):
     assert claude_md._preserve_block(ai_out, "# proj\nno block") == ai_out
 
 
+def test_valid_claude_md():
+    good = ("# myproj\n\n## Project context\nA tool that does things and more "
+            "and enough text to pass the length gate easily. " * 3 +
+            "\n\n## Tech stack\nPython 3.10\n")
+    assert claude_md._valid_claude_md(good)
+    assert not claude_md._valid_claude_md("I'll analyze the project and write a CLAUDE.md file...")
+    assert not claude_md._valid_claude_md(
+        "Edit pending approval. Only change: refreshed AUTOGEN commit list.\n# proj\n")
+    assert not claude_md._valid_claude_md("# title only, no sections, too short")
+    assert not claude_md._valid_claude_md('')
+
+
 def test_memory_map_menu_opens_editor(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(claude_md, 'config_dir', str(sb.cfg))

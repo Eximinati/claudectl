@@ -16,7 +16,7 @@ import json
 
 from . import config as _c
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MEM_SUBDIR = os.path.join('.claudectl', 'memory')
 GRAPH_NAME = 'graph.json'
 PER_FILE_CHARS = 4000    # cap content per file
@@ -38,7 +38,9 @@ def _mem_dirs(project_path, proj_folder):
 
 def _empty():
     return {'schema_version': SCHEMA_VERSION, 'generated_at': '',
-            'entities': [], 'relations': [], 'summaries': {}, 'provenance': {}}
+            'entities': [], 'relations': [], 'summaries': {}, 'provenance': {},
+            'module_edges': [], 'lessons_scanned': {}, 'session_counter': 0,
+            'pending_units': 0}
 
 
 def _migrate(m):
@@ -170,6 +172,25 @@ def _rel(root, f):
         return os.path.basename(f)
 
 
+def _module_of(root, rsorted, f, repo_label='', depth=2):
+    """Module key = the file's dirname relative to its OWNING REPO (not the
+    project root), capped at `depth` segments. Fixes the old parts[1] scheme
+    that collapsed single-package repos into one '(root)' unit."""
+    ap = os.path.abspath(f)
+    base = root
+    for rp in rsorted:
+        if ap == rp or ap.startswith(rp + os.sep):
+            base = rp
+            break
+    rel = _rel(base, f)
+    dirs = rel.split('/')[:-1]
+    # non-git fallback: cluster label is the top-level dir itself — drop the
+    # duplicate leading segment so the module is relative to the cluster
+    if dirs and base == root and dirs[0] == repo_label:
+        dirs = dirs[1:]
+    return '/'.join(dirs[:depth]) or '(root)'
+
+
 def _units(project_path, proj_folder):
     """Whole project split into (repo, module, [abs files]) units — every repo
     and its modules, ordered most-important (most files) first."""
@@ -182,8 +203,7 @@ def _units(project_path, proj_folder):
     groups = {}
     for f in files:
         repo = connections._cluster_of(f, root, rsorted)
-        parts = _rel(root, f).split('/')
-        module = parts[1] if len(parts) > 2 else '(root)'
+        module = _module_of(root, rsorted, f, repo_label=repo)
         groups.setdefault((repo, module), []).append(f)
     units = sorted(groups.items(), key=lambda kv: len(kv[1]), reverse=True)
     return [(r, m, fs) for (r, m), fs in units]
@@ -244,12 +264,23 @@ def refresh_memory(project_path, proj_folder, project_name):
         cur_hashes.update(h)
         if any(prov.get(rel, {}).get('hash') != hv for rel, hv in h.items()):
             todo.append((repo, module, fs))
+    # key-scheme drift (e.g. v1→v2 module remap): units with unchanged hashes
+    # but no entities under the current key must still be (re)extracted
+    covered = {(e.get('repo'), e.get('module')) for e in mem.get('entities', [])}
+    todo_keys = {(r, m) for r, m, _ in todo}
+    if mem.get('entities'):
+        for repo, module, fs in units:
+            if (repo, module) not in covered and (repo, module) not in todo_keys:
+                todo.append((repo, module, fs))
+                todo_keys.add((repo, module))
     deleted = [rel for rel in prov if rel not in cur_hashes]
     if not todo and not deleted and mem.get('entities'):
         return mem
 
     max_calls = load_settings().get('memory_max_calls') or None
+    skipped_units = 0
     if max_calls:
+        skipped_units = max(0, len(todo) - max_calls)
         todo = todo[:max_calls]
 
     touched_units = {(r, m) for r, m, _ in todo}
@@ -288,11 +319,22 @@ def refresh_memory(project_path, proj_folder, project_name):
                 relations.append({'source': r['source'], 'target': r['target'],
                                   'rel': r.get('rel', 'relates'), 'unit': unit})
 
+    module_edges, unit_rank = _module_graph(project_path, proj_folder, units)
+    for e in kept:
+        e['rank'] = unit_rank.get((e.get('repo'), e.get('module')), 0)
+
     mem.update({'entities': kept, 'relations': relations, 'summaries': summaries,
                 'provenance': {rel: {'hash': h} for rel, h in cur_hashes.items()},
+                'module_edges': module_edges,
+                'pending_units': skipped_units,
                 'generated_at': _iso()})
     save_memory(project_path, proj_folder, mem)
     sync_to_claudemd(project_path, proj_folder, mem)
+    try:
+        from .memrules import sync_rules
+        sync_rules(project_path, proj_folder, mem)
+    except Exception:
+        _c.log.exception('memory: rules sync failed')
     try:
         from . import workspace
         workspace.update_manifest(project_path, proj_folder, 'memory')
@@ -301,12 +343,88 @@ def refresh_memory(project_path, proj_folder, project_name):
     return mem
 
 
+def _module_graph(project_path, proj_folder, units):
+    """Aggregate connections' file→file dep edges to unit→unit edges + a
+    dep-degree rank per unit. Real cross-module structure the LLM extraction
+    can't see (its relations are per-unit only). Best-effort."""
+    try:
+        from . import connections
+        g = connections.build_hierarchy(project_path, proj_folder)   # cached
+    except Exception:
+        return [], {}
+    unit_of = {}
+    for repo, module, fs in units:
+        root = os.path.abspath(project_path)
+        for f in fs:
+            unit_of[_rel(root, f)] = (repo, module)
+    agg, rank = {}, {}
+    for e in g.get('dep_edges', []):
+        s = unit_of.get(str(e.get('source', ''))[5:])   # strip 'file:'
+        t = unit_of.get(str(e.get('target', ''))[5:])
+        w = e.get('weight', 1)
+        if s:
+            rank[s] = rank.get(s, 0) + w
+        if t:
+            rank[t] = rank.get(t, 0) + w
+        if s and t and s != t:
+            agg[(s, t)] = agg.get((s, t), 0) + w
+    edges = [{'source': f"{s[0]}/{s[1]}", 'target': f"{t[0]}/{t[1]}", 'weight': w}
+             for (s, t), w in sorted(agg.items(), key=lambda kv: kv[1], reverse=True)]
+    return edges, rank
+
+
 def _iso():
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 # ── digest → CLAUDE.md ───────────────────────────────────────
+
+def tokens_estimate(text):
+    return max(1, len(text or '') // 4)
+
+
+def build_digest_micro(mem, max_tokens=250):
+    """Tiny always-loaded memory INDEX (repo one-liners + module names + recall
+    pointer). Detail lives in path-scoped rules and `claudectl recall` — this
+    replaces the old full entity dump (~430 tok) with ≤250 tok."""
+    ents = mem.get('entities', [])
+    summaries = mem.get('summaries', {})
+    if not ents and not summaries:
+        return "_(no semantic memory yet — press m in the project menu to build it)_"
+
+    by_repo = {}
+    for e in ents:
+        if e.get('type') == 'lesson':
+            continue
+        by_repo.setdefault(e.get('repo', '?'), {}).setdefault(e.get('module', '(root)'), []).append(e)
+    repos = sorted(by_repo, key=lambda r: sum(len(v) for v in by_repo[r].values()), reverse=True)
+
+    out = []
+    for repo in repos:
+        mods = by_repo[repo]
+        # repo one-liner = summary of its largest module unit
+        biggest = max(mods, key=lambda m: len(mods[m]))
+        summ = (summaries.get(f"{repo}/{biggest}", '') or '').strip()
+        out.append(f"- **{repo}**" + (f" — {summ}" if summ else ''))
+        names = sorted(mods, key=lambda m: len(mods[m]), reverse=True)
+        shown = names[:6]
+        line = "  modules: " + ', '.join(shown)
+        if len(names) > 6:
+            line += f" (+{len(names) - 6})"
+        out.append(line)
+    lessons = [e for e in ents if e.get('type') == 'lesson'
+               and e.get('status') in ('approved', 'pinned')]
+    if lessons:
+        out.append(f"- lessons: {len(lessons)} learned (injected when relevant)")
+    out.append('Detail on demand: run `claudectl recall "<topic>"` (Bash) for the '
+               'task-relevant subgraph of this project\'s memory.')
+    text = '\n'.join(out)
+    while tokens_estimate(text) > max_tokens and len(out) > 2:
+        out.pop(-2)                      # drop lowest-priority repo lines, keep pointer
+        text = '\n'.join(out)
+    return text
+
 
 def build_digest(mem, per_module=10):
     """Project memory map for CLAUDE.md — structured by repo → module, covering
@@ -349,7 +467,7 @@ def sync_to_claudemd(project_path, proj_folder, mem):
     try:
         from .claude_md import write_memory_block
         from . import diffview
-        ok, old, new = write_memory_block(project_path, build_digest(mem))
+        ok, old, new = write_memory_block(project_path, build_digest_micro(mem))
         if ok and old != new:
             diffview.record(project_path, proj_folder, 'claude_md', old, new)
     except Exception:
@@ -363,26 +481,12 @@ def _tokens(s):
     return set(re.findall(r'[a-z0-9]+', (s or '').lower()))
 
 
-def ask_memory(project_path, proj_folder, question, top_k=12):
+def ask_memory(project_path, proj_folder, question):
     mem = load_memory(project_path, proj_folder)
-    ents = mem.get('entities', [])
-    if not ents:
+    if not mem.get('entities'):
         return "No project memory yet — build it first (press 'm' in the connections screen)."
-    qtok = _tokens(question)
-    scored = []
-    for e in ents:
-        et = _tokens(e.get('name', '')) | _tokens(e.get('summary', ''))
-        scored.append((len(qtok & et), e))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    top = [e for s, e in scored[:top_k]] or ents[:top_k]
-    names = {e['name'] for e in top}
-    rels = [r for r in mem.get('relations', [])
-            if r.get('source') in names or r.get('target') in names]
-    ctx = ["ENTITIES:"]
-    for e in top:
-        ctx.append(f"- {e['name']} ({e.get('type', '')}): {e.get('summary', '')}"
-                   + (f"  [files: {', '.join(e.get('source_files', []))}]" if e.get('source_files') else ''))
-    ctx.append("\nRELATIONSHIPS:")
-    for r in rels[:60]:
-        ctx.append(f"- {r['source']} —{r.get('rel', '')}→ {r['target']}")
-    return _answer('\n'.join(ctx), question, os.path.abspath(project_path)) or "(no answer)"
+    from . import recall
+    r = recall.retrieve(project_path, proj_folder, question, budget_tokens=1800)
+    ctx = r['text'] if not r['empty'] else recall.render_context(
+        [(1.0, e) for e in mem['entities'][:12]], mem, 1800)[0]
+    return _answer(ctx, question, os.path.abspath(project_path)) or "(no answer)"

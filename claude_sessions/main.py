@@ -29,10 +29,28 @@ def _workspace_status_cli():
     workspace.print_workspace_status(cwd, proj_folder)
 
 
+def _recall_cli(query):
+    """`claudectl recall "<query>"` — print the task-relevant memory subgraph.
+    This is the on-demand surface the CLAUDE.md micro-digest points Claude to."""
+    from .paths import encode_component
+    from . import recall
+    cwd = os.path.abspath(os.getcwd())
+    proj_folder = os.path.join(projects_dir, encode_component(cwd))
+    if not os.path.isdir(proj_folder):
+        proj_folder = None
+    budget = load_settings().get('memory_budget', 600)
+    r = recall.retrieve(cwd, proj_folder, query, budget)
+    print(r['text'] if not r['empty'] else '(no relevant project memory)')
+
+
 def run():
     # `claudectl workspace status` — scriptable, no TUI
     if sys.argv[1:3] == ['workspace', 'status']:
         _workspace_status_cli()
+        return
+    # `claudectl recall "<query>"` — scriptable, no TUI
+    if len(sys.argv) >= 3 and sys.argv[1] == 'recall':
+        _recall_cli(' '.join(sys.argv[2:]))
         return
 
     # ── UTF-8 console ─────────────────────────────────────────────
@@ -222,6 +240,11 @@ def run():
         # the current project selection rather than prompting per session.
         chosen_refs = load_session_agents(proj_folder).get('__project__', []) if proj_folder else []
 
+        try:
+            from . import recall
+            mem_line = recall.memory_status_line(path, proj_folder, settings)
+        except Exception:
+            mem_line = ''
         opts = launch_options_menu(
             os.path.basename(path) or path,
             defaults={
@@ -232,6 +255,7 @@ def run():
             is_new=(choice == 'new'),
             agents=list_all_agent_names(path),
             selected_session_agents=chosen_refs,
+            memory_status=mem_line,
         )
         if opts is None:
             choice = None

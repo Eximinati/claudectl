@@ -39,6 +39,61 @@ TEMPLATES = {
 }
 
 
+def _memory_hook_command():
+    import sys
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'recall_hook.py')
+    return f'"{sys.executable}" "{script}"'
+
+
+def install_memory_hook():
+    """Idempotently install (or repair) the UserPromptSubmit recall hook in
+    user-scope settings.json. Returns True when present after the call."""
+    s = _load()
+    hooks = s.setdefault('hooks', {})
+    entries = hooks.setdefault('UserPromptSubmit', [])
+    if not isinstance(entries, list):
+        return False
+    cmd = _memory_hook_command()
+    for entry in entries:
+        for h in (entry.get('hooks') or []):
+            if 'recall_hook.py' in str(h.get('command', '')):
+                if h.get('command') != cmd:      # stale python/repo path → repair
+                    h['command'] = cmd
+                    h['timeout'] = 5
+                    return _save(s)
+                return True
+    entries.append({'hooks': [{'type': 'command', 'command': cmd, 'timeout': 5}]})
+    return _save(s)
+
+
+def uninstall_memory_hook():
+    """Remove the recall hook from user-scope settings.json."""
+    s = _load()
+    entries = (s.get('hooks') or {}).get('UserPromptSubmit')
+    if not isinstance(entries, list):
+        return True
+    changed = False
+    for entry in list(entries):
+        hs = entry.get('hooks') or []
+        kept = [h for h in hs if 'recall_hook.py' not in str(h.get('command', ''))]
+        if len(kept) != len(hs):
+            changed = True
+            if kept:
+                entry['hooks'] = kept
+            else:
+                entries.remove(entry)
+    if changed and not entries:
+        s['hooks'].pop('UserPromptSubmit', None)
+    return _save(s) if changed else True
+
+
+def memory_hook_installed():
+    entries = (_load().get('hooks') or {}).get('UserPromptSubmit') or []
+    return any('recall_hook.py' in str(h.get('command', ''))
+               for e in entries if isinstance(e, dict)
+               for h in (e.get('hooks') or []))
+
+
 def _load():
     try:
         with open(settings_path, encoding='utf-8') as f:

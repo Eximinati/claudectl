@@ -83,7 +83,96 @@ def test_deleted_unit_entities_dropped(monkeypatch, tmp_path):
     assert not any(e['repo'] == 'mod2' for e in mem['entities'])
 
 
+# ── module granularity (v2) ──────────────────────────────────
+
+def test_module_of_splits_single_package_repo(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    # git repo at project root → modules must split by dir, not collapse
+    os.makedirs(os.path.join(actual, '.git'), exist_ok=True)
+    _mkfile(actual, 'claude_sessions/memory.py')
+    _mkfile(actual, 'claude_sessions/ui.py')
+    _mkfile(actual, 'tests/test_x.py')
+    calls = []
+    _stub(monkeypatch, calls)
+    mem = memory.refresh_memory(actual, folder, 'alpha')
+    mods = {e['module'] for e in mem['entities']}
+    assert 'claude_sessions' in mods and 'tests' in mods
+
+
+def test_key_drift_forces_reextract(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    _mkfile(actual, 'mod1/a.py')
+    calls = []
+    _stub(monkeypatch, calls)
+    memory.refresh_memory(actual, folder, 'alpha')
+    # simulate v1 legacy keys: entity exists but under an old module key
+    mem = memory.load_memory(actual, folder)
+    for e in mem['entities']:
+        e['module'] = 'legacy-key'
+    memory.save_memory(actual, folder, mem)
+    calls.clear()
+    mem2 = memory.refresh_memory(actual, folder, 'alpha')   # hashes unchanged
+    assert calls == ['mod1/(root)']                          # drift → re-extract
+    assert all(e['module'] != 'legacy-key' for e in mem2['entities'])
+
+
+def test_module_edges_and_rank(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    _mkfile(actual, 'lib/__init__.py', '')
+    _mkfile(actual, 'lib/core.py', 'X = 1\n')
+    _mkfile(actual, 'app/main.py', 'from lib import core\n')
+    _stub(monkeypatch)
+    mem = memory.refresh_memory(actual, folder, 'alpha')
+    edges = {(e['source'], e['target']) for e in mem['module_edges']}
+    assert ('app/(root)', 'lib/(root)') in edges
+    ranked = {e['repo']: e.get('rank', 0) for e in mem['entities']}
+    assert ranked.get('app', 0) > 0 and ranked.get('lib', 0) > 0
+
+
+def test_pending_units_recorded(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    _mkfile(actual, 'mod1/a.py')
+    _mkfile(actual, 'mod2/b.py')
+    _mkfile(actual, 'mod3/c.py')
+    monkeypatch.setattr('claude_sessions.config.load_settings',
+                        lambda: {'memory_to_claudemd': False, 'memory_max_calls': 1})
+    _stub(monkeypatch)
+    mem = memory.refresh_memory(actual, folder, 'alpha')
+    assert mem['pending_units'] == 2                         # coverage notice data
+
+
 # ── digest ───────────────────────────────────────────────────
+
+def test_micro_digest_within_budget(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    ents = [{'name': f'E{i}', 'type': 'module', 'summary': 'long summary ' * 12,
+             'repo': f'repo{i % 7}', 'module': f'mod{i}'} for i in range(80)]
+    mem = {'entities': ents,
+           'summaries': {f'repo{i % 7}/mod{i}': 'unit summary ' * 10 for i in range(80)},
+           'relations': []}
+    d = memory.build_digest_micro(mem)
+    assert memory.tokens_estimate(d) <= 250
+    assert 'claudectl recall' in d                           # on-demand pointer
+    assert 'E0' not in d                                     # no entity dump
+
+
+def test_micro_digest_counts_lessons(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    mem = {'entities': [
+        {'name': 'Engine', 'type': 'module', 'summary': 'core', 'repo': 'svc', 'module': 'engine'},
+        {'name': 'L1', 'type': 'lesson', 'status': 'approved', 'summary': 'x', 'repo': '', 'module': ''},
+        {'name': 'L2', 'type': 'lesson', 'status': 'pending', 'summary': 'y', 'repo': '', 'module': ''}],
+        'summaries': {'svc/engine': 'the engine'}, 'relations': []}
+    d = memory.build_digest_micro(mem)
+    assert 'lessons: 1 learned' in d                          # pending excluded
+    assert 'L1' not in d
+
+
+# ── digest (full, kept for preview) ──────────────────────────
 
 def test_build_digest_structured(monkeypatch, tmp_path):
     Sandbox(monkeypatch, tmp_path)

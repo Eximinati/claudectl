@@ -7,18 +7,26 @@ on a background thread; absent/expired credentials degrade to no line.
 
 import os
 import json
+import time
 import threading
 import urllib.request
+import urllib.error
 from datetime import datetime, timezone
 
 from . import config as _c
 
 USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
 
-_lock    = threading.Lock()
-_started = False
-_ready   = False
-_data    = None
+_REFRESH_SEC = 300   # re-poll cadence on success (usage changes slowly; avoid rate limits)
+_RETRY_BASE  = 30    # first backoff after a failed fetch; doubles each fail
+_RETRY_MAX   = 600   # backoff ceiling
+_MAX_FAILS   = 3     # give up (blank line) only after this many failures with no data yet
+
+_lock       = threading.Lock()
+_started    = False
+_ready      = False
+_data       = None
+_retry_after = 0     # seconds requested by a 429 Retry-After header (0 = none)
 
 
 def _read_token():
@@ -42,23 +50,49 @@ def fetch_usage():
         'Content-Type': 'application/json',
         'User-Agent': 'claudectl',
     })
+    global _retry_after
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
+            _retry_after = 0
             return json.loads(r.read().decode('utf-8', 'replace'))
+    except urllib.error.HTTPError as e:
+        if e.code == 429:                      # honor Retry-After; don't hammer
+            try:
+                _retry_after = max(_retry_after, int(e.headers.get('Retry-After') or 0))
+            except (TypeError, ValueError):
+                _retry_after = 0
+        return None
     except Exception:
         return None
 
 
 def _background():
+    """Poll forever: refresh live values, retry transient failures, and never
+    clobber the last good data with a None (a flaky fetch used to blank the
+    banner permanently)."""
     global _data, _ready
-    try:
-        d = fetch_usage()
-    except Exception:
-        _c.log.exception('usage fetch failed')
-        d = None
-    with _lock:
-        _data = d
-        _ready = True
+    fails = 0
+    while True:
+        try:
+            d = fetch_usage()
+        except Exception:
+            _c.log.exception('usage fetch failed')
+            d = None
+        with _lock:
+            if d is not None:
+                _data = d
+                _ready = True
+                fails = 0
+            else:
+                fails += 1
+                if _data is None and fails >= _MAX_FAILS:
+                    _ready = True   # no creds / persistent failure → stop "checking", show nothing
+        if d is not None:
+            sleep = _REFRESH_SEC
+        else:                        # exponential backoff, never faster than a 429 Retry-After
+            sleep = min(_RETRY_BASE * (2 ** (fails - 1)), _RETRY_MAX)
+            sleep = max(sleep, _retry_after)
+        time.sleep(sleep)
 
 
 def _ensure_started():

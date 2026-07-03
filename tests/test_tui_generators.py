@@ -70,7 +70,10 @@ def test_ai_analyze_writes_on_approve(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     _, enc, folder, _ = sb.add_project('alpha', n_sessions=1)
     proj = str(sb.root / 'work' / 'alpha')
-    body = f"# alpha\n\nAI generated context.\n\n{_AUTOGEN_START}\n{_AUTOGEN_END}\n{_SESSIONS_START}\n{_SESSIONS_END}\n"
+    body = (f"# alpha\n\n## Project context\nAI generated context. "
+            + "This project does interesting things worth describing at length. " * 3
+            + f"\n\n## Tech stack\nPython 3.10, stdlib only.\n\n"
+            + f"{_AUTOGEN_START}\n{_AUTOGEN_END}\n{_SESSIONS_START}\n{_SESSIONS_END}\n")
     monkeypatch.setattr(claude_md, 'get_claude_exe', lambda: r'C:\fake.exe')
     import subprocess
     monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: _FakePopen(_stream_json(body)))
@@ -88,7 +91,8 @@ def test_ai_analyze_reject_does_not_write(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     _, enc, folder, _ = sb.add_project('alpha', n_sessions=1)
     proj = str(sb.root / 'work' / 'alpha')
-    body = f"# alpha\n\nstuff\n\n{_AUTOGEN_START}\n{_AUTOGEN_END}\n"
+    body = (f"# alpha\n\n## Project context\nstuff and more descriptive text. " * 4
+            + f"\n\n## Notes\nmore\n\n{_AUTOGEN_START}\n{_AUTOGEN_END}\n")
     monkeypatch.setattr(claude_md, 'get_claude_exe', lambda: r'C:\fake.exe')
     import subprocess
     monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: _FakePopen(_stream_json(body)))

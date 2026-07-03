@@ -47,6 +47,11 @@ _DEFAULT_SETTINGS = {
     'theme': 'default',        # named palette (see THEMES)
     'memory_to_claudemd': True, # write semantic memory digest into CLAUDE.md
     'memory_max_calls': None,   # cap Claude calls when building memory (None = all)
+    'memory_budget': 600,       # token budget for per-prompt recall injection
+    'memory_rules': True,       # generate .claude/rules/claudectl-mem-*.md files
+    'memory_prompt_hook': False, # UserPromptSubmit recall hook (global default)
+    'memory_lessons': 'prompt', # session learning: 'off' | 'prompt' | 'auto'
+    'memory_lessons_ttl': 30,   # evict unpinned lessons unused for N sessions
 }
 
 
