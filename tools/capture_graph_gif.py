@@ -41,6 +41,7 @@ def main():
     ap.add_argument('--fps', type=int, default=15)
     ap.add_argument('--width', type=int, default=1200)
     ap.add_argument('--height', type=int, default=680)
+    ap.add_argument('--colors', type=int, default=96, help='GIF palette size (smaller = lighter)')
     ap.add_argument('--settle-ms', type=int, default=2000,
                     help='wait before capture so the layout settles')
     ap.add_argument('--expand-all', action='store_true',
@@ -83,7 +84,8 @@ def main():
             page.wait_for_timeout(interval)
         browser.close()
 
-    frames = [f.quantize(colors=128, method=Image.MEDIANCUT) for f in frames]
+    frames = [f.quantize(colors=args.colors, method=Image.MEDIANCUT,
+                         dither=Image.Dither.NONE) for f in frames]
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or '.', exist_ok=True)
     frames[0].save(args.out, save_all=True, append_images=frames[1:],
                    duration=interval, loop=0, optimize=True, disposal=2)

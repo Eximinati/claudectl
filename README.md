@@ -14,8 +14,8 @@
 </p>
 
 <p align="center">
-  <img alt="Architecture graph" src="docs/graph.gif" width="720">
-  <br><sub>Interactive architecture graph — rotating dodecahedron nodes, per-project bubbles, live dependency flow (rendered preview).</sub>
+  <img alt="Architecture graph" src="docs/graph-real.gif" width="820">
+  <br><sub>The live interactive architecture graph — rotating dodecahedron nodes, per-project bubbles, flowing dependency links (captured from the real HTML view).</sub>
 </p>
 
 ---
@@ -96,7 +96,7 @@ An interactive, **whole-project dependency graph** rendered as a self-contained 
 - **Reads as architecture** — each project sits in its **own contained bubble** (never overlaps others), nodes sized by importance (file count + dependency degree), colored per project, animated **rotating dodecahedra** with flowing connection particles on a neural-network-style canvas.
 - **Controls** — search (expands the path to matches), filters (dependency / containment / hulls / labels), Fit / Reset / Expand-all / Collapse; zoom-aware labels; hover highlights neighbors. Built graph is **cached** (`.claudectl/connections-cache.json`) so reopening is instant; `r` forces a rebuild.
 
-> The animation at the top of this README previews this view (`docs/graph.gif`, regenerate with `py tools/make_gifs.py`). The real graph is a self-contained interactive HTML you open in the browser.
+> The animation at the top of this README is captured from the real HTML view (`docs/graph-real.gif`, regenerate with `py tools/capture_graph_gif.py`). The graph is a self-contained interactive HTML you open in the browser.
 
 ### Intelligent project memory (`m`)
 The feature that makes claudectl unique: **task-scoped, token-budgeted memory injection at the launcher**. Claude remembers the whole project while paying the fewest possible tokens — three injection surfaces, zero duplication:
