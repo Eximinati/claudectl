@@ -54,6 +54,10 @@ _DEFAULT_SETTINGS = {
     'memory_lessons_ttl': 30,   # evict unpinned lessons unused for N sessions
     'daily_token_alert': 0,     # warn badge when today's tokens cross this (0 = off)
     'agents_auto': 'suggest',   # agent suggestions: 'off' | 'suggest' | 'auto'
+    'memory_max_entities': 500, # cap on stored entities (consolidation evicts by rank)
+    'memory_auto_refresh': 'open',  # 'off' | 'open' (auto-refresh on project open) | 'hub'
+    'memory_lessons_autoapprove': 0.8,  # lessons with confidence >= this auto-approve (0 = off)
+    'conventions_to_global': True,  # promote cross-project conventions to ~/.claude/CLAUDE.md
 }
 
 
@@ -224,6 +228,30 @@ THEMES = {
                 'C_HEADER_BG': '\033[48;5;66m\033[38;5;231m', 'C_OK': '\033[38;5;116m',
                 'C_WARN': '\033[38;5;222m', 'C_TITLE': '\033[38;5;183m', 'C_SRCH': '\033[38;5;217;1m',
                 'C_STAR': '\033[38;5;222m'},
+    'catppuccin-latte': {'C_ACCENT': '\033[38;5;98m', 'C_SEL_BG': '\033[48;5;253m\033[38;5;236m',
+                'C_HEADER_BG': '\033[48;5;62m\033[38;5;231m', 'C_OK': '\033[38;5;71m',
+                'C_WARN': '\033[38;5;208m', 'C_TITLE': '\033[38;5;33m', 'C_SRCH': '\033[38;5;33;1m',
+                'C_STAR': '\033[38;5;172m'},
+    'kanagawa': {'C_ACCENT': '\033[38;5;110m', 'C_SEL_BG': '\033[48;5;237m\033[38;5;223m',
+                'C_HEADER_BG': '\033[48;5;60m\033[38;5;231m', 'C_OK': '\033[38;5;107m',
+                'C_WARN': '\033[38;5;215m', 'C_TITLE': '\033[38;5;74m', 'C_SRCH': '\033[38;5;117;1m',
+                'C_STAR': '\033[38;5;180m'},
+    'everforest': {'C_ACCENT': '\033[38;5;108m', 'C_SEL_BG': '\033[48;5;237m\033[38;5;223m',
+                'C_HEADER_BG': '\033[48;5;65m\033[38;5;231m', 'C_OK': '\033[38;5;144m',
+                'C_WARN': '\033[38;5;179m', 'C_TITLE': '\033[38;5;108m', 'C_SRCH': '\033[38;5;116;1m',
+                'C_STAR': '\033[38;5;173m'},
+    'ayu':     {'C_ACCENT': '\033[38;5;208m', 'C_SEL_BG': '\033[48;5;238m\033[38;5;231m',
+                'C_HEADER_BG': '\033[48;5;24m\033[38;5;231m', 'C_OK': '\033[38;5;149m',
+                'C_WARN': '\033[38;5;221m', 'C_TITLE': '\033[38;5;80m', 'C_SRCH': '\033[38;5;117;1m',
+                'C_STAR': '\033[38;5;221m'},
+    'monokai-pro': {'C_ACCENT': '\033[38;5;141m', 'C_SEL_BG': '\033[48;5;238m\033[38;5;231m',
+                'C_HEADER_BG': '\033[48;5;61m\033[38;5;231m', 'C_OK': '\033[38;5;149m',
+                'C_WARN': '\033[38;5;215m', 'C_TITLE': '\033[38;5;117m', 'C_SRCH': '\033[38;5;204;1m',
+                'C_STAR': '\033[38;5;222m'},
+    'solarized': {'C_ACCENT': '\033[38;5;33m', 'C_SEL_BG': '\033[48;5;24m\033[38;5;231m',
+                'C_HEADER_BG': '\033[48;5;23m\033[38;5;231m', 'C_OK': '\033[38;5;142m',
+                'C_WARN': '\033[38;5;178m', 'C_TITLE': '\033[38;5;37m', 'C_SRCH': '\033[38;5;62;1m',
+                'C_STAR': '\033[38;5;178m'},
 }
 THEME_NAMES = list(THEMES)
 
@@ -277,6 +305,8 @@ _SESSIONS_END   = '<!-- SESSIONS:END -->'
 _AI_MARKER      = '<!-- AI:ANALYZED -->'
 _MEMORY_START   = '<!-- CLAUDECTL:MEMORY:START -->'
 _MEMORY_END     = '<!-- CLAUDECTL:MEMORY:END -->'
+_CONV_START     = '<!-- CLAUDECTL:CONVENTIONS:START -->'
+_CONV_END       = '<!-- CLAUDECTL:CONVENTIONS:END -->'
 
 _GMCP_START = '<!-- MCP:{name}:START -->'
 _GMCP_END   = '<!-- MCP:{name}:END -->'

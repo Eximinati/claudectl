@@ -12,6 +12,7 @@ Inspired by cognee (Apache-2.0); implemented from scratch.
 """
 
 import os
+import re
 import json
 
 from . import config as _c
@@ -65,15 +66,19 @@ def load_memory(project_path, proj_folder=None):
 
 
 def save_memory(project_path, proj_folder, m):
+    # Write to BOTH the working-dir and encoded-folder locations so the graph
+    # is discoverable for cross-project scanning (conventions) regardless of
+    # which one a caller resolves. Success if at least one write lands.
+    ok = False
     for d in _mem_dirs(project_path, proj_folder):
         try:
             os.makedirs(d, exist_ok=True)
             with open(os.path.join(d, GRAPH_NAME), 'w', encoding='utf-8') as f:
                 json.dump(m, f, indent=2)
-            return True
+            ok = True
         except Exception:
             continue
-    return False
+    return ok
 
 
 def clear_memory(project_path, proj_folder=None):
@@ -247,9 +252,12 @@ def _read(f):
 
 # ── refresh (cognify) — per repo/module, whole project ───────
 
-def refresh_memory(project_path, proj_folder, project_name):
+def refresh_memory(project_path, proj_folder, project_name, auto_cap=None):
     """(Re)extract the semantic graph across EVERY repo and its important
-    modules. Incremental by file hash; only changed modules are re-analyzed."""
+    modules. Incremental by file hash; only changed modules are re-analyzed.
+    `auto_cap`: if set and the number of changed units exceeds it, do nothing
+    and return the current graph tagged `auto_skipped` (used by the auto-refresh
+    path so a big rebuild never runs silently on project open)."""
     from .workspace import _sha256_file
     from .config import load_settings
     root = os.path.abspath(project_path)
@@ -275,6 +283,10 @@ def refresh_memory(project_path, proj_folder, project_name):
                 todo_keys.add((repo, module))
     deleted = [rel for rel in prov if rel not in cur_hashes]
     if not todo and not deleted and mem.get('entities'):
+        return mem
+
+    if auto_cap is not None and len(todo) > auto_cap and mem.get('entities'):
+        mem['auto_skipped'] = len(todo)              # too big for a silent refresh
         return mem
 
     max_calls = load_settings().get('memory_max_calls') or None
@@ -328,6 +340,7 @@ def refresh_memory(project_path, proj_folder, project_name):
                 'module_edges': module_edges,
                 'pending_units': skipped_units,
                 'generated_at': _iso()})
+    _consolidate(mem)
     save_memory(project_path, proj_folder, mem)
     sync_to_claudemd(project_path, proj_folder, mem)
     try:
@@ -340,6 +353,56 @@ def refresh_memory(project_path, proj_folder, project_name):
         workspace.update_manifest(project_path, proj_folder, 'memory')
     except Exception:
         pass
+    return mem
+
+
+def _consolidate(mem):
+    """Keep the graph bounded and accurate as the project grows — so memory
+    cost stays flat (or shrinks) instead of ballooning with the codebase:
+      1. merge duplicate entities (same normalized name) across modules;
+      2. cap total non-lesson entities by importance (rank), evicting the least
+         connected. Lessons are never touched here (they have their own decay).
+    """
+    from .config import load_settings
+    cap = load_settings().get('memory_max_entities', 500) or 500
+    ents = mem.get('entities', [])
+    lessons = [e for e in ents if e.get('type') == 'lesson']
+    reg = [e for e in ents if e.get('type') != 'lesson']
+
+    # 1. cross-module merge by normalized name
+    merged = {}
+    for e in reg:
+        key = re.sub(r'\W+', '', (e.get('name') or '').lower())
+        if not key:
+            continue
+        cur = merged.get(key)
+        if cur is None:
+            e = dict(e)
+            e['modules'] = [m for m in [f"{e.get('repo')}/{e.get('module')}"] if m]
+            merged[key] = e
+            continue
+        cur['rank'] = cur.get('rank', 0) + e.get('rank', 0)
+        cur['source_files'] = sorted(set((cur.get('source_files') or [])
+                                         + (e.get('source_files') or [])))[:6]
+        u = f"{e.get('repo')}/{e.get('module')}"
+        if u not in cur['modules']:
+            cur['modules'].append(u)
+        if len(e.get('summary', '')) > len(cur.get('summary', '')):
+            cur['summary'] = e['summary']            # keep the richer summary
+    reg = list(merged.values())
+
+    # 2. importance cap
+    dropped = 0
+    if len(reg) > cap:
+        reg.sort(key=lambda e: (e.get('rank', 0), len(e.get('summary', ''))), reverse=True)
+        dropped = len(reg) - cap
+        reg = reg[:cap]
+
+    mem['entities'] = reg + lessons
+    kept_names = {e.get('name') for e in reg}
+    mem['relations'] = [r for r in mem.get('relations', [])
+                        if r.get('source') in kept_names and r.get('target') in kept_names]
+    mem['evicted_entities'] = dropped
     return mem
 
 

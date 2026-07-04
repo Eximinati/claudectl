@@ -90,6 +90,17 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
             unlearned = len(_pend)
     except Exception:
         unlearned = 0
+    # memory auto-refresh on open: incremental, capped so a big rebuild never
+    # runs silently; only when memory already exists and a few units changed
+    try:
+        from .config import load_settings as _ls3
+        if _ls3().get('memory_auto_refresh') == 'open' and project_path and proj_folder:
+            from . import memory as _memory
+            _m0 = _memory.load_memory(project_path, proj_folder)
+            if _m0.get('entities'):
+                _memory.refresh_memory(project_path, proj_folder, project_name, auto_cap=6)
+    except Exception:
+        pass
     # agents auto-mode: first open with no explicit selection → apply suggestions
     try:
         from .config import load_settings as _ls2

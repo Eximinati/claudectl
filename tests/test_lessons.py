@@ -43,16 +43,45 @@ def test_pending_sids_skips_fresh_and_scanned(monkeypatch, tmp_path):
     assert lessons.pending_sids(folder, mem) == []
 
 
+def test_pending_sids_skips_internal_sdk_cli(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha', n_sessions=0)
+    _mk_transcript(folder, 'user-sess', age_sec=300)
+    # claudectl-internal print-mode session (the bug source)
+    p = os.path.join(folder, 'internal.jsonl')
+    with open(p, 'w', encoding='utf-8') as f:
+        f.write(json.dumps({'type': 'queue-operation', 'entrypoint': 'sdk-cli',
+                            'content': 'You are distilling durable LESSONS ' * 30}) + '\n')
+    t = time.time() - 300
+    os.utime(p, (t, t))
+    assert lessons.pending_sids(folder, memory._empty()) == ['user-sess']
+
+
 def test_scan_extract_merge(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     actual, enc, folder, _ = sb.add_project('alpha', n_sessions=0)
     _mk_transcript(folder, 's1')
-    _stub_extract(monkeypatch)
+    # low confidence → stays pending (isolate merge behaviour from auto-approve)
+    _stub_extract(monkeypatch, [
+        {'title': 'Retry-after backoff', 'summary': 'usage fetch needs retry-after honoring',
+         'kind': 'error_fix', 'confidence': 0.5, 'files': ['usage.py']}])
     added, scanned = lessons.scan_sessions(actual, folder)
     assert (added, scanned) == (1, 1)
     mem = memory.load_memory(actual, folder)
     l = [e for e in mem['entities'] if e['type'] == 'lesson'][0]
     assert l['status'] == 'pending' and l['kind'] == 'error_fix'
+
+
+def test_high_confidence_lessons_auto_approve(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha', n_sessions=0)
+    _mk_transcript(folder, 's1')
+    _stub_extract(monkeypatch, [
+        {'title': 'Sure thing', 'summary': 'high confidence durable fact',
+         'kind': 'decision', 'confidence': 0.9, 'files': []}])
+    lessons.scan_sessions(actual, folder)
+    l = [e for e in memory.load_memory(actual, folder)['entities'] if e['type'] == 'lesson'][0]
+    assert l['status'] == 'approved'                 # >= 0.8 auto-approves
     # duplicate summary → merged, not re-added
     _mk_transcript(folder, 's2')
     added2, _ = lessons.scan_sessions(actual, folder)

@@ -326,8 +326,31 @@ def save_add_dirs(proj_folder, dirs):
         f.write('\n'.join(dirs))
 
 
+def is_internal_session(jsonl_path):
+    """True if this transcript was spawned by claudectl's own `claude -p` calls
+    (memory build / lesson extraction / ask). Claude Code marks print-mode/SDK
+    sessions with entrypoint 'sdk-cli'; interactive ones use 'cli'. These are
+    not user conversations — exclude them from the browser and lesson scans."""
+    try:
+        with open(jsonl_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for _ in range(5):
+                line = f.readline()
+                if not line:
+                    break
+                if '"sdk-cli"' in line:
+                    try:
+                        if json.loads(line).get('entrypoint') == 'sdk-cli':
+                            return True
+                    except Exception:
+                        continue
+    except OSError:
+        pass
+    return False
+
+
 def scan_sessions(folder):
-    """List sessions in a project folder. Returns [(mtime, sid, preview, count)] newest-first."""
+    """List sessions in a project folder. Returns [(mtime, sid, preview, count)] newest-first.
+    claudectl-internal print-mode sessions (entrypoint sdk-cli) are excluded."""
     sessions = []
     if not folder or not os.path.isdir(folder):
         return sessions
@@ -338,6 +361,8 @@ def scan_sessions(folder):
         try:
             mtime = os.path.getmtime(fpath)
         except OSError:
+            continue
+        if is_internal_session(fpath):
             continue
         preview, count = get_session_info(fpath)
         sessions.append((mtime, f[:-6], preview, count))

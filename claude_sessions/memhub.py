@@ -69,7 +69,8 @@ def hub_screen(project_path, proj_folder, project_name):
                   '', render.hline(), '',
                   render.hint_keys([('b', 'build/refresh'), ('a', 'ask project'),
                                     ('p', 'preview injection'), ('⇧L', 'lessons')]),
-                  render.hint_keys([('h', 'hook on/off'), ('u', 'rules on/off'),
+                  render.hint_keys([('s', 'suggestions'), ('d', 'since last session'),
+                                    ('h', 'hook on/off'), ('u', 'rules on/off'),
                                     ('g', 'open graph'), ('⇧M', 'memory files'),
                                     ('ESC', 'back')])]
         render.render_frame(frame)
@@ -98,6 +99,15 @@ def hub_screen(project_path, proj_folder, project_name):
         elif ch == 'p':
             from . import recall
             recall.preview_screen(project_path, proj_folder, project_name)
+        elif ch == 's':
+            from . import brief
+            sug = brief.work_suggestions(project_path, proj_folder)
+            body = [f"[{tag}] {text}" for tag, text in sug]
+            pager(('CLAUDECTL', project_name, 'SUGGESTIONS'), body, hint='ESC back')
+        elif ch == 'd':
+            from . import brief
+            body = brief.session_diff(project_path, proj_folder)
+            pager(('CLAUDECTL', project_name, 'SINCE LAST SESSION'), body, hint='ESC back')
         elif ch == 'L':
             from . import lessons as lessons_mod
             pend = lessons_mod.pending_sids(proj_folder, st['mem'])

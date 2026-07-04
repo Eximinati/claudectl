@@ -29,6 +29,7 @@ def pending_sids(proj_folder, mem):
     """Transcript sids not yet scanned for lessons, oldest first."""
     if not proj_folder or not os.path.isdir(proj_folder):
         return []
+    from .sessions import is_internal_session
     scanned = mem.get('lessons_scanned', {})
     now = time.time()
     out = []
@@ -46,6 +47,8 @@ def pending_sids(proj_folder, mem):
                 continue                      # too small to learn from
         except OSError:
             continue
+        if is_internal_session(p):
+            continue                          # claudectl's own claude -p calls
         out.append((os.path.getmtime(p), sid))
     return [sid for _mt, sid in sorted(out)]
 
@@ -110,7 +113,11 @@ def _jaccard(a, b):
 
 def merge_lessons(mem, new, sid):
     """Append new lessons as pending entities; near-duplicates merge into the
-    existing lesson (keep higher confidence, bump last_used). Returns #added."""
+    existing lesson (keep higher confidence, bump last_used). High-confidence
+    lessons auto-approve (memory_lessons_autoapprove) to cut manual review.
+    Returns #added."""
+    from .config import load_settings
+    auto = load_settings().get('memory_lessons_autoapprove', 0.8) or 0
     existing = [e for e in mem.get('entities', []) if e.get('type') == 'lesson']
     counter = mem.get('session_counter', 0)
     added = 0
@@ -122,9 +129,10 @@ def merge_lessons(mem, new, sid):
             dup['last_used'] = counter
             dup.setdefault('sids', []).append(sid)
             continue
+        status = 'approved' if (auto and l['confidence'] >= auto) else 'pending'
         ent = {'id': f'lesson:{sid}:{i}', 'name': l['title'], 'type': 'lesson',
                'summary': l['summary'], 'kind': l['kind'],
-               'confidence': l['confidence'], 'status': 'pending',
+               'confidence': l['confidence'], 'status': status,
                'sid': sid, 'sids': [sid], 'created_at': memory._iso(),
                'last_used': counter, 'repo': '', 'module': '(project)',
                'source_files': l['files'], 'rank': 0}
@@ -162,6 +170,11 @@ def scan_sessions(project_path, proj_folder, sids=None):
     if todo:
         apply_decay(mem)
         memory.save_memory(project_path, proj_folder, mem)
+        try:
+            from . import conventions
+            conventions.sync_to_global()             # promote cross-project conventions
+        except Exception:
+            pass
     return added, len(todo)
 
 
