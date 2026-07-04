@@ -16,25 +16,135 @@ from . import render
 
 settings_path = os.path.join(config_dir, 'settings.json')
 
-# Ready-made hooks the user can drop in.
+# Valid Claude Code hook events (for AI-generation validation).
+EVENTS = {'PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SubagentStop',
+          'SessionStart', 'SessionEnd', 'Notification', 'PreCompact'}
+
+# A PreToolUse hook that exits with code 2 BLOCKS the tool and shows its stderr
+# to Claude. PowerShell one-liners parse the hook JSON on stdin (tool_input).
+_PS = 'powershell -NoProfile -Command'
+
+
+def _block_bash(pattern, msg):
+    return (f"{_PS} \"$j=$input|Out-String|ConvertFrom-Json; "
+            f"if($j.tool_input.command -match '{pattern}'){{"
+            f"[Console]::Error.WriteLine('claudectl: {msg}'); exit 2}}\"")
+
+
+def _block_path(field, pattern, msg):
+    return (f"{_PS} \"$j=$input|Out-String|ConvertFrom-Json; "
+            f"if($j.tool_input.{field} -match '{pattern}'){{"
+            f"[Console]::Error.WriteLine('claudectl: {msg}'); exit 2}}\"")
+
+
+# Ready-made hooks the user can drop in. Windows-friendly (PowerShell for
+# JSON parsing / beeps; plain executables for formatters/git).
 TEMPLATES = {
+    # ── formatting / quality ──────────────────────────────────
     'prettier-on-edit': {
         'event': 'PostToolUse',
-        'entry': {'matcher': 'Edit|Write',
-                  'hooks': [{'type': 'command', 'command': 'prettier --write "$FILE_PATH"'}]},
-        'desc': 'Run prettier after every Edit/Write',
+        'entry': {'matcher': 'Edit|Write|MultiEdit',
+                  'hooks': [{'type': 'command', 'command': 'prettier --write .'}]},
+        'desc': 'Prettier-format the project after every edit',
+    },
+    'ruff-format-python': {
+        'event': 'PostToolUse',
+        'entry': {'matcher': 'Edit|Write|MultiEdit',
+                  'hooks': [{'type': 'command', 'command': 'ruff format . && ruff check --fix .'}]},
+        'desc': 'Ruff format + autofix Python after edits',
+    },
+    'eslint-fix-on-edit': {
+        'event': 'PostToolUse',
+        'entry': {'matcher': 'Edit|Write|MultiEdit',
+                  'hooks': [{'type': 'command', 'command': 'eslint --fix .'}]},
+        'desc': 'ESLint --fix after every edit',
+    },
+    'gofmt-on-edit': {
+        'event': 'PostToolUse',
+        'entry': {'matcher': 'Edit|Write|MultiEdit',
+                  'hooks': [{'type': 'command', 'command': 'gofmt -w .'}]},
+        'desc': 'gofmt the project after edits',
+    },
+    'run-tests-on-stop': {
+        'event': 'Stop',
+        'entry': {'hooks': [{'type': 'command', 'command': 'pytest -q'}]},
+        'desc': 'Run pytest when Claude finishes a turn',
+    },
+    # ── safety / guardrails (exit 2 blocks the tool) ──────────
+    'block-rm-rf': {
+        'event': 'PreToolUse',
+        'entry': {'matcher': 'Bash',
+                  'hooks': [{'type': 'command',
+                             'command': _block_bash('rm\\s+-rf', 'rm -rf blocked')}]},
+        'desc': 'Block rm -rf commands',
+    },
+    'block-git-reset-hard': {
+        'event': 'PreToolUse',
+        'entry': {'matcher': 'Bash',
+                  'hooks': [{'type': 'command',
+                             'command': _block_bash('git\\s+reset\\s+--hard', 'git reset --hard blocked')}]},
+        'desc': 'Block git reset --hard',
+    },
+    'block-force-push': {
+        'event': 'PreToolUse',
+        'entry': {'matcher': 'Bash',
+                  'hooks': [{'type': 'command',
+                             'command': _block_bash('push.*--force', 'force push blocked')}]},
+        'desc': 'Block git push --force',
+    },
+    'block-sudo': {
+        'event': 'PreToolUse',
+        'entry': {'matcher': 'Bash(sudo:*)',
+                  'hooks': [{'type': 'command', 'command': 'echo "sudo blocked" 1>&2 && exit 2'}]},
+        'desc': 'Block sudo commands',
     },
     'block-curl': {
         'event': 'PreToolUse',
         'entry': {'matcher': 'Bash(curl:*)',
-                  'hooks': [{'type': 'command', 'command': 'echo blocked && exit 1'}]},
+                  'hooks': [{'type': 'command', 'command': 'echo "curl blocked" 1>&2 && exit 2'}]},
         'desc': 'Block bash curl commands',
+    },
+    'protect-env-read': {
+        'event': 'PreToolUse',
+        'entry': {'matcher': 'Read',
+                  'hooks': [{'type': 'command',
+                             'command': _block_path('file_path', '\\.env', 'refusing to read .env')}]},
+        'desc': 'Block reading .env files (secrets)',
+    },
+    'protect-secret-write': {
+        'event': 'PreToolUse',
+        'entry': {'matcher': 'Write|Edit|MultiEdit',
+                  'hooks': [{'type': 'command',
+                             'command': _block_path('file_path', '\\.env|credentials|id_rsa|\\.pem',
+                                                    'refusing to write to a secret file')}]},
+        'desc': 'Block writing to .env / credential files',
+    },
+    # ── audit / notifications / context ───────────────────────
+    'log-bash-commands': {
+        'event': 'PostToolUse',
+        'entry': {'matcher': 'Bash',
+                  'hooks': [{'type': 'command',
+                             'command': (f"{_PS} \"$j=$input|Out-String|ConvertFrom-Json; "
+                                         "Add-Content -Path .claudectl\\bash-log.txt "
+                                         "-Value $j.tool_input.command\"")}]},
+        'desc': 'Append every Bash command to .claudectl/bash-log.txt',
     },
     'notify-on-stop': {
         'event': 'Stop',
         'entry': {'hooks': [{'type': 'command',
                              'command': 'powershell -c "[console]::beep(800,200)"'}]},
         'desc': 'Beep when Claude finishes a turn',
+    },
+    'notify-on-input-needed': {
+        'event': 'Notification',
+        'entry': {'hooks': [{'type': 'command',
+                             'command': 'powershell -c "[console]::beep(1000,150);[console]::beep(1000,150)"'}]},
+        'desc': 'Double-beep when Claude needs your input',
+    },
+    'session-start-git-status': {
+        'event': 'SessionStart',
+        'entry': {'hooks': [{'type': 'command', 'command': 'git status -sb'}]},
+        'desc': 'Inject git branch + status at session start',
     },
 }
 
@@ -138,6 +248,7 @@ def hooks_menu(scope=None):
             items.append((f"{_c.C_DIM}(no hooks configured){_c.C_RESET}", None))
         items += [(f"{'─' * W}", None),
                   ('＋  Add from template', '__tpl__'),
+                  ('✨  AI-generate a hook (Claude)', '__ai__'),
                   ('📝  Edit settings.json', '__edit__')]
 
         sel = menu(items, f"HOOKS  /  {os.path.basename(config_dir)}")
@@ -150,6 +261,8 @@ def hooks_menu(scope=None):
             open_in_editor(settings_path)
         elif sel == '__tpl__':
             _add_template()
+        elif sel == '__ai__':
+            _ai_hook()
         elif sel.startswith(('on:', 'off:')):
             _toggle_or_remove(sel)
 
@@ -166,6 +279,55 @@ def _add_template():
         flash(f"Added {pick}")
     else:
         flash("Write failed", ok=False, secs=1.4)
+
+
+def _ai_hook():
+    """Describe a hook in plain language; Claude returns a validated hook spec
+    (event + matcher + command) which you preview and confirm before it's saved."""
+    desc = text_input("Describe the hook (when it fires + what it does):")
+    if not desc:
+        return
+    from . import memory
+    prompt = (
+        "You configure Claude Code hooks. Given the REQUEST, output ONLY valid "
+        "JSON for one hook, no prose, no code fences:\n"
+        '{"event":"PreToolUse|PostToolUse|UserPromptSubmit|Stop|SubagentStop|'
+        'SessionStart|SessionEnd|Notification|PreCompact",'
+        '"matcher":"tool matcher or empty (e.g. Edit|Write, Bash, Bash(git:*))",'
+        '"command":"a single shell command; Windows/PowerShell friendly",'
+        '"desc":"short description"}\n'
+        "Rules: to BLOCK a tool in PreToolUse, the command must write a reason to "
+        "stderr and `exit 2`. Hook input arrives as JSON on stdin (fields "
+        "tool_name, tool_input). Keep it a one-liner.\n\n"
+        f"REQUEST:\n{desc}"
+    )
+    data = memory._parse_json(memory._claude_stdin(
+        prompt, os.getcwd(), crumbs=('CLAUDECTL', 'HOOK'),
+        label='Generating hook with Claude...'))
+    if not isinstance(data, dict):
+        flash("Claude returned no valid hook", ok=False, secs=1.8)
+        return
+    event = str(data.get('event', '')).strip()
+    command = str(data.get('command', '')).strip()
+    if event not in EVENTS or not command:
+        flash(f"Invalid hook (event={event or '?'})", ok=False, secs=2)
+        return
+    matcher = str(data.get('matcher', '')).strip()
+    _cls()
+    print(f"\n  AI-GENERATED HOOK\n")
+    print(f"  Event   : {event}")
+    print(f"  Matcher : {matcher or '(any)'}")
+    print(f"  Command : {command}")
+    print(f"  {data.get('desc', '')}\n")
+    if not confirm("Add this hook?"):
+        return
+    entry = {'hooks': [{'type': 'command', 'command': command}]}
+    if matcher:
+        entry['matcher'] = matcher
+    s = _load()
+    s.setdefault('hooks', {}).setdefault(event, []).append(entry)
+    ok = _save(s)
+    flash("Hook added" if ok else "Write failed", ok=ok, secs=1.4)
 
 
 def _toggle_or_remove(sel):

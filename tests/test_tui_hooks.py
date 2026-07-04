@@ -32,7 +32,7 @@ def test_add_template(monkeypatch, tmp_path):
     run_flow(monkeypatch, keys, hooks.hooks_menu)
     d = json.load(open(sp, encoding='utf-8'))
     assert 'PostToolUse' in d['hooks']
-    assert d['hooks']['PostToolUse'][0]['matcher'] == 'Edit|Write'
+    assert d['hooks']['PostToolUse'][0]['matcher'].startswith('Edit|Write')
 
 
 def test_toggle_disables_hook(monkeypatch, tmp_path):
@@ -74,3 +74,40 @@ def test_corrupt_settings_tolerated(monkeypatch, tmp_path):
     open(sp, 'w', encoding='utf-8').write('{{{bad json')
     _, cap, _ = run_flow(monkeypatch, flat(ESC), hooks.hooks_menu)
     assert 'HOOKS' in cap.plain   # no crash
+
+
+def test_all_templates_well_formed():
+    assert len(hooks.TEMPLATES) >= 15
+    for name, tpl in hooks.TEMPLATES.items():
+        assert tpl['event'] in hooks.EVENTS, name
+        hs = tpl['entry']['hooks']
+        assert hs and all(h['type'] == 'command' and h['command'] for h in hs), name
+
+
+def test_ai_hook_generates_and_saves(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    sp = _point_settings(monkeypatch, tmp_path)
+    from claude_sessions import memory
+    monkeypatch.setattr(memory, '_claude_stdin', lambda *a, **k: json.dumps({
+        'event': 'PostToolUse', 'matcher': 'Edit|Write',
+        'command': 'echo done', 'desc': 'demo'}))
+    # AI-generate is the 2nd action on empty menu (Add template, AI-generate, Edit)
+    # type description, ENTER; confirm Add (ENTER)
+    keys = flat(DOWN, ENTER, typed('beep after edits'), ENTER, RIGHT, ENTER, ESC)
+    run_flow(monkeypatch, keys, hooks.hooks_menu)
+    d = json.load(open(sp, encoding='utf-8'))
+    entry = d['hooks']['PostToolUse'][0]
+    assert entry['matcher'] == 'Edit|Write'
+    assert entry['hooks'][0]['command'] == 'echo done'
+
+
+def test_ai_hook_rejects_invalid_event(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    sp = _point_settings(monkeypatch, tmp_path)
+    from claude_sessions import memory
+    monkeypatch.setattr(memory, '_claude_stdin', lambda *a, **k: json.dumps({
+        'event': 'Nonsense', 'command': 'x'}))
+    keys = flat(DOWN, ENTER, typed('bad'), ENTER, ESC)
+    run_flow(monkeypatch, keys, hooks.hooks_menu)
+    d = json.load(open(sp, encoding='utf-8')) if os.path.isfile(sp) else {}
+    assert not d.get('hooks')                       # nothing saved
