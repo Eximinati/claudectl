@@ -22,3 +22,6 @@ setup environment.ico
 
 # Workspace provenance manifest (machine-local: paths, session counts)
 .claudectl/
+
+# Auto-generated per-module memory rules (regenerate on every memory refresh)
+.claude/rules/claudectl-mem-*.md
