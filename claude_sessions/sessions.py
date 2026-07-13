@@ -3,7 +3,7 @@ import json
 import time
 import re
 
-from .config import BAD_PREFIXES, BAD_CONTAINS, last_session_file, projects_dir
+from .config import BAD_PREFIXES, BAD_CONTAINS, last_session_file, projects_dir, config_dir
 
 
 # ── session parsing ──────────────────────────────────────────
@@ -404,12 +404,14 @@ def load_recent_sessions(n=5):
         p   = entry.get('project_path', '')
         enc = entry.get('encoded_name', '')
         sid = entry.get('session_id', '')
+        cfgdir = entry.get('cfgdir') or config_dir   # old entries predate this field
         if not (p and enc and sid):
             continue
         if not os.path.exists(p):
             continue
-        if not os.path.exists(os.path.join(projects_dir, enc, f"{sid}.jsonl")):
+        if not os.path.exists(os.path.join(cfgdir, 'projects', enc, f"{sid}.jsonl")):
             continue
+        entry = dict(entry, cfgdir=cfgdir)
         valid.append(entry)
         if len(valid) >= n:
             break
@@ -422,7 +424,7 @@ def load_last_session():
     return sessions[0] if sessions else None
 
 
-def save_last_session(project_path, encoded_name, session_id, preview=''):
+def save_last_session(project_path, encoded_name, session_id, preview='', cfgdir=None):
     try:
         new_entry = {
             'project_path': project_path,
@@ -430,6 +432,7 @@ def save_last_session(project_path, encoded_name, session_id, preview=''):
             'session_id':   session_id,
             'preview':      preview,
             'timestamp':    time.time(),
+            'cfgdir':       cfgdir or config_dir,
         }
         # load existing list
         try:

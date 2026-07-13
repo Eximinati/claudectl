@@ -75,7 +75,7 @@ def load_settings():
     """Read ~/.claude/claudectl.json, merged over defaults. Never raises."""
     s = dict(_DEFAULT_SETTINGS)
     try:
-        with open(settings_file, 'r', encoding='utf-8') as f:
+        with open(settings_file, 'r', encoding='utf-8-sig') as f:
             data = json.load(f)
         if isinstance(data, dict):
             s.update({k: v for k, v in data.items() if k in _DEFAULT_SETTINGS})
@@ -119,6 +119,26 @@ config_dir        = get_config_dir()
 projects_dir      = os.path.join(config_dir, 'projects')
 last_session_file = os.path.join(projects_dir, 'last-session.json')
 global_claude_md  = os.path.join(config_dir, 'CLAUDE.md')
+
+
+def all_config_dirs():
+    """[(name, dir)] for every known account (default first), deduped by
+    resolved path — so session discovery can see sessions from every account,
+    not just whichever one is currently active."""
+    default = os.path.join(_USERPROFILE, '.claude')
+    candidates = [('default', default)]
+    for a in load_settings().get('accounts', []):
+        if isinstance(a, dict) and a.get('dir'):
+            candidates.append((a.get('name', a['dir']),
+                               os.path.expanduser(os.path.expandvars(a['dir']))))
+    seen, out = set(), []
+    for name, d in candidates:
+        rp = os.path.normcase(os.path.abspath(d))
+        if rp in seen:
+            continue
+        seen.add(rp)
+        out.append((name, d))
+    return out
 
 
 # ── executable discovery ────────────────────────────────────

@@ -22,7 +22,7 @@ def flat(*parts):
 def entries_for(sb, projects):
     out = []
     for actual, enc in projects:
-        out.append((0, actual, enc))
+        out.append((0, actual, enc, str(sb.cfg)))
     return out
 
 
@@ -117,7 +117,7 @@ def test_global_search_finds_and_returns(monkeypatch, tmp_path):
     result, cap, _ = run_flow(monkeypatch, keys, global_search,
                               entries_for(sb, [(a1, e1), (a2, e2)]))
     assert result is not None
-    kind, path, enc, sid = result
+    kind, path, enc, sid, cfgdir = result
     assert kind == 'resume' and enc == e1 and sid == sids1[0]
 
 

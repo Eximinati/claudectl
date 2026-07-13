@@ -126,9 +126,10 @@ def fmt_tok(n):
 # ── incremental scan with progress ───────────────────────────
 
 def iter_all_sessions(entries, title='SCANNING SESSIONS'):
-    """Yield (mtime, project_path, encoded, sid, stats) for every session of
-    every project. Shows a progress frame; ESC stops early (yields partial).
-    entries: [(mtime, actual_path, encoded_name)] as built by main.run."""
+    """Yield (mtime, project_path, encoded, sid, stats, cfgdir) for every
+    session of every project. Shows a progress frame; ESC stops early
+    (yields partial). entries: [(mtime, actual_path, encoded_name, cfgdir)]
+    as built by main.run."""
     from . import ui   # lazy — avoid import cycle
 
     total = len(entries)
@@ -136,10 +137,10 @@ def iter_all_sessions(entries, title='SCANNING SESSIONS'):
     peeking = True   # stop inspecting input after first non-ESC key, so
                      # keys queued for the next screen keep their order
     try:
-        for pi, (_, ppath, enc) in enumerate(entries, 1):
+        for pi, (_, ppath, enc, cfgdir) in enumerate(entries, 1):
             if stopped:
                 break
-            folder = os.path.join(projects_dir, enc)
+            folder = os.path.join(cfgdir, 'projects', enc)
             names = [f for f in (os.listdir(folder) if os.path.isdir(folder) else [])
                      if f.endswith('.jsonl')]
             for f in names:
@@ -159,7 +160,7 @@ def iter_all_sessions(entries, title='SCANNING SESSIONS'):
                 except OSError:
                     continue
                 stats = get_session_stats_cached(fpath)
-                yield (mtime, ppath, enc, f[:-6], stats)
+                yield (mtime, ppath, enc, f[:-6], stats, cfgdir)
             render.render_frame([
                 render.header('CLAUDECTL', title),
                 '',
@@ -195,7 +196,7 @@ def usage_by_day(entries, days=14):
     for item in iter_all_sessions(entries, 'DAILY USAGE'):
         if item is None:
             break
-        mtime, _ppath, _enc, _sid, stats = item
+        mtime, _ppath, _enc, _sid, stats, _cfgdir = item
         day = _day_of(stats, mtime)
         if not day or day < cutoff:
             continue
@@ -299,9 +300,10 @@ def usage_dashboard(entries):
         if item is None:
             partial = True
             break
-        mtime, ppath, enc, sid, stats = item
-        p = per_project.setdefault(enc, {
-            'path': ppath, 'sessions': 0, 'msgs': 0,
+        mtime, ppath, enc, sid, stats, cfgdir = item
+        key = (cfgdir, enc)
+        p = per_project.setdefault(key, {
+            'path': ppath, 'sessions': 0, 'msgs': 0, 'cfgdir': cfgdir,
             'usage': {'in': 0, 'out': 0, 'cache_read': 0, 'cache_create': 0},
             'usage_by_model': {},
         })
@@ -317,9 +319,9 @@ def usage_dashboard(entries):
                 agg[k] += mu.get(k, 0)
 
     proj_rows = []
-    for enc, p in per_project.items():
+    for key, p in per_project.items():
         cost, exact = estimate_cost(p['usage_by_model'])
-        proj_rows.append((cost, enc, p, exact))
+        proj_rows.append((cost, key, p, exact))
     proj_rows.sort(reverse=True, key=lambda r: r[0])
 
     nav = 0
@@ -333,7 +335,7 @@ def usage_dashboard(entries):
         total_cost = sum(r[0] for r in proj_rows)
         frame = [render.header('CLAUDECTL', 'USAGE STATS' + (' (partial)' if partial else '')),
                  '', '  ' + head, render.hline()]
-        for i, (cost, enc, p, exact) in enumerate(proj_rows):
+        for i, (cost, key, p, exact) in enumerate(proj_rows):
             u = p['usage']
             label = render.cols(
                 [os.path.basename(p['path']) or p['path'], str(p['sessions']),
@@ -356,8 +358,8 @@ def usage_dashboard(entries):
         elif ev[0] == 'down' and proj_rows:
             nav = (nav + 1) % len(proj_rows)
         elif ev[0] == 'enter' and proj_rows:
-            _, enc, p, _ = proj_rows[nav]
-            project_usage_screen(os.path.join(projects_dir, enc),
+            _, (cfgdir, enc), p, _ = proj_rows[nav]
+            project_usage_screen(os.path.join(cfgdir, 'projects', enc),
                                  os.path.basename(p['path']) or p['path'])
         elif ev[0] == 'char' and ev[1] == 'd':
             daily_usage_screen(entries)

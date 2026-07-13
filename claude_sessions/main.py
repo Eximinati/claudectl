@@ -3,7 +3,7 @@ import sys
 import atexit
 import subprocess
 
-from .config import projects_dir, choice_file, global_claude_md, config_dir
+from .config import projects_dir, choice_file, global_claude_md, config_dir, all_config_dirs
 from .config import C_RESET, C_STAR, C_DIM, C_TITLE, C_BOLD, C_NAME
 from .config import get_claude_exe, load_settings, save_settings
 from .paths import find_actual_path
@@ -79,17 +79,22 @@ def run():
 
     # ── discover projects ─────────────────────────────────────────
 
+    # Scan every known account's projects dir, not just the active one, so
+    # sessions started under another account stay reachable here.
     entries = []
-    if os.path.exists(projects_dir):
-        for name in os.listdir(projects_dir):
-            proj = os.path.join(projects_dir, name)
+    for _acct_name, acct_dir in all_config_dirs():
+        acct_projects_dir = os.path.join(acct_dir, 'projects')
+        if not os.path.exists(acct_projects_dir):
+            continue
+        for name in os.listdir(acct_projects_dir):
+            proj = os.path.join(acct_projects_dir, name)
             if not os.path.isdir(proj):
                 continue
             actual = find_actual_path(name)
             if not actual:
                 continue
             mtime = os.path.getmtime(proj)
-            entries.append((mtime, actual, name))
+            entries.append((mtime, actual, name, acct_dir))
 
     entries.sort(reverse=True)
 
@@ -100,7 +105,35 @@ def run():
         sys.exit(0)
 
     W = 62
-    project_items = [(f"{os.path.basename(p) or p:<28}  {p}", p) for _, p, _ in entries]
+
+    # Same real path can show up under several accounts (each account has its
+    # own <cfgdir>/projects/<encoded> folder). Collapse those into ONE row —
+    # default account wins as primary, other accounts' sessions are merged in
+    # and highlighted once the project is opened (see sessions_menu below).
+    from .context_inject import _account_name_for
+    _acct_order = {d: i for i, (_n, d) in enumerate(all_config_dirs())}
+    _groups = {}   # encoded_name -> {'path', 'dirs': set(acct_dir), 'mtime'}
+    for mtime, actual, name, acct_dir in entries:
+        g = _groups.setdefault(name, {'path': actual, 'dirs': set(), 'mtime': mtime})
+        g['dirs'].add(acct_dir)
+        g['mtime'] = max(g['mtime'], mtime)
+    grouped = []   # [(mtime, path, encoded_name, primary_dir, [other_dirs...])]
+    for name, g in _groups.items():
+        dirs_sorted = sorted(g['dirs'], key=lambda d: _acct_order.get(d, 999))
+        grouped.append((g['mtime'], g['path'], name, dirs_sorted[0], dirs_sorted[1:]))
+    grouped.sort(reverse=True, key=lambda r: r[0])
+
+    _default_acct_dir = all_config_dirs()[0][1]
+    project_items = []
+    for i, (_, p, _n, primary_dir, other_dirs) in enumerate(grouped):
+        if other_dirs:
+            names = ', '.join(_account_name_for(d) for d in other_dirs)
+            tag = f"  {C_DIM}[+{names}]{C_RESET}"
+        elif primary_dir != _default_acct_dir:
+            tag = f"  {C_DIM}[{os.path.basename(primary_dir)}]{C_RESET}"
+        else:
+            tag = ''
+        project_items.append((f"{os.path.basename(p) or p:<28}  {p}{tag}", f'__proj_{i}__'))
 
     recent = load_recent_sessions(5)
     if recent:
@@ -108,7 +141,8 @@ def run():
         for i, sess in enumerate(recent):
             lr_proj    = os.path.basename(sess['project_path']) or sess['project_path']
             sid        = sess['session_id']
-            pf         = os.path.join(projects_dir, sess.get('encoded_name', ''))
+            pf         = os.path.join(sess.get('cfgdir') or config_dir, 'projects',
+                                      sess.get('encoded_name', ''))
             jsonl      = os.path.join(pf, f"{sid}.jsonl")
             # Session name: manual rename > AI transcript title > preview > id.
             lr_name    = (load_name(pf, sid) or get_session_title(jsonl)
@@ -145,7 +179,7 @@ def run():
     # ── main loop ─────────────────────────────────────────────────
 
     path = encoded_name = proj_folder = choice = None
-    opts = {'effort': '', 'model': '', 'perm': '', 'name': '', 'worktree': ''}
+    opts = {'effort': '', 'model': '', 'perm': '', 'name': '', 'worktree': '', 'cfgdir': ''}
 
     while True:
         sel = menu(full_items, "SELECT PROJECT",
@@ -153,12 +187,16 @@ def run():
         if not sel:
             sys.exit(0)
 
+        opts['cfgdir'] = ''   # reset per iteration — only set when project lives in a non-active account
+
         if sel and sel.startswith('__quickresume_'):
             idx  = int(sel[len('__quickresume_'):-2])
             sess = recent[idx]
             path         = sess['project_path']
             encoded_name = sess['encoded_name']
-            proj_folder  = os.path.join(projects_dir, encoded_name)
+            sess_cfgdir  = sess.get('cfgdir') or config_dir
+            opts['cfgdir'] = sess_cfgdir if sess_cfgdir != config_dir else ''
+            proj_folder  = os.path.join(sess_cfgdir, 'projects', encoded_name)
             choice       = f"resume:{sess['session_id']}"
 
         elif sel == '__open_path__':
@@ -178,8 +216,9 @@ def run():
             hit = global_search(entries)
             if not hit:
                 continue
-            _, path, encoded_name, sid = hit
-            proj_folder = os.path.join(projects_dir, encoded_name)
+            _, path, encoded_name, sid, acct_dir = hit
+            opts['cfgdir'] = acct_dir if acct_dir != config_dir else ''
+            proj_folder = os.path.join(acct_dir, 'projects', encoded_name)
             choice      = f"resume:{sid}"
 
         elif sel == '__usage_stats__':
@@ -218,19 +257,23 @@ def run():
             help_screen()
             continue
 
-        else:
-            path = sel
-            encoded_name = next((n for _, p, n in entries if p == path), None)
-            if not encoded_name:
-                continue   # path not in entries (shouldn't happen) — skip safely
-            proj_folder  = os.path.join(projects_dir, encoded_name)
+        elif sel and sel.startswith('__proj_'):
+            idx = int(sel[len('__proj_'):-2])
+            _, path, encoded_name, primary_dir, other_dirs = grouped[idx]
+            opts['cfgdir'] = primary_dir if primary_dir != config_dir else ''
+            proj_folder  = os.path.join(primary_dir, 'projects', encoded_name)
 
             sessions = scan_sessions(proj_folder)
+            extra_accounts = [(_account_name_for(d), os.path.join(d, 'projects', encoded_name))
+                              for d in other_dirs] or None
 
             project_name = os.path.basename(path) or path
-            choice = sessions_menu(sessions, proj_folder, project_name, path)
+            choice, foreign_dir = sessions_menu(sessions, proj_folder, project_name, path,
+                                                extra_accounts=extra_accounts)
             if not choice:
                 continue
+            if foreign_dir:
+                opts['cfgdir'] = foreign_dir if foreign_dir != config_dir else ''
 
         # Launch options (skip for terminal); ESC = back to main menu
         if choice == 'terminal':
@@ -251,7 +294,9 @@ def run():
             mem_line = recall.memory_status_line(path, proj_folder, settings)
         except Exception:
             mem_line = ''
-        # per-launch account choice (active first) — only when extra accounts exist
+        # per-launch account choice — defaults to whichever account this
+        # project's session actually lives under, not the active account.
+        project_cfgdir = os.path.abspath(opts.get('cfgdir') or config_dir)
         acct_opts = []
         try:
             from .accounts import _accounts
@@ -260,8 +305,8 @@ def run():
                 def _abs(dd):
                     return (os.path.expanduser(os.path.expandvars(dd)) if dd
                             else os.path.expanduser('~/.claude'))
-                acct_opts = ([(n, _abs(dd)) for n, dd, a in accs if a]
-                             + [(n, _abs(dd)) for n, dd, a in accs if not a])
+                acct_opts = [(n, _abs(dd)) for n, dd, a in accs]
+                acct_opts.sort(key=lambda t: os.path.abspath(t[1]) != project_cfgdir)
         except Exception:
             acct_opts = []
         opts = launch_options_menu(
@@ -280,6 +325,12 @@ def run():
         if opts is None:
             choice = None
             continue
+        # launch_options_menu's account picker only shows (and can only set
+        # cfgdir) when the user has explicitly added extra accounts — without
+        # that picker it always returns cfgdir=''. Don't let that blank out
+        # the project's real account when one was already resolved above.
+        if not opts.get('cfgdir') and project_cfgdir != os.path.abspath(config_dir):
+            opts['cfgdir'] = project_cfgdir
         # Re-sync in case the project .claude/agents/ drifted; safe no-op when
         # the selection already matches. Inline --agents is avoided because its
         # JSON overruns the Windows command line for real agents.
@@ -303,7 +354,7 @@ def run():
         sid = choice.split('::')[1] if '::' in choice else \
               (choice.split(':')[1] if ':' in choice else '')
         if sid:
-            save_last_session(path, encoded_name, sid)
+            save_last_session(path, encoded_name, sid, cfgdir=opts.get('cfgdir') or config_dir)
 
     # Validate action format before handing to the bat launcher
     valid = (
@@ -322,7 +373,7 @@ def run():
     opts['name']     = opts['name'].replace('|', '')
     opts['worktree'] = opts['worktree'].replace('|', '')
     opts['agent']    = opts.get('agent', '').replace('|', '')
-    if '|' in f"{path}{encoded_name or ''}{config_dir}":
+    if '|' in f"{path}{encoded_name or ''}{config_dir}{opts.get('cfgdir', '')}":
         _cls()
         print(f"\n  Internal error — '|' in project path or config dir; cannot launch.")
         pause("\n  Press Enter to exit...")
@@ -356,7 +407,8 @@ def build_choice_line(path, encoded_name, choice, opts):
         return x if x else '-'
     return '|'.join(['v5', path, encoded_name or '-', choice,
                      sv(opts['effort']), sv(opts['model']), sv(opts['perm']),
-                     sv(opts['name']), sv(opts['worktree']), sv(config_dir),
+                     sv(opts['name']), sv(opts['worktree']),
+                     sv(opts.get('cfgdir') or config_dir),
                      sv(opts.get('agent', '')), sv(opts.get('agents_json', ''))])
 
 

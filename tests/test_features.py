@@ -5,7 +5,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from claude_sessions.main import build_choice_line
-from claude_sessions.config import config_dir
+from claude_sessions.config import config_dir, all_config_dirs
+from claude_sessions import config as config_mod
 from claude_sessions.sessions import get_session_stats
 from claude_sessions.transcript import _slug, iter_transcript
 from claude_sessions.stats import estimate_cost, fmt_tok
@@ -34,6 +35,30 @@ def test_choice_line_full():
              name='My Sess', worktree='*', agent='reviewer', agents_json='')
     line = build_choice_line(r'D:\p', 'D--p', 'new', o)
     assert line == rf'v5|D:\p|D--p|new|high|fable-5|plan|My Sess|*|{config_dir}|reviewer|-'
+
+
+def test_choice_line_per_launch_account():
+    # the per-launch account pick (opts['cfgdir']) must reach the choice file,
+    # not claudectl's own config_dir
+    o = dict(OPTS, cfgdir=r'C:\Users\x\.claude-work')
+    line = build_choice_line(r'D:\p', 'D--p', 'new', o)
+    assert line.split('|')[9] == r'C:\Users\x\.claude-work'
+
+
+def test_all_config_dirs_merges_accounts_and_dedups(monkeypatch, tmp_path):
+    # default + a distinct account => both listed; an account pointing back
+    # at the default dir must be deduped so it doesn't show up twice
+    work_dir = str(tmp_path / 'work-acct')
+    monkeypatch.setattr(config_mod, 'load_settings', lambda: {
+        'accounts': [
+            {'name': 'work', 'dir': work_dir},
+            {'name': 'dup-of-default', 'dir': config_dir},
+        ]
+    })
+    dirs = all_config_dirs()
+    assert dirs[0] == ('default', os.path.join(config_mod._USERPROFILE, '.claude'))
+    assert ('work', work_dir) in dirs
+    assert len(dirs) == 2   # dup-of-default collapsed into the default entry
 
 
 def test_sid_of():

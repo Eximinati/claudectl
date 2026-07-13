@@ -2,34 +2,34 @@
 
 import os
 
-from .config import projects_dir, C_RESET, C_DIM, C_SRCH, C_SEL
+from .config import C_RESET, C_DIM, C_SRCH, C_SEL
 from .sessions import load_name, format_age
 from .stats import iter_all_sessions, save_disk_cache
 from . import render
 
 
 def global_search(entries):
-    """Search every session across all projects.
-    entries: [(mtime, actual_path, encoded_name)] from main.run.
-    Returns None (cancel) or ('resume', project_path, encoded_name, sid)."""
+    """Search every session across all projects (every known account).
+    entries: [(mtime, actual_path, encoded_name, cfgdir)] from main.run.
+    Returns None (cancel) or ('resume', project_path, encoded_name, sid, cfgdir)."""
     from . import ui
 
     # ── index phase (incremental, ESC = partial) ──────────────
-    index = []     # (mtime, ppath, enc, sid, display_name, haystack)
+    index = []     # (mtime, ppath, enc, sid, display_name, haystack, cfgdir)
     partial = False
     for item in iter_all_sessions(entries, 'INDEXING SESSIONS'):
         if item is None:
             partial = True
             break
-        mtime, ppath, enc, sid, stats = item
-        folder = os.path.join(projects_dir, enc)
+        mtime, ppath, enc, sid, stats, cfgdir = item
+        folder = os.path.join(cfgdir, 'projects', enc)
         name = load_name(folder, sid) or stats.get('title', '')
         display = name or stats.get('preview', '') or sid[:8]
         haystack = ' '.join([
             name, stats.get('title', ''), stats.get('preview', ''),
             os.path.basename(ppath) or ppath,
         ]).lower()
-        index.append((mtime, ppath, enc, sid, display, haystack))
+        index.append((mtime, ppath, enc, sid, display, haystack, cfgdir))
     save_disk_cache()
     index.sort(reverse=True, key=lambda r: r[0])
 
@@ -46,7 +46,7 @@ def global_search(entries):
         title = 'SEARCH ALL SESSIONS' + (' (partial index)' if partial else '')
         frame = [render.header('CLAUDECTL', title), '',
                  f"  {C_SRCH}[ {query}▌ ]{C_RESET}  {C_DIM}{len(matches)} match(es){C_RESET}", '']
-        for i, (mtime, ppath, enc, sid, display, _) in enumerate(shown):
+        for i, (mtime, ppath, enc, sid, display, _, _cfgdir) in enumerate(shown):
             label = render.cols(
                 [os.path.basename(ppath) or ppath,
                  f"{C_DIM}{format_age(mtime).strip()}{C_RESET}",
@@ -69,8 +69,8 @@ def global_search(entries):
                 return None
         elif ev[0] == 'enter':
             if shown:
-                mtime, ppath, enc, sid, _, _ = shown[nav]
-                return ('resume', ppath, enc, sid)
+                mtime, ppath, enc, sid, _, _, cfgdir = shown[nav]
+                return ('resume', ppath, enc, sid, cfgdir)
         elif ev[0] == 'up':
             if shown:
                 nav = (nav - 1) % len(shown)

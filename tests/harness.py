@@ -154,7 +154,6 @@ class Sandbox:
     # -- path bindings (config imports are by-value in consumers) --
     def _patch_paths(self):
         import claude_sessions.main as main_mod
-        import claude_sessions.search as search_mod
         cfg, prj = str(self.cfg), str(self.projects)
         lsf = os.path.join(prj, 'last-session.json')
         for mod, attr, val in [
@@ -165,13 +164,17 @@ class Sandbox:
             (config, 'global_claude_md', os.path.join(cfg, 'CLAUDE.md')),
             (config, 'agents_library_dir', str(self.agents_lib)),
             (sessions, 'projects_dir', prj), (sessions, 'last_session_file', lsf),
+            (sessions, 'config_dir', cfg),
             (stats, 'projects_dir', prj), (stats, 'config_dir', cfg),
             (stats, 'cache_file', os.path.join(cfg, 'stats-cache.json')),
-            (search_mod, 'projects_dir', prj),
             (main_mod, 'projects_dir', prj), (main_mod, 'choice_file', str(self.choice)),
             (main_mod, 'config_dir', cfg),
         ]:
             self.mp.setattr(mod, attr, val)
+        # single-account world in tests — real accounts.py multi-dir merge
+        # is exercised separately, not by every sandboxed TUI test
+        self.mp.setattr(config, 'all_config_dirs', lambda: [('default', cfg)])
+        self.mp.setattr(main_mod, 'all_config_dirs', lambda: [('default', cfg)])
         # find_actual_path can't walk fake drives — resolve via registry
         self.mp.setattr(main_mod, 'find_actual_path',
                         lambda enc: self._encoded_to_actual.get(enc))

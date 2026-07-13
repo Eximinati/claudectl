@@ -142,6 +142,8 @@ Run two (or more) accounts with almost no friction — claudectl owns the config
 - **Named accounts** — add an account (name + config dir; claudectl creates it and can open `/login` right away), switch the active one, or **open it in a new terminal with one key** so both accounts run **at the same time**.
 - **Per-launch account** — the launch-options screen has an **Account** field: pick which account this specific session starts under, without changing your default.
 - **All accounts in the usage bar** — the plan-usage banner shows **one bar per account** (labeled by email/name) and updates dynamically, so you see every account's session/weekly limits at a glance. A single account stays a single compact bar.
+- **One row per project, not per account** — if the same folder has sessions under two accounts, the project list shows a single row (default account primary, tagged `[+other-account]`) instead of a duplicate. Opening it merges every account's sessions into one list, foreign-account sessions marked inline (`[account-name]`); rename/archive/delete/fork/view all act on that session's own account, and resuming one launches under the right account automatically.
+- **Inject context across accounts** (`⇧K` in the sessions menu) — start a new session seeded with the transcript of any prior session for this project, including ones from a different account.
 
 ### Plan→Execute — two models, one task (`⇧X`)
 Plan with an accurate model, execute with a cheaper/faster one — big token savings for the same result. claudectl plans the task headlessly with `plan_model` (default Opus 4.8), shows you the plan to approve/reject, saves it to `.claudectl/plan-latest.md`, then launches an interactive session on `exec_model` (default Sonnet 5) seeded to read and execute that plan. Expensive reasoning happens once; the build runs on the cheap tier. Nobody else orchestrates this from the launcher.
@@ -340,6 +342,7 @@ On launch, claudectl shows all projects Claude Code has ever opened, sorted by m
 | g | Pick project agents (library checklist → `.claude/agents/`) |
 | n | Architecture graph + project memory screen (then `o` open graph · `m` build memory · `a` ask · `r` rebuild) |
 | w | Workspace status (provenance & freshness) |
+| ⇧K | New chat seeded with context from another session (any account) |
 | p | Manage extra PATH entries |
 | x | Manage --add-dir directories |
 | ? | Help / keyboard reference |

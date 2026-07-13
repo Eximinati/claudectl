@@ -71,8 +71,54 @@ def _move_session(src_folder, dst_folder, sid):
 
 # ── sessions menu ────────────────────────────────────────────
 
-def sessions_menu(sessions_in, proj_folder, project_name, project_path):
-    sessions       = list(sessions_in)   # (mtime, sid, preview, count)
+def _arch_of(folder):
+    return os.path.join(folder, 'archived') if folder else None
+
+
+def sessions_menu(sessions_in, proj_folder, project_name, project_path, extra_accounts=None):
+    """extra_accounts: optional [(acct_name, folder)] for OTHER accounts that
+    also have sessions for this same project. Their sessions are merged into
+    the list here, tagged with the account name, and are fully actionable —
+    rename/archive/delete/fork/view all operate on that session's own account
+    folder. Project-level features (tags storage, memory, CLAUDE.md, agents)
+    stay tied to proj_folder (the primary account) regardless.
+
+    Returns (choice, foreign_dir): foreign_dir is the OTHER account's config
+    dir when the resumed/forked session belongs to it (so the caller can
+    launch under the right account), else None."""
+    extra_accounts = extra_accounts or []
+
+    def _rescan_live():
+        out = [(m, sid, prev, cnt, proj_folder, '')
+               for (m, sid, prev, cnt) in scan_sessions(proj_folder)]
+        for name, folder in extra_accounts:
+            out.extend((m, sid, prev, cnt, folder, name)
+                       for (m, sid, prev, cnt) in scan_sessions(folder))
+        out.sort(key=lambda r: r[0], reverse=True)
+        return out
+
+    def _rescan_archived():
+        prim_arch = _arch_of(proj_folder)
+        out = [(m, sid, prev, cnt, prim_arch, '')
+               for (m, sid, prev, cnt) in scan_sessions(prim_arch)]
+        for name, folder in extra_accounts:
+            f_arch = _arch_of(folder)
+            out.extend((m, sid, prev, cnt, f_arch, name)
+                       for (m, sid, prev, cnt) in scan_sessions(f_arch))
+        out.sort(key=lambda r: r[0], reverse=True)
+        return out
+
+    def _foreign_dir(folder):
+        if folder and os.path.normcase(os.path.abspath(folder)) != \
+                       os.path.normcase(os.path.abspath(proj_folder)):
+            return os.path.dirname(os.path.dirname(folder))
+        return None
+
+    sessions = [(m, sid, prev, cnt, proj_folder, '') for (m, sid, prev, cnt) in sessions_in]
+    for name, folder in extra_accounts:
+        sessions.extend((m, sid, prev, cnt, folder, name)
+                        for (m, sid, prev, cnt) in scan_sessions(folder))
+    sessions.sort(key=lambda r: r[0], reverse=True)
     archived_dir   = os.path.join(proj_folder, 'archived') if proj_folder else None
     # session-learning badge (cheap local scan; 'auto' mode extracts on entry)
     unlearned = 0
@@ -111,6 +157,17 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
                     sync_project_agents(project_path, sug)
     except Exception:
         pass
+    acct_label = ''
+    if extra_accounts:
+        acct_label = f"{len(extra_accounts) + 1} accounts"
+    else:
+        try:
+            from .context_inject import _account_dir_of, _account_name_for
+            if proj_folder:
+                n = _account_name_for(_account_dir_of(proj_folder))
+                acct_label = n if n != 'default' else ''
+        except Exception:
+            acct_label = ''
     show_archived  = False
     arch_sessions  = None                # lazy scan
     filter_str     = ''
@@ -143,11 +200,9 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
         if not filter_str:
             return src
         fl = filter_str.lower()
-        folder = archived_dir if show_archived else proj_folder
-        return [s for s in src if fl in (_name_of(folder, s[1]) + s[2]).lower()]
+        return [s for s in src if fl in (_name_of(s[4], s[1]) + s[2]).lower()]
 
     def build_rows(active):
-        folder = archived_dir if show_archived else proj_folder
         tags_map = load_tags(proj_folder) if not show_archived else {}
         if show_archived:
             rows = [(f"{'─' * W}", None)]
@@ -158,10 +213,10 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
             if sessions:
                 rows.append((f"+ Continue latest  {C_DIM}(claude -c){C_RESET}", 'continue'))
             rows.append((f"{'─' * W}", None))
-        for i, (mtime, sid, preview, count) in enumerate(active, 1):
+        for i, (mtime, sid, preview, count, s_folder, acct_name) in enumerate(active, 1):
             age  = format_age(mtime).strip()
             date = datetime.fromtimestamp(mtime).strftime('%d %b %Y')
-            name = _name_of(folder, sid)
+            name = _name_of(s_folder, sid)
             badge = f"{C_DIM}[{count}]{C_RESET} " if count else ''
             if name:
                 disp = f"{C_NAME}{render.trunc(name, 30)}{C_RESET}  {C_DIM}{preview if preview else date}{C_RESET}"
@@ -172,6 +227,8 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
             tg = tags_map.get(sid)
             if tg:
                 disp += f"  {C_SRCH}#{' #'.join(tg)}{C_RESET}"
+            if acct_name:
+                disp += f"  {C_DIM}[{acct_name}]{C_RESET}"
             val = f"resume-named::{sid}::{name}" if name else f"resume:{sid}"
             label = render.cols(
                 [f"{C_DIM}#{i}{C_RESET}", f"{C_DIM}{age}{C_RESET}", disp],
@@ -183,7 +240,7 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
 
     while True:
         if show_archived and arch_sessions is None:
-            arch_sessions = scan_sessions(archived_dir)
+            arch_sessions = _rescan_archived()
 
         active      = active_sessions()
         rows        = build_rows(active)
@@ -196,6 +253,8 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
             nav_pos = 0
 
         crumb = 'ARCHIVED' if show_archived else 'SESSIONS'
+        if acct_label:
+            crumb += f'  ·  {acct_label}'
         frame = [render.header('CLAUDECTL', project_name, crumb), '']
         if not show_archived:
             try:
@@ -260,7 +319,7 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
             frame.append(render.hint_keys([
                 ('m', 'memory'), ('g', 'agents'), ('n', 'graph'), ('⇧X', 'plan→exec'),
                 ('a', 'ai-analyze'), ('c', 'claude.md'), ('s', 'sys-prompt'),
-                ('u', 'usage'), ('w', 'status')], prefix='project:'))
+                ('u', 'usage'), ('w', 'status'), ('⇧K', 'inject context')], prefix='project:'))
             frame.append(render.hint_bar(
                 f"{C_DIM}/ all actions · ? help · ⇧ = Shift (capital){C_RESET}"))
         render.render_frame(frame)
@@ -293,7 +352,8 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
 
         cur_val = rows[cur][1]
         cur_sid = _sid_of(cur_val)
-        folder  = archived_dir if show_archived else proj_folder
+        cur_row = next((s for s in active if s[1] == cur_sid), None) if cur_sid else None
+        folder  = cur_row[4] if cur_row else (archived_dir if show_archived else proj_folder)
 
         # ── list focused ──────────────────────────────────────
         if ev[0] == 'up':
@@ -311,7 +371,7 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
             if show_archived:
                 flash("Archived — press d to restore first", ok=False, secs=1.2)
                 continue
-            return cur_val
+            return cur_val, _foreign_dir(folder)
 
         elif ev[0] == 'esc':
             if filter_str:
@@ -321,7 +381,7 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
                 show_archived = False
                 nav_pos = 0
             else:
-                return None
+                return None, None
 
         elif ev[0] == 'back':   # BACKSPACE — shortcut: focus search and delete
             if filter_str:
@@ -337,33 +397,42 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
 
         elif ev[0] == 'char' and ev[1] == 'r' and cur_sid and not show_archived:
             new_name = text_input("Rename session:",
-                                  default=names.get((proj_folder, cur_sid), ''))
+                                  default=names.get((folder, cur_sid), ''))
             if new_name is not None:
-                names[(proj_folder, cur_sid)] = new_name
+                names[(folder, cur_sid)] = new_name
                 try:
-                    save_name(proj_folder, cur_sid, new_name)
+                    save_name(folder, cur_sid, new_name)
                     flash(f"Renamed to '{new_name}'" if new_name else "Name cleared")
                 except Exception as e:
                     flash(f"Rename failed: {e}", ok=False, secs=1.5)
 
         elif ev[0] == 'char' and ev[1] == 'd' and cur_sid:
             label = names.get((folder, cur_sid)) or cur_sid[:8]
+            # `folder` is already the archived dir when show_archived (rows
+            # are built from arch_sessions, whose folder field IS the
+            # archived path) — derive the live dir from it, not the reverse.
+            if show_archived:
+                sess_archived_dir = folder
+                sess_live_dir     = os.path.dirname(folder)
+            else:
+                sess_live_dir     = folder
+                sess_archived_dir = _arch_of(folder)
             if show_archived:
                 act = menu([('Restore  (move back to sessions)', 'restore'),
                             ('Delete permanently', 'delete'),
                             ('Cancel', 'cancel')],
                            f"ARCHIVED SESSION  {label}")
                 if act == 'restore':
-                    errors = _move_session(archived_dir, proj_folder, cur_sid)
+                    errors = _move_session(sess_archived_dir, sess_live_dir, cur_sid)
                     if errors:
                         flash("Restore failed: " + "; ".join(errors)[:120], ok=False, secs=2)
                     else:
                         flash("Session restored")
-                        sessions = scan_sessions(proj_folder)
+                        sessions = _rescan_live()
                         arch_sessions = None
                 elif act == 'delete':
                     if confirm(f"Delete '{label}' permanently?", danger=True):
-                        errors = _delete_session(archived_dir, cur_sid)
+                        errors = _delete_session(sess_archived_dir, cur_sid)
                         if errors:
                             flash("Delete failed: " + "; ".join(errors)[:120], ok=False, secs=2)
                         else:
@@ -375,7 +444,7 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
                             ('Cancel', 'cancel')],
                            f"SESSION  {label}")
                 if act == 'archive':
-                    errors = _move_session(proj_folder, archived_dir, cur_sid)
+                    errors = _move_session(sess_live_dir, sess_archived_dir, cur_sid)
                     if errors:
                         flash("Archive failed: " + "; ".join(errors)[:120], ok=False, secs=2)
                     else:
@@ -384,19 +453,19 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
                         arch_sessions = None
                 elif act == 'delete':
                     if confirm(f"Delete '{label}' permanently?", danger=True):
-                        errors = _delete_session(proj_folder, cur_sid)
+                        errors = _delete_session(sess_live_dir, cur_sid)
                         if errors:
                             flash("Delete failed: " + "; ".join(errors)[:120], ok=False, secs=2)
                         else:
                             flash("Session deleted")
-                        if not os.path.exists(os.path.join(proj_folder, f"{cur_sid}.jsonl")):
+                        if not os.path.exists(os.path.join(sess_live_dir, f"{cur_sid}.jsonl")):
                             sessions = [s for s in sessions if s[1] != cur_sid]
-                            names.pop((proj_folder, cur_sid), None)
+                            names.pop((sess_live_dir, cur_sid), None)
                 # rows shrank by one selectable; loop top also re-clamps
                 nav_pos = max(0, min(nav_pos, len(nav_indices) - 2))
 
         elif ev[0] == 'char' and ev[1] == 'f' and cur_sid and not show_archived:
-            return f"fork:{cur_sid}"
+            return f"fork:{cur_sid}", _foreign_dir(folder)
 
         elif ev[0] == 'char' and ev[1] == 'v' and cur_sid:
             from .transcript import view_transcript
@@ -475,6 +544,11 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
             from . import plan_execute
             plan_execute.run(project_path, proj_folder, project_name)
 
+        elif ev[0] == 'char' and ev[1] == 'K' and not show_archived:
+            from . import context_inject
+            context_inject.run(project_path, proj_folder, project_name)
+
+
         elif ev[0] == 'char' and ev[1] == '!' and not show_archived and not_set_up:
             # one-key project setup: CLAUDE.md scaffold → memory (rules sync inside)
             if confirm("Set up project now? (scaffold CLAUDE.md + build memory with Claude)"):
@@ -503,6 +577,7 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path):
                 ('AI-analyze CLAUDE.md', 'a'), ('Scaffold CLAUDE.md', 'c'),
                 ('System prompt', 's'), ('Memory files map', 'M'),
                 ('Project usage stats', 'u'), ('Workspace status', 'w'),
+                ('New chat with context from another session/account', 'K'),
                 ('Extra PATH entries', 'p'), ('Add directories', 'x'),
                 ('Help', '?'),
             ]
