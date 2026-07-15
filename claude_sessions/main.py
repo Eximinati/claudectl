@@ -210,8 +210,10 @@ def run():
 
     # ── main loop ─────────────────────────────────────────────────
 
+    _EMPTY_OPTS = {'effort': '', 'model': '', 'perm': '', 'name': '', 'worktree': '',
+                   'agent': '', 'cfgdir': '', 'max_thinking': '', 'subagent_model': ''}
     path = encoded_name = proj_folder = choice = None
-    opts = {'effort': '', 'model': '', 'perm': '', 'name': '', 'worktree': '', 'cfgdir': ''}
+    opts = dict(_EMPTY_OPTS)
 
     while True:
         sel = menu(full_items, "SELECT PROJECT",
@@ -219,7 +221,7 @@ def run():
         if not sel:
             sys.exit(0)
 
-        opts['cfgdir'] = ''   # reset per iteration — only set when project lives in a non-active account
+        opts = dict(_EMPTY_OPTS)   # fresh each iteration (launch_options_menu may have returned None on ESC)
 
         if sel and sel.startswith('__quickresume_'):
             idx  = int(sel[len('__quickresume_'):-2])
