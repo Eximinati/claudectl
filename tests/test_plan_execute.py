@@ -33,11 +33,12 @@ def test_plan_execute_happy_path(monkeypatch, tmp_path):
     # plan saved to disk
     plan_path = os.path.join(actual, plan_execute.PLAN_FILE)
     assert os.path.isfile(plan_path) and 'do X' in open(plan_path, encoding='utf-8').read()
-    # execution launched with exec model + append-system-prompt pointer
+    # execution launched with exec model + merged system-prompt pointer file
     args = launched['args']
     assert '--model' in args and 'claude-sonnet-5' in args
-    assert '--append-system-prompt' in args
-    ptr = args[args.index('--append-system-prompt') + 1]
+    assert '--system-prompt-file' in args
+    sp_path = args[args.index('--system-prompt-file') + 1]
+    ptr = open(sp_path, encoding='utf-8').read()
     assert 'plan-latest.md' in ptr
 
 

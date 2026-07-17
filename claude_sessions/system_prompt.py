@@ -6,6 +6,25 @@ from .config import W, get_claude_exe, open_in_editor, find_editor
 from .ui import text_input, menu, _cls, pause, run_with_progress, flash
 
 
+def merged_system_prompt(sp_file, pointer, out_path):
+    """Merge the project's existing system prompt (if any) with a pointer line
+    and write it to out_path as ONE file. Used instead of stacking
+    --append-system-prompt on top of --system-prompt-file — when a project
+    already has a system-prompt.txt, --system-prompt-file silently replaces
+    the whole system prompt and the appended pointer never reaches Claude."""
+    base = ''
+    if sp_file and os.path.isfile(sp_file):
+        try:
+            base = open(sp_file, encoding='utf-8', errors='ignore').read().strip()
+        except Exception:
+            pass
+    text = (base + '\n\n' if base else '') + pointer
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, 'w', encoding='utf-8') as f:
+        f.write(text)
+    return out_path
+
+
 def ai_generate_system_prompt(sp_path, project_name, project_path, proj_folder):
     """Use Claude --print to generate a system prompt for this project."""
     claude_exe = get_claude_exe()

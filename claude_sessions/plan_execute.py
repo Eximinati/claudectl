@@ -93,10 +93,11 @@ def run(project_path, proj_folder, project_name):
     pointer = (f"An approved implementation plan for this task is saved at "
                f"{PLAN_FILE.replace(os.sep, '/')}. Read it first, then execute it "
                f"step by step. Task: {task[:200]}")
-    args = [exe, '--model', exec_model, '--append-system-prompt', pointer]
+    from .system_prompt import merged_system_prompt
     sp_file = os.path.join(proj_folder, 'system-prompt.txt') if proj_folder else ''
-    if sp_file and os.path.isfile(sp_file):
-        args += ['--system-prompt-file', sp_file]
+    merged_path = os.path.join(project_path, '.claudectl', 'plan-system-prompt.txt')
+    merged_system_prompt(sp_file, pointer, merged_path)
+    args = [exe, '--model', exec_model, '--system-prompt-file', merged_path]
     add_dirs = [d for d in load_add_dirs(proj_folder) if os.path.isdir(d)]
     if add_dirs:
         args += ['--add-dir', *add_dirs]

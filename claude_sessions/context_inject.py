@@ -144,12 +144,13 @@ def run(project_path, proj_folder, project_name):
     pointer = (f"Prior conversation context (from the '{acct_name}' account, session "
                f"'{title}') is saved at {CTX_FILE.replace(os.sep, '/')}. Read it first "
                f"for background, then continue from where the user picks up.")
-    args = [exe, '--append-system-prompt', pointer]
+    from .system_prompt import merged_system_prompt
+    sp_file = os.path.join(target_folder, 'system-prompt.txt') if target_folder else ''
+    merged_path = os.path.join(project_path, '.claudectl', 'context-system-prompt.txt')
+    merged_system_prompt(sp_file, pointer, merged_path)
+    args = [exe, '--system-prompt-file', merged_path]
     if model:
         args += ['--model', model]
-    sp_file = os.path.join(target_folder, 'system-prompt.txt') if target_folder else ''
-    if sp_file and os.path.isfile(sp_file):
-        args += ['--system-prompt-file', sp_file]
     add_dirs = [d for d in load_add_dirs(target_folder) if os.path.isdir(d)]
     if add_dirs:
         args += ['--add-dir', *add_dirs]
