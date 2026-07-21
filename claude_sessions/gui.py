@@ -59,6 +59,7 @@ def list_projects():
         g = groups.setdefault(enc, {'path': actual, 'dirs': set(), 'mtime': mtime})
         g['dirs'].add(acct_dir)
         g['mtime'] = max(g['mtime'], mtime)
+    pd = load_settings().get('project_defaults') or {}
     out = []
     for enc, g in groups.items():
         dirs = sorted(g['dirs'], key=lambda d: order.get(d, 999))
@@ -66,7 +67,8 @@ def list_projects():
                     'name': os.path.basename(g['path']) or g['path'],
                     'encoded': enc, 'mtime': g['mtime'],
                     'accounts': [names.get(d, os.path.basename(d)) for d in dirs],
-                    'primary_cfgdir': dirs[0]})
+                    'primary_cfgdir': dirs[0],
+                    'auto_memory': bool((pd.get(enc) or {}).get('auto_memory'))})
     out.sort(key=lambda r: r['mtime'], reverse=True)
     return out
 
@@ -393,6 +395,9 @@ def run_gui(open_browser=True):
     'auto' tries PyQt6 native window → Edge app-mode window → browser tab.
     Blocks until the window closes / Ctrl+C. Entry for `claudectl --gui`."""
     shell = load_settings().get('gui_shell', 'auto')
+
+    from .gui_api import start_auto_memory_scheduler
+    start_auto_memory_scheduler()   # opt-in per-project background memory refresh
 
     if shell in ('auto', 'qt'):
         try:

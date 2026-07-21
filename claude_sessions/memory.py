@@ -435,19 +435,12 @@ def _read(f):
 
 # ── refresh (cognify) — per repo/module, whole project ───────
 
-def refresh_memory(project_path, proj_folder, project_name, auto_cap=None):
-    """(Re)extract the semantic graph across EVERY repo and its important
-    modules. Incremental by file hash; only changed modules are re-analyzed.
-    `auto_cap`: if set and the number of changed units exceeds it, do nothing
-    and return the current graph tagged `auto_skipped` (used by the auto-refresh
-    path so a big rebuild never runs silently on project open)."""
+def _changed_units(root, units, mem):
+    """(todo, deleted, cur_hashes): units whose representative files changed or
+    that the current graph doesn't cover yet, plus tracked files now gone.
+    Hash-only — no Claude calls. Shared by refresh_memory and is_stale."""
     from .workspace import _sha256_file
-    from .config import load_settings
-    root = os.path.abspath(project_path)
-    mem = load_memory(project_path, proj_folder)
     prov = mem.get('provenance', {})
-    units = _units(project_path, proj_folder)
-
     cur_hashes = {}
     todo = []
     for repo, module, fs in units:
@@ -465,6 +458,40 @@ def refresh_memory(project_path, proj_folder, project_name, auto_cap=None):
                 todo.append((repo, module, fs))
                 todo_keys.add((repo, module))
     deleted = [rel for rel in prov if rel not in cur_hashes]
+    return todo, deleted, cur_hashes
+
+
+def is_stale(project_path, proj_folder):
+    """True if the project's source changed since its memory graph was built —
+    a cheap hash-only check (no Claude). Returns False when there's no graph yet
+    (first build stays manual, matching the TUI). Used to decide whether an
+    auto-refresh is actually worth running."""
+    try:
+        mem = load_memory(project_path, proj_folder)
+        if not mem.get('entities'):
+            return False
+        root = os.path.abspath(project_path)
+        units = _units(project_path, proj_folder)
+        todo, deleted, _ = _changed_units(root, units, mem)
+        return bool(todo or deleted)
+    except Exception:
+        _c.log.exception('memory: is_stale check failed')
+        return False
+
+
+def refresh_memory(project_path, proj_folder, project_name, auto_cap=None):
+    """(Re)extract the semantic graph across EVERY repo and its important
+    modules. Incremental by file hash; only changed modules are re-analyzed.
+    `auto_cap`: if set and the number of changed units exceeds it, do nothing
+    and return the current graph tagged `auto_skipped` (used by the auto-refresh
+    path so a big rebuild never runs silently on project open)."""
+    from .config import load_settings
+    root = os.path.abspath(project_path)
+    mem = load_memory(project_path, proj_folder)
+    prov = mem.get('provenance', {})
+    units = _units(project_path, proj_folder)
+
+    todo, deleted, cur_hashes = _changed_units(root, units, mem)
     if not todo and not deleted and mem.get('entities'):
         return mem
 

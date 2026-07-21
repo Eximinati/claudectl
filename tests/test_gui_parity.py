@@ -32,10 +32,9 @@ def _req(url, body=None):
         return e.code, json.loads(e.read() or b'{}')
 
 
-def _seed(sb, monkeypatch, n=2):
-    actual = str(sb.root / 'work' / 'alpha')
+def _seed(sb, monkeypatch, n=2, enc='X--enc-alpha'):
+    actual = str(sb.root / 'work' / enc)
     os.makedirs(os.path.join(actual, 'node_modules'), exist_ok=True)
-    enc = 'X--enc-alpha'
     folder = sb.projects / enc
     folder.mkdir()
     sids = []
@@ -245,6 +244,153 @@ def test_memory_state_lessons_audit_deny_workspace(monkeypatch, tmp_path):
         assert any('node_modules' in x for x in proj_settings['permissions']['deny'])
         code, d = _req(f'{base}/api/workspace-status?{c}')
         assert code == 200 and 'lines' in d
+    finally:
+        srv.shutdown()
+
+
+def _seed_graph_current(actual, folder):
+    """A project with one source file and a memory graph whose provenance
+    matches it → is_stale() False until the file is touched."""
+    from claude_sessions import memory as memory_mod
+    src = os.path.join(actual, 'app.py')
+    with open(src, 'w', encoding='utf-8') as f:
+        f.write('def hello():\n    return 1\n')
+    # build provenance from the real units so hashes line up
+    root = os.path.abspath(actual)
+    units = memory_mod._units(actual, folder)
+    from claude_sessions.workspace import _sha256_file
+    prov, ents = {}, []
+    for repo, module, fs in units:
+        for fp in fs:
+            prov[memory_mod._rel(root, fp)] = {'hash': _sha256_file(fp)}
+        ents.append({'id': f'{repo}/{module}', 'type': 'component',
+                     'name': module, 'summary': 's', 'repo': repo, 'module': module})
+    memory_mod.save_memory(actual, folder, {'entities': ents, 'provenance': prov,
+                                            'summaries': {}, 'relations': {},
+                                            'generated_at': '2020-01-01T00:00:00'})
+    return src
+
+
+def test_autoscan_no_flash_when_current_then_runs_when_stale(monkeypatch, tmp_path):
+    """The false-flash fix: opening an up-to-date project must NOT start a
+    refresh (running:false, nothing invoked); a real file change makes it run."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, sids = _seed(sb, monkeypatch)
+    src = _seed_graph_current(actual, folder)
+    from claude_sessions import gui_api
+    calls = []
+    monkeypatch.setattr(gui_api, '_refresh_async',
+                        lambda p, f, **k: calls.append(p))
+    sb.settings.write_text(json.dumps({'memory_auto_refresh': 'open'}),
+                           encoding='utf-8')
+    body = {'path': actual, 'enc': enc, 'cfgdir': str(sb.cfg)}
+    srv, base = _serve()
+    try:
+        # current graph → no refresh, no flash
+        code, d = _req(base + '/api/memory/autoscan', body)
+        assert code == 200 and d['running'] is False and calls == []
+        # touch the source → stale → refresh kicks off
+        import time as _t
+        with open(src, 'a', encoding='utf-8') as f:
+            f.write('# changed\n')
+        code, d = _req(base + '/api/memory/autoscan', body)
+        assert d['running'] is True and calls == [actual]
+    finally:
+        srv.shutdown()
+
+
+def test_is_stale_hash_check(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, sids = _seed(sb, monkeypatch)
+    from claude_sessions import memory as memory_mod
+    # no graph yet → not stale (first build stays manual)
+    assert memory_mod.is_stale(actual, folder) is False
+    src = _seed_graph_current(actual, folder)
+    assert memory_mod.is_stale(actual, folder) is False        # matches provenance
+    with open(src, 'a', encoding='utf-8') as f:
+        f.write('x = 2\n')
+    assert memory_mod.is_stale(actual, folder) is True         # changed
+
+
+def test_auto_memory_toggle_persists_and_lists(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, sids = _seed(sb, monkeypatch, enc='X--enc-toggle')
+    srv, base = _serve()
+    try:
+        code, d = _req(base + '/api/memory/auto', {'enc': enc, 'auto': True})
+        assert d['ok']
+        from claude_sessions import config as cfg
+        assert cfg.load_settings()['project_defaults'][enc]['auto_memory'] is True
+        code, d = _req(base + '/api/memory/auto')
+        row = next(p for p in d['projects'] if p['enc'] == enc)
+        assert row['auto'] is True and 'interval' in d
+        # surfaced in list_projects payload
+        from claude_sessions import gui
+        assert any(p['encoded'] == enc and p['auto_memory']
+                   for p in gui.list_projects())
+        code, d = _req(base + '/api/memory/auto', {'interval': 1800})
+        assert cfg.load_settings()['auto_memory_interval'] == 1800
+    finally:
+        srv.shutdown()
+
+
+def test_auto_scan_pass_refreshes_only_enabled_and_stale(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    sb.settings.write_text('{}', encoding='utf-8')   # clean baseline
+    actual, enc, folder, sids = _seed(sb, monkeypatch, enc='X--enc-auto')
+    src = _seed_graph_current(actual, folder)
+    from claude_sessions import gui_api, memory as memory_mod, config as cfg
+    refreshed = []
+    monkeypatch.setattr(memory_mod, 'refresh_memory',
+                        lambda p, f, n, **k: refreshed.append(p) or {'entities': []})
+
+    # not opted in → skipped even though we make it stale
+    with open(src, 'a', encoding='utf-8') as f:
+        f.write('# a\n')
+    gui_api._auto_scan_pass()
+    assert refreshed == []
+
+    # opt in but keep it current → skipped (nothing changed)
+    s = cfg.load_settings()
+    s.setdefault('project_defaults', {}).setdefault(enc, {})['auto_memory'] = True
+    cfg.save_settings(s)
+    _seed_graph_current(actual, folder)          # re-sync provenance to current
+    gui_api._auto_scan_pass()
+    assert refreshed == []
+
+    # opted in AND stale → refreshed exactly once, lock cleared afterwards
+    with open(src, 'a', encoding='utf-8') as f:
+        f.write('# b\n')
+    gui_api._auto_scan_pass()
+    assert refreshed == [actual]
+    assert memory_mod.scan_lock_status(actual) is None
+
+    # a held lock (already running) → single-flight skip
+    refreshed.clear()
+    memory_mod.acquire_scan_lock(actual)
+    try:
+        with open(src, 'a', encoding='utf-8') as f:
+            f.write('# c\n')
+        gui_api._auto_scan_pass()
+        assert refreshed == []
+    finally:
+        memory_mod.clear_scan_lock(actual)
+
+
+def test_memory_active_reports_locked_project(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, sids = _seed(sb, monkeypatch)
+    from claude_sessions import memory as memory_mod
+    srv, base = _serve()
+    try:
+        code, d = _req(base + '/api/memory/active')
+        assert actual not in d['active']
+        memory_mod.acquire_scan_lock(actual)
+        try:
+            code, d = _req(base + '/api/memory/active')
+            assert actual in d['active']
+        finally:
+            memory_mod.clear_scan_lock(actual)
     finally:
         srv.shutdown()
 

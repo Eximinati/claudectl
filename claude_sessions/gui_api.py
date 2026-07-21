@@ -173,6 +173,101 @@ def _gate(job, title, old, new, diff):
 _install_bridge()
 
 
+# ── in-process memory refresh + background auto-memory scheduler ──
+#
+# Best-practice "background indexing" model (as IDEs do it): opt-in per
+# project, change-detected (skip when nothing changed), single-flight via the
+# scan-lock, debounced by a cooldown, incremental persistence. The GUI process
+# persists, so refreshes run in-process on a daemon thread (no detached worker
+# needed — that's for the TUI, whose process exits on launch).
+
+_sched_started = False
+
+
+def _refresh_project(path, folder, auto_cap=6):
+    """Run one incremental memory refresh in-process under the scan-lock so the
+    badge and /api/memory/active reflect it. Silent (headless Claude calls).
+    Returns True if it actually ran (acquired the lock)."""
+    from . import memory
+    if not memory.acquire_scan_lock(path):
+        return False                      # another refresh already in flight
+    memory._tls.silent = True
+    try:
+        name = os.path.basename(path.rstrip('\\/')) or path
+        memory.refresh_memory(path, folder, name, auto_cap=auto_cap)
+    except Exception:
+        _c.log.exception('gui: memory refresh failed for %s', path)
+    finally:
+        memory.clear_scan_lock(path)
+    return True
+
+
+def _refresh_async(path, folder, auto_cap=6):
+    """Fire _refresh_project on its own daemon thread (used by the on-open
+    autoscan so the HTTP request returns immediately)."""
+    import threading
+    threading.Thread(target=_refresh_project, args=(path, folder, auto_cap),
+                     daemon=True).start()
+
+
+def _auto_projects():
+    """[(path, folder, enc)] for every project opted into auto-memory."""
+    from .config import load_settings
+    from . import gui
+    pd = load_settings().get('project_defaults') or {}
+    out = []
+    for p in gui.list_projects():
+        if (pd.get(p['encoded']) or {}).get('auto_memory'):
+            out.append((p['path'],
+                        os.path.join(p['primary_cfgdir'], 'projects', p['encoded']),
+                        p['encoded']))
+    return out
+
+
+def _auto_scan_pass():
+    """One sweep: refresh each opted-in project whose source changed and that
+    isn't already updating. Cheap (hash-only) staleness gate keeps token cost
+    to genuinely-changed projects."""
+    from . import memory
+    for path, folder, _enc in _auto_projects():
+        try:
+            if memory.scan_lock_status(path) is not None:
+                continue                                  # already running
+            if not memory.is_stale(path, folder):
+                continue                                  # nothing changed
+            _refresh_project(path, folder, auto_cap=6)    # blocking, sequential
+        except Exception:
+            _c.log.exception('gui: auto-scan pass failed for %s', path)
+
+
+def start_auto_memory_scheduler():
+    """Daemon thread: one pass on GUI start, then every auto_memory_interval
+    seconds. Started by the real GUI entry points only (never make_server, so
+    tests don't spawn refreshes). Idempotent."""
+    global _sched_started
+    if _sched_started:
+        return
+    _sched_started = True
+    import threading
+    from .config import load_settings
+
+    def _loop():
+        import time as _t
+        _t.sleep(2)                       # let the server settle before first pass
+        while True:
+            try:
+                _auto_scan_pass()
+            except Exception:
+                _c.log.exception('gui: auto-memory scheduler tick failed')
+            interval = load_settings().get('auto_memory_interval', 3600)
+            try:
+                _t.sleep(max(60, int(interval)))
+            except Exception:
+                _t.sleep(3600)
+
+    threading.Thread(target=_loop, daemon=True).start()
+
+
 # ── shared helpers ───────────────────────────────────────────
 
 def _entries():
@@ -582,6 +677,83 @@ def api_memory_progress(q, body):
     return {'progress': scan_lock_status(q['path'])}
 
 
+def api_memory_autoscan(q, body):
+    """Called each time a project is opened. Kick off an in-process memory
+    refresh ONLY when the project's source has actually changed (cheap
+    hash-only `is_stale` check) — so revisiting an up-to-date project neither
+    re-scans nor flashes the badge. Returns whether a refresh is now running."""
+    from .config import load_settings
+    from . import memory
+    path = body.get('path', '')
+    folder = _folder(body.get('cfgdir'), body.get('enc', ''))
+    if not path or not folder:
+        return {'running': False, 'stale': False}
+    running = memory.scan_lock_status(path) is not None
+    if running:
+        return {'running': True, 'stale': True}
+    try:
+        st = load_settings()
+        force = bool(body.get('force'))
+        on_open = st.get('memory_auto_refresh') == 'open'
+        # only refresh when something changed (or the user forced it)
+        if (force or on_open) and memory.is_stale(path, folder):
+            _refresh_async(path, folder, auto_cap=None if force else 6)
+            running = True
+    except Exception:
+        _c.log.exception('gui memory autoscan failed')
+    return {'running': running, 'stale': running}
+
+
+def api_memory_active(q, body):
+    """Project paths whose memory is being refreshed right now (scan-lock held)
+    — lets the sidebar show which projects are updating, tab-independent."""
+    from . import memory, gui
+    active = []
+    for p in gui.list_projects():
+        try:
+            if memory.scan_lock_status(p['path']) is not None:
+                active.append(p['path'])
+        except Exception:
+            pass
+    return {'active': active}
+
+
+def api_memory_auto_get(q, body):
+    """Per-project auto-memory state for the management UI."""
+    from .config import load_settings
+    from . import gui, memory
+    pd = load_settings().get('project_defaults') or {}
+    projs = []
+    for p in gui.list_projects():
+        auto = bool((pd.get(p['encoded']) or {}).get('auto_memory'))
+        running = False
+        try:
+            running = memory.scan_lock_status(p['path']) is not None
+        except Exception:
+            pass
+        projs.append({'enc': p['encoded'], 'path': p['path'], 'name': p['name'],
+                      'auto': auto, 'running': running})
+    return {'projects': projs,
+            'interval': load_settings().get('auto_memory_interval', 3600)}
+
+
+def api_memory_auto_set(q, body):
+    """Toggle a project's auto-memory opt-in (and optionally the interval)."""
+    from .config import load_settings, save_settings
+    s = load_settings()
+    enc = body.get('enc', '')
+    if enc:
+        s.setdefault('project_defaults', {}).setdefault(enc, {})['auto_memory'] = \
+            bool(body.get('auto'))
+    if 'interval' in body:
+        try:
+            s['auto_memory_interval'] = max(60, int(body['interval']))
+        except (TypeError, ValueError):
+            pass
+    save_settings(s)
+    return {'ok': True}
+
+
 def api_lessons_get(q, body):
     from .memory import load_memory
     mem = load_memory(q['path'], _folder(q.get('cfgdir'), q['enc']))
@@ -935,6 +1107,8 @@ GET_ROUTES = {
     '/api/accounts': api_accounts_get,
     '/api/memory/state': api_memory_state,
     '/api/memory/progress': api_memory_progress,
+    '/api/memory/active': api_memory_active,
+    '/api/memory/auto': api_memory_auto_get,
     '/api/lessons': api_lessons_get,
     '/api/ctxaudit': api_ctxaudit,
     '/api/deny': api_deny_scan,
@@ -955,6 +1129,8 @@ POST_ROUTES = {
     '/api/session/restore': api_session_restore,
     '/api/session/delete': api_session_delete,
     '/api/session/tags': api_tags_set,
+    '/api/memory/autoscan': api_memory_autoscan,
+    '/api/memory/auto': api_memory_auto_set,
     '/api/hooks/template': api_hooks_template,
     '/api/hooks/remove': api_hooks_remove,
     '/api/hooks/purge': api_hooks_purge,

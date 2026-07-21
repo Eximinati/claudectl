@@ -71,6 +71,25 @@ body{background:var(--bg);color:var(--txt);
 .top h1{font-size:16px;font-weight:700}
 .top .path{color:var(--dim2);font-size:12px}
 .top .sp{flex:1}
+.amrow{display:flex;align-items:center;gap:10px;padding:6px 0;
+  border-bottom:1px solid #1b2436;cursor:pointer;font-size:13px}
+.amrow input{width:16px;height:16px;accent-color:var(--cyan);cursor:pointer;flex:none}
+.amrow .nm{font-weight:600;white-space:nowrap}
+.amrow .pt{color:var(--dim2);font-size:11px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;flex:1}
+.autoline{display:flex;align-items:center;gap:9px;margin-top:12px;
+  padding-top:12px;border-top:1px solid var(--line);font-size:13px;cursor:pointer;user-select:none}
+.autoline input{width:16px;height:16px;accent-color:var(--cyan);cursor:pointer}
+.autoline .ic{width:15px;height:15px;fill:var(--dim)}
+.proj .amk{margin-left:auto;display:inline-flex;flex:none}
+.proj .amk .ic{width:13px;height:13px;fill:var(--violet);opacity:.85}
+.proj .amk.spin-on .ic{fill:var(--cyan);animation:sp 1s linear infinite}
+.membadge{display:inline-flex;align-items:center;gap:7px;font-size:12px;
+  color:var(--ok);background:#0f2a20;border:1px solid #3fdd9d55;
+  border-radius:20px;padding:3px 12px;white-space:nowrap}
+.membadge .pulse{width:8px;height:8px;border-radius:50%;background:var(--ok);
+  animation:pulse 1.3s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
 .btn{background:var(--panel);color:var(--txt);border:1px solid var(--line);
   border-radius:9px;padding:7px 14px;cursor:pointer;font-size:13px;font-weight:600;
   transition:border-color .12s,transform .06s;white-space:nowrap}
@@ -256,6 +275,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
   <main class="main">
     <div class="top" id="topbar">
       <h1 id="ttl">Welcome</h1><span class="path" id="tpath"></span>
+      <span class="membadge" id="membadge" style="display:none"></span>
       <span class="sp"></span>
       <span id="pactions" style="display:none">
         <button class="btn" id="bTerm">Terminal</button>
@@ -358,6 +378,7 @@ const api=(p,opt={})=>fetch(p,{...opt,headers:{'X-Claudectl':'1',
 const post=(p,body)=>api(p,{method:'POST',body:JSON.stringify(body||{})});
 
 let ST=null, CUR=null, TAB='sessions', PAGE_='home', PENDING=null, SESS=[];
+let ACTIVE_MEM=new Set();   // project paths whose memory is refreshing right now
 
 function toast(msg,cls){const t=$('#toast');t.textContent=msg;
   t.className='toast show '+(cls||'');setTimeout(()=>t.className='toast',3000);}
@@ -513,7 +534,10 @@ function drawProjects(){
       el.className='proj'+(CUR&&PAGE_==='project'&&CUR.encoded===p.encoded?' sel':'');
       const tags=p.accounts.length>1?' '+p.accounts.slice(1).map(a=>
         `<span class="tag" style="color:${acctColor(a)};border-color:currentColor;background:transparent">${esc(a)}</span>`).join(' '):'';
-      el.innerHTML=`<div class="nm">${esc(p.name)}${tags}</div><div class="pt">${esc(p.path)}</div>`;
+      const active=ACTIVE_MEM.has(p.path);
+      const amk=(p.auto_memory||active)
+        ?`<span class="amk${active?' spin-on':''}" title="${active?'memory updating now':'auto-memory on'}">${ic('refresh')}</span>`:'';
+      el.innerHTML=`<div class="nm">${esc(p.name)}${tags}${amk}</div><div class="pt">${esc(p.path)}</div>`;
       el.onclick=()=>openProject(p);
       box.appendChild(el);
     });
@@ -527,6 +551,7 @@ function render(){
   drawNav();drawProjects();
   $('#tabs').style.display=PAGE_==='project'?'flex':'none';
   $('#pactions').style.display=PAGE_==='project'?'':'none';
+  if(PAGE_!=='project')stopMemBadge();   // hide the badge off a project page
   if(PAGE_==='home')drawHome();
   else if(PAGE_==='project')drawProject();
   else drawPage(PAGE_);
@@ -557,7 +582,42 @@ function quickResume(i){
 /* ── project view + tabs ── */
 const TABS=[['sessions','Sessions'],['memory','Memory'],['claudemd','CLAUDE.md'],
   ['audit','Audit'],['pusage','Usage'],['tools','Tools']];
-async function openProject(p){CUR=p;PAGE_='project';TAB='sessions';render();}
+async function openProject(p){CUR=p;PAGE_='project';TAB='sessions';render();
+  // kick off the same background memory update the TUI does on open, then
+  // watch the scan-lock so the badge shows live progress
+  post('/api/memory/autoscan',C()).then(r=>{if(r.running)startMemBadge();else pollMemOnce();});
+}
+
+/* ── memory-updating badge (polls the scan-lock like the TUI) ── */
+let _memTimer=null,_memSeen=false,_memGrace=0;
+function setMemBadge(txt){const b=$('#membadge');
+  if(txt==null){b.style.display='none';b.innerHTML='';}
+  else{b.style.display='';b.innerHTML=`<span class="pulse"></span> memory updating${txt?' '+esc(txt):''}… <span style="color:var(--dim2)">safe to launch</span>`;}}
+function stopMemBadge(){if(_memTimer){clearTimeout(_memTimer);_memTimer=null;}
+  _memSeen=false;_memGrace=0;setMemBadge(null);}
+async function pollMemOnce(){   // no worker spawned — show badge only if one is already live
+  if(!CUR)return;
+  try{const r=await api('/api/memory/progress?'+qs({path:CUR.path}));
+    if(r.progress!=null)startMemBadge();}catch(e){}
+}
+function startMemBadge(){
+  if(_memTimer)return;
+  _memSeen=false;_memGrace=8;        // tolerate ~16s while the detached worker starts up
+  setMemBadge('');                   // show immediately so the user sees activity
+  const tick=async()=>{
+    if(!CUR||PAGE_!=='project'){stopMemBadge();return;}
+    let prog=null;
+    try{const r=await api('/api/memory/progress?'+qs({path:CUR.path}));prog=r.progress;}catch(e){}
+    if(prog!=null){_memSeen=true;setMemBadge(prog);_memTimer=setTimeout(tick,2000);}
+    else if(!_memSeen&&_memGrace-->0){_memTimer=setTimeout(tick,2000);}  // worker not up yet
+    else{ // finished (or never started) — refresh memory view if it's showing
+      const wasRunning=_memSeen;stopMemBadge();
+      if(wasRunning){toast('Memory updated','ok');
+        if(PAGE_==='project'&&TAB==='memory')drawMemory();}
+    }
+  };
+  tick();
+}
 function drawProject(){
   $('#ttl').textContent=CUR.name;$('#tpath').textContent=CUR.path;
   $('#tabs').innerHTML=TABS.map(([id,l])=>
@@ -689,7 +749,7 @@ async function drawMemory(){
     <div class="card"><h3>Project memory <span class="sp"></span>
       <button class="btn sm" onclick="askMem()">${ic('chat')} Ask</button>
       <button class="btn sm" onclick="recallPrev()">${ic('eye')} Recall preview</button>
-      <button class="btn sm pri" onclick="runJob('memory_build',C(),()=>drawMemory())">${ic('bolt')} Build with Claude</button></h3>
+      <button class="btn sm pri" onclick="buildMemory()">${ic('bolt')} Build with Claude</button></h3>
       <div class="kv">
         <span class="k">Entities</span><span>${st.n_entities||0}</span>
         <span class="k">Lessons</span><span>${st.n_lessons||0} (${st.n_pending||0} pending review)</span>
@@ -697,7 +757,12 @@ async function drawMemory(){
         <span class="k">Generated</span><span>${esc(st.generated_at||'never')}</span>
         <span class="k">Prompt hook</span><span>${st.hook_on?'on':'off'}</span>
         <span class="k">Path-scoped rules</span><span>${st.rules_on?'on':'off'}</span>
-      </div><div id="memProg"></div></div>
+      </div>
+      <label class="autoline" title="Refresh this project's memory in the background — on GUI start and periodically — whenever its files change, without needing this tab open.">
+        <input type="checkbox" id="autoMem" ${CUR.auto_memory?'checked':''} onchange="toggleAutoMem(this.checked)">
+        <span>${ic('refresh')} Keep this project's memory updated automatically</span>
+        ${st.n_entities?'':'<span class="tag warn">build memory once first</span>'}</label>
+      <div id="memProg"></div></div>
     <div class="card"><h3>Lessons <span class="sp"></span>
       <button class="btn sm" onclick="runJob('lessons_scan',C(),()=>drawMemory())">${ic('school')} Learn from sessions${st.n_unscanned?` <span class="tag warn">${st.n_unscanned} new</span>`:''}</button>
       <button class="btn sm" onclick="lessonAct('','approve_all')">${ic('check')} Approve all pending</button></h3>
@@ -721,6 +786,21 @@ async function pollMemProg(){
 }
 async function lessonAct(id,action){
   await post('/api/lessons',{...C(),id,action});drawMemory();}
+async function toggleAutoMem(on){
+  CUR.auto_memory=on;
+  const p=(ST.projects||[]).find(x=>x.encoded===CUR.encoded);if(p)p.auto_memory=on;
+  await post('/api/memory/auto',{enc:CUR.encoded,auto:on});
+  drawProjects();
+  toast(on?'Auto-memory on — updates in the background when files change'
+          :'Auto-memory off','ok');
+}
+async function buildMemory(){
+  // if a background worker is already refreshing this project, just show the
+  // badge instead of starting a second, colliding run
+  try{const r=await api('/api/memory/progress?'+qs({path:CUR.path}));
+    if(r.progress!=null){startMemBadge();toast('Memory update already running','ok');return;}}catch(e){}
+  runJob('memory_build',C(),()=>drawMemory());
+}
 async function askMem(){
   const v=await ask('Ask project memory',[{label:'Question'}]);
   if(v===null||!v[0].trim())return;
@@ -1177,7 +1257,11 @@ async function pgSettings(){
     ${fld('sShell','GUI window')}${fld('sTheme','Theme')}
     <div class="mrow"><button class="btn pri" onclick="setSave()">Save</button></div></div>
   <div class="card"><h3>Interface</h3>
-    <p style="color:var(--dim);font-size:13px">Default interface on startup — the toggle in the bottom-left does the same. <code>--tui</code>/<code>--gui</code> flags always override.</p></div>`;
+    <p style="color:var(--dim);font-size:13px">Default interface on startup — the toggle in the bottom-left does the same. <code>--tui</code>/<code>--gui</code> flags always override.</p></div>
+  <div class="card"><h3>${ic('refresh')} Auto-memory <span class="sp"></span>
+    <span class="fld" style="margin:0"><select id="amInt" onchange="amSaveInterval(this.value)" style="width:auto"></select></span></h3>
+    <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Projects checked below have their memory refreshed in the background — on GUI start and on the interval — whenever their files change. Only changed projects use Claude; nothing runs while unchanged.</p>
+    <div id="amList"><span class="spin"></span></div></div>`;
   chipsFill($('#sEff'),o.efforts,null,ST.defaults.effort);
   chipsFill($('#sMod'),o.models,o.model_labels,ST.defaults.model);
   chipsFill($('#sPerm'),o.perms,o.perm_labels,ST.defaults.perm);
@@ -1190,6 +1274,30 @@ async function pgSettings(){
   // live preview on click; reverts on navigation unless saved
   $('#sTheme').querySelectorAll('.chip').forEach(c=>
     c.addEventListener('click',()=>applyTheme(c.dataset.v)));
+  drawAutoMemList();
+}
+const AM_INTERVALS=[[900,'every 15 min'],[1800,'every 30 min'],[3600,'every 60 min'],
+  [7200,'every 2 hours'],[21600,'every 6 hours']];
+async function drawAutoMemList(){
+  const d=await api('/api/memory/auto');
+  const sel=$('#amInt');
+  if(sel)sel.innerHTML=AM_INTERVALS.map(([v,l])=>
+    `<option value="${v}"${v===d.interval?' selected':''}>${l}</option>`).join('');
+  const rows=(d.projects||[]).sort((a,b)=>(b.auto-a.auto)).map(p=>`
+    <label class="amrow">
+      <input type="checkbox" ${p.auto?'checked':''} onchange="amToggle('${esc(p.enc)}',this.checked)">
+      <span class="nm">${esc(p.name)}${p.running?' <span class="tag ok">updating…</span>':''}</span>
+      <span class="pt">${esc(p.path)}</span></label>`).join('');
+  $('#amList').innerHTML=rows||'<div style="color:var(--dim)">No projects found.</div>';
+}
+async function amToggle(enc,on){
+  await post('/api/memory/auto',{enc,auto:on});
+  const p=(ST.projects||[]).find(x=>x.encoded===enc);if(p)p.auto_memory=on;
+  drawProjects();toast(on?'Auto-memory on':'Auto-memory off','ok');
+}
+async function amSaveInterval(v){
+  await post('/api/memory/auto',{interval:parseInt(v)});
+  toast('Auto-memory interval saved','ok');
 }
 async function setSave(){
   await post('/api/settings',{default_effort:chipVal($('#sEff')),default_model:chipVal($('#sMod')),
@@ -1343,12 +1451,25 @@ async function drawUsageBar(force){
   }catch(e){_uTimer=setTimeout(drawUsageBar,60000);}
 }
 
+/* global poll: which projects' memory is updating right now (scheduler or
+   on-open), so the sidebar markers stay live regardless of the open page */
+async function pollActiveMem(){
+  try{
+    const d=await api('/api/memory/active');
+    const next=new Set(d.active||[]);
+    const changed=next.size!==ACTIVE_MEM.size||[...next].some(p=>!ACTIVE_MEM.has(p));
+    ACTIVE_MEM=next;
+    if(changed)drawProjects();
+  }catch(e){}
+  setTimeout(pollActiveMem,4000);
+}
+
 (async()=>{
   ST=await api('/api/state');applyTheme(ST.theme);segDraw();
   $('#bTerm').innerHTML=ic('terminal')+' Terminal';
   $('#bCont').innerHTML=ic('history')+' Continue';
   $('#bNew').innerHTML=ic('add')+' New session';
-  render();drawUsageBar();pollMemProg();
+  render();drawUsageBar();pollMemProg();pollActiveMem();
 })();
 </script>
 </body>

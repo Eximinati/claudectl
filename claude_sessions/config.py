@@ -67,6 +67,7 @@ _DEFAULT_SETTINGS = {
     'default_subagent_model': '',  # CLAUDE_CODE_SUBAGENT_MODEL env ('' = unset)
     'ui_mode': 'tui',              # default interface: 'tui' | 'gui' (desktop app)
     'gui_shell': 'auto',           # GUI window: 'auto' | 'qt' | 'edge' | 'browser'
+    'auto_memory_interval': 3600,  # GUI background auto-memory re-check cadence (s)
 }
 
 
