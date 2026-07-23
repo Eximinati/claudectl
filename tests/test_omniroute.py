@@ -14,8 +14,7 @@ def test_omniroute_env_returns_anthropic_override_when_configured():
     env = c.omniroute_env(s)
     assert env == {'ANTHROPIC_BASE_URL': 'http://localhost:20128',
                     'ANTHROPIC_AUTH_TOKEN': 'secret-token',
-                    'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1',
-                    'CLAUDE_CODE_SUBAGENT_MODEL': 'claude-sonnet-5'}
+                    'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1'}
 
 
 def test_omniroute_client_degrades_quietly_when_unreachable():
@@ -129,14 +128,15 @@ def test_omniroute_env_with_model_param_bypasses_exec_model_gate():
     assert env.get('ANTHROPIC_AUTH_TOKEN') == 'secret-token'
 
 
-def test_omniroute_env_includes_subagent_model_and_disable_traffic():
-    """omniroute_env always sets CLAUDE_CODE_SUBAGENT_MODEL and
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC so agents/skills use Sonnet 5."""
+def test_omniroute_env_includes_disable_traffic_not_subagent_model():
+    """omniroute_env sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC but no
+    longer forces CLAUDE_CODE_SUBAGENT_MODEL — OmniRoute can't route a bare
+    Anthropic model id, so agents must inherit the session's OmniRoute model."""
     s = {'omniroute_exec_model': 'auto/coding',
          'omniroute_base_url': 'http://localhost:20128',
          'omniroute_api_key': 'secret'}
     env = c.omniroute_env(s)
-    assert env['CLAUDE_CODE_SUBAGENT_MODEL'] == 'claude-sonnet-5'
+    assert 'CLAUDE_CODE_SUBAGENT_MODEL' not in env
     assert env['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'] == '1'
 
 
