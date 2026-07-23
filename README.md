@@ -169,6 +169,19 @@ Plan with an accurate model, execute with a cheaper — or completely free — o
 
 Nobody else orchestrates this from the launcher.
 
+**OmniRoute standalone session** — claudectl also supports launching a **standalone interactive `claude` session** through OmniRoute, not just the Plan→Execute execute half. When you open a project in the TUI and pick a model from the **OMNIROUTE** menu (appears only when OmniRoute is reachable on a configured base URL), your session runs entirely on OmniRoute's free/cheap tier, with full access to every Claude Code feature:
+
+- **Agents & subagents** — all work. `CLAUDE_CODE_SUBAGENT_MODEL=claude-sonnet-5` is automatically set, so subagents always run on a capable model (Sonnet 5) even when the main session uses a free-tier model that may lack `tool_use` or have a small context window.
+- **Skills** — load on demand, unchanged. Skills are client-side SKILL.md files discovered from `.claude/skills/`; the Sonnet 5 subagent model handles them correctly.
+- **Per-project memory, hooks, MCP servers** — all client-side, model-agnostic. They load from `CLAUDE_CONFIG_DIR` and the project's `.claude/` as usual, unchanged.
+- **Plan→Execute** — the plan-execute modal in the GUI has an **Execute via** toggle (Anthropic / OmniRoute). Selecting OmniRoute routes the execute half through OmniRoute (same agent/skill/memory guarantees). The Plan→Execute TUI path automatically picks OmniRoute when `omniroute_exec_model` is configured.
+
+**Caveats:**
+- Anthropic usage tracking won't reflect OmniRoute spend (cost tracking is separate).
+- Free-tier models often have small context windows (<16K tokens). Use the TUI's context-warning on `CLAUDE.md` + rules + plan over ~8K tokens.
+- Some free models lack `tool_use`, which degrades agents, skills, and MCP tool calls. The Sonnet 5 subagent override covers the common case, but the main model's own capabilities remain the free model's.
+- `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` is set automatically to block telemetry that free models might reject or that unnecessary calls to the Anthropic API may fail on.
+
 ### Adaptive agent selection (`g`)
 The agents screen opens with a **"Suggested for this project"** section — library agents ranked against the project's languages (from the dependency graph), memory entities, and name. Local scoring, instant, free. Setting `agents_auto: 'auto'` applies suggestions automatically on first open (your manual picks are never touched).
 

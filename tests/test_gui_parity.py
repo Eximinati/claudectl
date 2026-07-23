@@ -700,7 +700,9 @@ def test_job_plan_make_council_uses_omniroute_when_via_selected(monkeypatch, tmp
             time.sleep(0.05)
         assert st['status'] == 'done'
         assert seen['omni_env'] == {'ANTHROPIC_BASE_URL': 'http://localhost:20128',
-                                     'ANTHROPIC_AUTH_TOKEN': 'secret'}
+                                     'ANTHROPIC_AUTH_TOKEN': 'secret',
+                                     'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1',
+                                     'CLAUDE_CODE_SUBAGENT_MODEL': 'claude-sonnet-5'}
     finally:
         srv.shutdown()
 

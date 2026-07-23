@@ -457,17 +457,31 @@ def advise(model, effort):
     return ('ok', good.get(model, ''))
 
 
-def omniroute_env(s=None):
+def omniroute_env(s=None, model=None):
     """{} when free-tier exec routing is off; else the ANTHROPIC_BASE_URL/
-    AUTH_TOKEN override that points an interactive `claude` launch at
+    AUTH_TOKEN override that points an interactive ``claude`` launch at
     OmniRoute (github.com/diegosouzapw/OmniRoute) instead of the real
-    Anthropic API. Only ever used for the execution half of Plan→Execute —
-    planning always stays on the real API (see plan_execute.py)."""
+    Anthropic API.  Used for both the execution half of Plan→Execute and
+    standalone interactive OmniRoute sessions (see main.py, plan_execute.py).
+
+    Also sets CLAUDE_CODE_SUBAGENT_MODEL so that agents and skills always
+    run on a capable Anthropic model (Sonnet 5) even when the main session
+    uses a free-tier OmniRoute model that may lack tool_use or have a
+    small context window.
+
+    Returns ``{}`` when OmniRoute is not configured.  Pass *model* to force
+    the OmniRoute env even when ``omniroute_exec_model`` is not in settings
+    (the GUI plan-execute modal's ``via='omniroute'`` path uses this)."""
     s = load_settings() if s is None else s
-    if not s.get('omniroute_exec_model'):
+    if not s.get('omniroute_exec_model') and not model:
         return {}
-    return {'ANTHROPIC_BASE_URL': s.get('omniroute_base_url') or '',
-            'ANTHROPIC_AUTH_TOKEN': s.get('omniroute_api_key') or ''}
+    env = {
+        'ANTHROPIC_BASE_URL': s.get('omniroute_base_url') or '',
+        'ANTHROPIC_AUTH_TOKEN': s.get('omniroute_api_key') or '',
+        'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1',
+        'CLAUDE_CODE_SUBAGENT_MODEL': 'claude-sonnet-5',
+    }
+    return {k: v for k, v in env.items() if v}
 
 
 # Ordered stops on the cost/quality frontier for the GUI's single-slider

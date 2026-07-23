@@ -63,6 +63,35 @@ def test_list_projects_and_sessions(monkeypatch, tmp_path):
     assert sess[0]['account'] == 'default'
 
 
+def test_sessions_omni_flag(monkeypatch, tmp_path):
+    """A session that ran on a non-Anthropic (OmniRoute free-tier) model is
+    flagged omni=True; a plain Anthropic session is not."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual = str(sb.root / 'work' / 'alpha')
+    os.makedirs(actual, exist_ok=True)
+    enc = 'X--enc-alpha'
+    folder = sb.projects / enc
+    folder.mkdir()
+    make_jsonl(str(folder / 'aaaa0000-0000-0000-0000-000000000000.jsonl'),
+               title='Anthropic run', model='claude-sonnet-5')
+    make_jsonl(str(folder / 'bbbb0000-0000-0000-0000-000000000000.jsonl'),
+               title='Omni run', model='deepseek-v4-flash-free')
+    monkeypatch.setattr(gui, 'find_actual_path', lambda e: actual if e == enc else None)
+    by_title = {s['title']: s for s in gui.list_sessions(enc)}
+    assert by_title['Omni run']['omni'] is True
+    assert by_title['Anthropic run']['omni'] is False
+    # OmniRoute records bare provider model names (no slash namespace); the
+    # discriminator is "not an Anthropic/Claude model".
+    assert gui._used_omni({'models': ['big-pickle']}) is True
+    assert gui._used_omni({'models': ['mimo-auto']}) is True
+    assert gui._used_omni({'models': ['claude-opus-4-8', 'claude-sonnet-5']}) is False
+    assert gui._used_omni({'models': ['sonnet']}) is False            # bare Claude alias
+    assert gui._used_omni({'models': ['us.anthropic.claude-sonnet-5']}) is False
+    # a mixed session (Claude + free-tier) still flags omni
+    assert gui._used_omni({'models': ['claude-sonnet-5', 'big-pickle']}) is True
+    assert gui._used_omni({'models': []}) is False
+
+
 def test_http_state_and_sessions(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     actual, enc, sid = _seed(sb, monkeypatch)

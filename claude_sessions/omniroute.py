@@ -50,6 +50,31 @@ import urllib.error
 AUTO_MODEL = 'auto/coding'
 
 
+def prepare_launch(model):
+    """Ensure the OmniRoute daemon is up, validate *model*, and return env
+    overrides for a ``claude`` launch routed through OmniRoute.  Raises
+    ``ValueError`` for an unknown model (except ``auto/coding``, which is
+    passed through unvalidated — OmniRoute resolves it server-side).
+
+    The returned dict is ready to ``env.update()``; callers must merge it on
+    top of a full ``os.environ.copy()`` so that ``CLAUDE_CONFIG_DIR`` and the
+    rest of the account env survive into the child process."""
+    from .config import load_settings, omniroute_env
+    s = load_settings()
+    base_url = s.get('omniroute_base_url', '')
+    api_key = s.get('omniroute_api_key', '')
+    ok, msg = ensure_running(base_url)
+    if not ok:
+        raise RuntimeError(f'OmniRoute: {msg}')
+    env = {k: v for k, v in omniroute_env(s).items() if v}
+    if model and model != AUTO_MODEL:
+        available = [mid for mid, _lbl in list_models(base_url, api_key)]
+        if model not in available:
+            raise ValueError(f"OmniRoute model '{model}' not available. "
+                             f"Choose from: {available}")
+    return env
+
+
 def _get(base_url, path, api_key, timeout=5):
     req = urllib.request.Request((base_url or '').rstrip('/') + path)
     if api_key:

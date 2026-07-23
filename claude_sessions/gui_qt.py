@@ -25,16 +25,23 @@ def run_desktop():
     """Serve the GUI and show it in a native Qt window. Blocks until the
     window closes. Raises ImportError if PyQt6/WebEngine is unavailable —
     caller falls back."""
-    # QtWebEngine composites via a GPU hardware surface on Windows; on any
-    # continuously-animating content (the job-modal spinner) that surface
-    # swap tears/flickers — a plain Chromium tab doesn't, which is why the
-    # browser shell is fine and only the Qt shell flickers. Disabling GPU
-    # compositing routes rendering through the CPU compositor and stops it.
-    # Must be set before QtWebEngine initializes (i.e. before QApplication).
-    flags = os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS', '')
-    if '--disable-gpu' not in flags:
-        os.environ['QTWEBENGINE_CHROMIUM_FLAGS'] = (
-            flags + ' --disable-gpu-compositing').strip()
+    # GPU compositing stays ON here — forcing --disable-gpu-compositing (the
+    # old fix) routed the WHOLE page through the CPU compositor and made the
+    # app sluggish. The flicker it was papering over had a specific DOM cause,
+    # now fixed at the source in app.css:
+    #   1. the full-screen job overlay used backdrop-filter: blur(), which
+    #      makes QtWebEngine's GPU compositor read back + reblur the entire
+    #      framebuffer every composite — with an animating spinner on top that
+    #      thrashes the hardware surface swap and tears. Removed (solid dim).
+    #   2. the spinner/pulse/shimmer keyframes now use steps() instead of a
+    #      smooth 60fps tween, so animated nodes invalidate ~8-10x/sec.
+    #   3. plan-execute no longer opens that blocking overlay at all — it runs
+    #      inline + non-blocking (see app.js peJob*), so its long jobs never
+    #      put an animated modal over the page.
+    # If a flicker ever reappears on specific hardware, the escape hatch is to
+    # set QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu-compositing (or --disable-gpu
+    # for full software render) in the environment before launching — this
+    # module no longer overrides a pre-set value.
 
     from PyQt6.QtWidgets import QApplication, QMainWindow
     from PyQt6.QtWebEngineWidgets import QWebEngineView

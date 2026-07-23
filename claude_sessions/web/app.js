@@ -446,7 +446,8 @@ async function drawSessions(archived){
         <div class="t" id="st${i}">${esc(s.title||s.preview||s.sid.slice(0,8))} ${tg}</div>
         <div class="meta"><span>${esc(s.age)} ago</span><span>${s.count} msgs</span>
           ${s.tokens?`<span>${esc(s.tokens)} tok</span>`:''}
-          ${s.account&&s.account!=='default'?`<span class="tag" style="color:${acctColor(s.account)};border-color:currentColor;background:transparent">${esc(s.account)}</span>`:''}</div>
+          ${s.account&&s.account!=='default'?`<span class="tag" style="color:${acctColor(s.account)};border-color:currentColor;background:transparent">${esc(s.account)}</span>`:''}
+          ${s.omni?`<span class="tag" style="color:var(--violet);border-color:currentColor;background:transparent" title="Executed via OmniRoute (free-tier model)">omni</span>`:''}</div>
       </div>
       <div class="acts">${archived?`
         <button class="btn sm danger" onclick="deleteS(${i},true)" title="Delete">${ic('del')}</button>`:`
@@ -818,9 +819,81 @@ async function injectFlow(){
    already synced there when you select them elsewhere in the GUI) and this
    project's own system prompt/add-dirs — nothing about the session itself
    is different, only which model and account it runs against. */
+/* ── plan-exec: non-blocking background runner ──
+   runJob() opens the full-screen #jovl modal and ties progress to its DOM, so
+   the whole UI is blocked until the job ends (and the animated modal over the
+   dimmed page was the flicker source). Plan jobs don't need any of that: the
+   daemon-thread job already survives navigation (gui_api _JOBS), and none of
+   the plan_* kinds use an approval gate. So we just poll module state, render
+   an inline banner into the plan-exec page while it's mounted, and toast on
+   completion no matter which page the user wandered to. */
+let PE={jid:null,kind:'',label:'',status:'',msgs:[],elapsed:0,plan:null};
+let __peShown=false,__peSub='',__peMsgs='';
+function peBusy(){return !!PE.jid&&PE.status==='running';}
+async function peJobStart(kind,params,label){
+  if(peBusy()){toast('A plan job is already running — cancel it first','err');return;}
+  const r=await post('/api/job',{kind,...params});
+  if(!r.ok){toast(r.error||'Could not start','err');return;}
+  PE={jid:r.job,kind,label,status:'running',msgs:[],elapsed:0,plan:PE.plan};
+  __peShown=false;   // force a fresh banner build
+  peRenderStatus();
+  pePoll();
+}
+async function pePoll(){
+  const jid=PE.jid;if(!jid)return;
+  const st=await api(`/api/job/${jid}`);
+  if(PE.jid!==jid)return;              // superseded by a newer job, or cleared
+  if(!st){PE.status='';peRenderStatus();return;}
+  PE.status=st.status;PE.label=st.label||PE.label;
+  PE.msgs=st.messages||[];PE.elapsed=st.elapsed||0;
+  if(st.status==='running'){peRenderStatus();setTimeout(pePoll,700);return;}
+  if(st.status==='done')peJobDone(st.result||{});
+  else if(st.status==='cancelled')toast('Plan job cancelled','');
+  else toast(st.error||'Plan job failed','err');
+  peRenderStatus();   // clears the inline banner
+}
+function peJobDone(result){
+  const onPage=PAGE_==='project'&&TAB==='planexec';
+  if(PE.kind==='plan_make'||PE.kind==='plan_replan'){
+    if(!result.plan){toast('Plan came back empty','err');return;}
+    PE.plan=result.plan;
+    toast('Plan ready — review & execute'+(onPage?'':' (open the Plan → Execute tab)'),'ok');
+    if(onPage)peShowPlan(result.plan);
+  }else if(PE.kind==='plan_launch'){
+    toast(`Execute session launched — ${esc(result.model||'')} via ${result.via==='omniroute'?'OmniRoute':'Anthropic'}`,'ok');
+  }
+}
+async function peCancel(){
+  if(!PE.jid)return;
+  await post(`/api/job/${PE.jid}/cancel`);
+  toast('Cancelling…','');
+}
+/* Renders the inline running-banner. No-op when off the plan-exec page (the
+   poll chain keeps ticking regardless). Caches sub-text/messages so a poll
+   tick only rewrites what changed — never recreates the animated spinner. */
+function peRenderStatus(){
+  const el=$('#peStatus');if(!el)return;
+  if(peBusy()){
+    if(!__peShown){
+      __peShown=true;__peSub='';__peMsgs='';el.style.display='';
+      el.innerHTML=`<div class="perun"><span class="spin"></span>
+        <div style="flex:1"><b id="peLbl"></b>
+          <div class="sub" id="peSub"></div><div class="msgs" id="peMsgs"></div></div>
+        <button class="btn sm danger" onclick="peCancel()">Cancel</button></div>`;
+      $('#peLbl').textContent=PE.label||'Working…';
+    }
+    const sub=`${PE.elapsed||0}s elapsed — keep using claudectl; you'll be notified when it's done`;
+    if(sub!==__peSub){__peSub=sub;const s=$('#peSub');if(s)s.textContent=sub;}
+    const msgs=(PE.msgs||[]).slice(-3).map(m=>`<div class="${m.ok?'':'bad'}">${esc(m.text)}</div>`).join('');
+    if(msgs!==__peMsgs){__peMsgs=msgs;const m=$('#peMsgs');if(m)m.innerHTML=msgs;}
+  }else if(__peShown){
+    __peShown=false;el.style.display='none';el.innerHTML='';
+  }
+}
 function drawPlanExec(){
   const o=ST.options;
   $('#content').innerHTML=`
+    <div id="peStatus" style="display:none;margin-bottom:14px"></div>
     <div class="card"><h3>${ic('map')} Plan → Execute</h3>
       <p style="color:var(--dim);font-size:13px;margin-bottom:10px">
         Cuts cost on multi-step work: a strong model writes a numbered plan (no file writes, no tool
@@ -866,6 +939,12 @@ function drawPlanExec(){
   $('#peCouncil').querySelectorAll('.chip').forEach(c=>c.onclick=()=>c.classList.toggle('on'));
   if(ST.accounts.length>1) chipsFill($('#peAcct'),ST.accounts.map(a=>a.dir),ST.accounts.map(a=>a.name),ST.active_cfgdir);
   peViaChange();
+  // Restore any in-flight or just-finished plan work when returning to the tab:
+  // a running job re-shows its inline banner, a finished-but-unreviewed plan
+  // re-opens the editor. The background poll chain kept running the whole time.
+  __peShown=false;
+  peRenderStatus();
+  if(!peBusy()&&PE.plan)peShowPlan(PE.plan);
 }
 function peViaChange(){
   const via=chipVal($('#peVia'));
@@ -884,26 +963,24 @@ async function peRun(){
   if(!task){toast('Describe the task first','err');return;}
   const council=!!$('#peCouncil').querySelector('.chip.on');
   const via=chipVal($('#peVia'));
-  const body={...C(),task,model:chipVal($('#pePlan')),effort:chipVal($('#peEff')),council,via};
+  const model=chipVal($('#pePlan'));
+  const body={...C(),task,model,effort:chipVal($('#peEff')),council,via};
   window._peTask=task;
-  runJob('plan_make',body,st=>{
-    const r=st.result;
-    if(!r||!r.plan){toast('Plan came back empty','err');return;}
-    peShowPlan(r.plan);
-  });
+  // Capture the execute-side config NOW while the chips are on-screen — the
+  // plan may finish while the user is on another page, so peShowPlan can't
+  // rely on the DOM still holding these values.
+  const execEl=$('#peExec'),acctEl=$('#peAcct');
+  window._peExecCfg={via,execModel:execEl?chipVal(execEl):'',account:acctEl?chipVal(acctEl):''};
+  peJobStart('plan_make',body,`Writing plan (${model})${council?' + council':''}`);
 }
 function peShowPlan(plan){
-  $('#pePlanEdit').value=plan;
-  $('#peEditCard').style.display='';
-  const via=chipVal($('#peVia'));
-  const execEl=$('#peExec');
-  const execModel=execEl?chipVal(execEl):'';
-  const acctEl=$('#peAcct');
-  const account=acctEl?chipVal(acctEl):'';
-  window._peExecCfg={via,execModel,account};
-  $('#peDiscardBtn').onclick=()=>{$('#peEditCard').style.display='none';};
+  const ed=$('#pePlanEdit'),card=$('#peEditCard');
+  if(!ed||!card)return;   // not on the page — PE.plan holds it until drawPlanExec renders
+  ed.value=plan;
+  card.style.display='';
+  $('#peDiscardBtn').onclick=()=>{card.style.display='none';PE.plan=null;};
   $('#peApproveBtn').onclick=()=>peExecute();
-  $('#peEditCard').scrollIntoView({behavior:'smooth',block:'start'});
+  card.scrollIntoView({behavior:'smooth',block:'start'});
 }
 async function peReplan(){
   const task=window._peTask||($('#peTask').value||'').trim();
@@ -915,12 +992,7 @@ async function peReplan(){
   const body={...C(),task,feedback,plan_text:curPlan,
     model:chipVal($('#pePlan')),effort:chipVal($('#peEff')),council:false,via};
   $('#peEditCard').style.display='none';
-  runJob('plan_replan',body,st=>{
-    const r=st.result;
-    if(!r||!r.plan){toast('Re-plan failed','err');return;}
-    peShowPlan(r.plan);
-    toast('Plan updated based on feedback','ok');
-  });
+  peJobStart('plan_replan',body,'Re-planning with feedback');
 }
 async function peExecute(){
   const task=window._peTask||($('#peTask').value||'').trim();
@@ -928,11 +1000,10 @@ async function peExecute(){
   const perStep=!!$('#pePerStep').checked;
   const cfg=window._peExecCfg||{};
   $('#peEditCard').style.display='none';
-  runJob('plan_launch',{...C(),task,plan_text:plan,per_step:perStep,
-    via:cfg.via,model:cfg.execModel,account:cfg.account},st=>{
-    const r=st.result||{};
-    toast(`Execute session launched — ${esc(r.model||'')} via ${r.via==='omniroute'?'OmniRoute':'Anthropic'}`,'ok');
-  });
+  PE.plan=null;   // consumed — don't re-show on return
+  peJobStart('plan_launch',{...C(),task,plan_text:plan,per_step:perStep,
+    via:cfg.via,model:cfg.execModel,account:cfg.account},
+    'Launching execute session'+(perStep?' (per-step)':''));
 }
 /* mirrors the TUI's category-grouped library multi-select */
 async function drawAgentPicker(){
@@ -1668,6 +1739,17 @@ function askLaunch(cfg){
   chipsFill($('#fThink'),o.thinking,o.thinking_labels,d.max_thinking);
   chipsFill($('#fSub'),o.models,o.model_labels,d.subagent_model);
   chipsFill($('#fWt'),['','*'],['off','auto'],'');
+  // OmniRoute: fetch available models and show the section only if reachable
+  const orWrap=$('#fOmniWrap');orWrap.style.display='none';
+  api('/api/omniroute/models').then(m=>{
+    const models=m&&m.models||[];
+    if(!models.length)return;
+    const cur=ST.omniroute_exec_model||'';
+    const vals=['',...models];
+    const lbls=['off (use Anthropic API)',...models.map(id=>id==='auto/coding'?'auto/coding (dynamic)':id)];
+    chipsFill($('#fOmni'),vals,lbls,cur);
+    orWrap.style.display='';
+  }).catch(()=>{});
   $('#fAcctWrap').style.display=(cfg.isNew&&ST.accounts.length>1)?'':'none';
   $('#fNameWrap').style.display=cfg.isNew?'':'none';
   $('#fWtWrap').style.display=cfg.isNew?'':'none';
@@ -1685,7 +1767,8 @@ async function doLaunch(){
     perm:chipVal($('#fPerm')),max_thinking:chipVal($('#fThink')),
     subagent_model:chipVal($('#fSub')),
     name:c.isNew?$('#fName').value:'',worktree:c.isNew?chipVal($('#fWt')):'',
-    cfgdir:c.isNew&&ST.accounts.length>1?chipVal($('#fAcct')):(c.cfgdir||'')};
+    cfgdir:c.isNew&&ST.accounts.length>1?chipVal($('#fAcct')):(c.cfgdir||''),
+    omniroute:chipVal($('#fOmni'))};
   $('#ovl').classList.remove('show');
   const r=await post('/api/launch',{path:c.path,enc:c.enc,choice:c.choice,opts});
   if(r.ok)toast('Launched in a new terminal window','ok');

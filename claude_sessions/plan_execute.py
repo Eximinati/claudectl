@@ -521,6 +521,25 @@ def run(project_path, proj_folder, project_name, plan=None, per_step=False, shou
         if not ok:
             flash(f"OmniRoute: {msg}", ok=False, secs=2.5)
             return False
+        # context-window warning: free-tier OmniRoute models can have small
+        # context windows — warn when CLAUDE.md + rules + plan are large
+        try:
+            _ctx_size = 0
+            _claude_md = os.path.join(project_path, 'CLAUDE.md')
+            if os.path.isfile(_claude_md):
+                _ctx_size += os.path.getsize(_claude_md)
+            _rules_dir = os.path.join(project_path, '.claude', 'rules')
+            if os.path.isdir(_rules_dir):
+                for _f in os.listdir(_rules_dir):
+                    _fp = os.path.join(_rules_dir, _f)
+                    if os.path.isfile(_fp) and _f.endswith('.md'):
+                        _ctx_size += os.path.getsize(_fp)
+            _ctx_size += len(plan or '') * 3  # rough: plan char → bytes
+            if _ctx_size // 4 > 8000:
+                flash(f"OmniRoute: CLAUDE.md + rules + plan ≈ {_ctx_size // 4 // 1000}k tokens — "
+                      "small-context model may degrade", ok=False, secs=3)
+        except Exception:
+            pass  # size check is advisory, never block
 
     args, env = build_exec_launch(project_path, proj_folder, task, exec_model, omni_env, cfgdir)
     if not args:

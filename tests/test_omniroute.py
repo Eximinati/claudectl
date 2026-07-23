@@ -13,7 +13,9 @@ def test_omniroute_env_returns_anthropic_override_when_configured():
          'omniroute_api_key': 'secret-token'}
     env = c.omniroute_env(s)
     assert env == {'ANTHROPIC_BASE_URL': 'http://localhost:20128',
-                    'ANTHROPIC_AUTH_TOKEN': 'secret-token'}
+                    'ANTHROPIC_AUTH_TOKEN': 'secret-token',
+                    'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1',
+                    'CLAUDE_CODE_SUBAGENT_MODEL': 'claude-sonnet-5'}
 
 
 def test_omniroute_client_degrades_quietly_when_unreachable():
@@ -112,3 +114,66 @@ if __name__ == '__main__':
     test_omniroute_env_returns_anthropic_override_when_configured()
     test_omniroute_client_degrades_quietly_when_unreachable()
     print('ok')
+
+
+def test_omniroute_env_with_model_param_bypasses_exec_model_gate():
+    """Passing model='_' forces OmniRoute env even when omniroute_exec_model is
+    not set — handles the GUI plan-execute modal's via='omniroute' path."""
+    s = {'omniroute_base_url': 'http://localhost:20128',
+         'omniroute_api_key': 'secret-token'}
+    # without model param: empty because exec_model is not set
+    assert c.omniroute_env(s) == {}
+    # with model param: env vars are returned
+    env = c.omniroute_env(s, model='_')
+    assert env.get('ANTHROPIC_BASE_URL') == 'http://localhost:20128'
+    assert env.get('ANTHROPIC_AUTH_TOKEN') == 'secret-token'
+
+
+def test_omniroute_env_includes_subagent_model_and_disable_traffic():
+    """omniroute_env always sets CLAUDE_CODE_SUBAGENT_MODEL and
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC so agents/skills use Sonnet 5."""
+    s = {'omniroute_exec_model': 'auto/coding',
+         'omniroute_base_url': 'http://localhost:20128',
+         'omniroute_api_key': 'secret'}
+    env = c.omniroute_env(s)
+    assert env['CLAUDE_CODE_SUBAGENT_MODEL'] == 'claude-sonnet-5'
+    assert env['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'] == '1'
+
+
+def test_omniroute_env_filters_empty_values():
+    """Empty string values are filtered out so ambient env is never clobbered."""
+    s = {'omniroute_exec_model': 'auto/coding',
+         'omniroute_base_url': '',
+         'omniroute_api_key': ''}
+    env = c.omniroute_env(s)
+    assert 'ANTHROPIC_BASE_URL' not in env
+    assert 'ANTHROPIC_AUTH_TOKEN' not in env
+
+
+def test_prepare_launch_unknown_model_raises_valueerror(monkeypatch):
+    """prepare_launch() raises ValueError for a model not in list_models()."""
+    monkeypatch.setattr(omniroute, 'ensure_running', lambda *a, **k: (True, 'running'))
+    from claude_sessions.config import load_settings, save_settings
+    s = load_settings()
+    s['omniroute_base_url'] = 'http://localhost:20128'
+    s['omniroute_api_key'] = ''
+    s['omniroute_exec_model'] = 'free/x'
+    save_settings(s)
+    monkeypatch.setattr(omniroute, 'list_models',
+                        lambda *a, **k: [('free/x', 'Free Model X'), ('free/y', 'Free Model Y')])
+    import pytest
+    # 'bogus' is not in the list -> ValueError
+    with pytest.raises(ValueError, match='bogus'):
+        omniroute.prepare_launch('bogus')
+    # 'auto/coding' is always accepted without validation
+    env = omniroute.prepare_launch('auto/coding')
+    assert isinstance(env, dict)
+
+
+def test_prepare_launch_ensure_running_failure_propagates(monkeypatch):
+    """prepare_launch raises RuntimeError when ensure_running fails."""
+    monkeypatch.setattr(omniroute, 'ensure_running',
+                        lambda *a, **k: (False, 'daemon dead'))
+    import pytest
+    with pytest.raises(RuntimeError, match='OmniRoute'):
+        omniroute.prepare_launch('auto/coding')

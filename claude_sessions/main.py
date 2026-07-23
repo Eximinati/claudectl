@@ -224,7 +224,8 @@ def run():
     # ── main loop ─────────────────────────────────────────────────
 
     _EMPTY_OPTS = {'effort': '', 'model': '', 'perm': '', 'name': '', 'worktree': '',
-                   'agent': '', 'cfgdir': '', 'max_thinking': '', 'subagent_model': ''}
+                   'agent': '', 'cfgdir': '', 'max_thinking': '', 'subagent_model': '',
+                   'omniroute': ''}
     path = encoded_name = proj_folder = choice = None
     opts = dict(_EMPTY_OPTS)
 
@@ -401,6 +402,26 @@ def run():
                 'subagent_model': opts.get('subagent_model', ''),
             }
             save_settings(settings)
+        # ── OmniRoute standalone session (optional) ──────────────
+        # Only offer OmniRoute if its base_url is explicitly configured
+        # (different from the default placeholder). This prevents the TUI
+        # from trying to reach localhost:20128 in test or fresh-install
+        # environments where no OmniRoute daemon exists.
+        _or_base = settings.get('omniroute_base_url', '')
+        if _or_base and _or_base != 'http://localhost:20128':
+            try:
+                from . import omniroute as _om
+                _models = _om.list_models(_or_base, settings.get('omniroute_api_key', ''))
+                if _models:
+                    from .omniroute import AUTO_MODEL
+                    _om_opts = [('○  off (use Anthropic API)', '')]
+                    _om_opts += [(f'◉  auto/coding (dynamic router)', AUTO_MODEL)]
+                    _om_opts += [(f'●  {lbl}', mid) for mid, lbl in _models]
+                    _om_pick = menu(_om_opts, "OMNIROUTE  (free-tier execution)")
+                    if _om_pick is not None:
+                        opts['omniroute'] = _om_pick
+            except Exception:
+                pass   # daemon not reachable or not installed — silently skip
         break
 
     if choice == 'terminal':
@@ -409,6 +430,7 @@ def run():
     opts.setdefault('agents_json', '')
     opts.setdefault('max_thinking', '')
     opts.setdefault('subagent_model', '')
+    opts.setdefault('omniroute', '')
 
     # Persist last session for quick-resume (resume/fork only)
     if choice and choice not in ('terminal', 'new', 'continue'):
@@ -575,6 +597,15 @@ def build_launch_command(path, encoded_name, choice, opts):
         args += ['--effort', opts['effort']]
     if opts['model']:
         args += ['--model', opts['model']]
+    # OmniRoute free-tier session: merge env overrides + use selected model.
+    # CLAUDE_CODE_SUBAGENT_MODEL is set in omniroute_env() so agents/skills
+    # always run on a capable Anthropic model (Sonnet 5), even when the main
+    # session uses a free-tier model that may lack tool_use or have small context.
+    omniroute_model = opts.get('omniroute', '')
+    if omniroute_model:
+        from .omniroute import prepare_launch
+        env.update(prepare_launch(omniroute_model))
+        args += ['--model', omniroute_model]
     if opts['perm']:
         args += ['--permission-mode', opts['perm']]
     if opts.get('agent'):

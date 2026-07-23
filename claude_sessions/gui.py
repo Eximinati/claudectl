@@ -75,9 +75,36 @@ def list_projects():
     return out
 
 
+_ANTHROPIC_ALIASES = {'sonnet', 'opus', 'haiku', 'fable'}
+
+
+def _is_anthropic_model(model):
+    """True if *model* is a Claude/Anthropic id (or a Claude Code bare alias
+    like 'sonnet'/'sonnet-5'). Empty/synthetic ('<...>') ids also count as
+    Anthropic — they carry no omni signal. Used to detect the inverse."""
+    m = (model or '').strip().lower()
+    if not m or m.startswith('<'):
+        return True
+    if 'claude' in m or 'anthropic' in m:
+        return True
+    return m.split('-', 1)[0] in _ANTHROPIC_ALIASES
+
+
+def _used_omni(stats):
+    """True if the session ran (partly) on a non-Anthropic model — the OmniRoute
+    free-tier signal. OmniRoute records the *resolved* provider model in the
+    transcript under a bare name ('big-pickle', 'deepseek-v4-flash-free',
+    'mimo-auto', ...), NOT a slash-namespaced id — so the reliable test is
+    exclusion: anything `_is_anthropic_model` rejects is an omni model. (An
+    Anthropic model served *through* OmniRoute can't be told apart from a
+    direct Anthropic run by id alone, but the tag's job is flagging the
+    free-tier models, which are exactly these non-Claude ids.)"""
+    return any(not _is_anthropic_model(m) for m in (stats.get('models') or []))
+
+
 def list_sessions(encoded):
     """Sessions of a project across every account, newest-first.
-    [{'sid','title','preview','age','count','account','cfgdir','tokens'}]"""
+    [{'sid','title','preview','age','count','account','cfgdir','tokens','omni'}]"""
     from .sessions import (account_folders_for, scan_sessions, load_name,
                            get_session_title, format_age)
     from .stats import get_session_stats_cached, _sum_usage, fmt_tok
@@ -88,17 +115,19 @@ def list_sessions(encoded):
             jsonl = os.path.join(folder, f'{sid}.jsonl')
             title = load_name(folder, sid) or get_session_title(jsonl) or ''
             tokens = ''
+            omni = False
             try:
                 st = get_session_stats_cached(jsonl)
                 tot = sum(_sum_usage(st).values())
                 if tot:
                     tokens = fmt_tok(tot)
+                omni = _used_omni(st)
             except Exception:
                 pass
             out.append({'sid': sid, 'title': title, 'preview': preview,
                         'age': format_age(mtime).strip(), 'mtime': mtime,
                         'count': count, 'account': acct_name,
-                        'cfgdir': cfgdir, 'tokens': tokens})
+                        'cfgdir': cfgdir, 'tokens': tokens, 'omni': omni})
     out.sort(key=lambda r: r['mtime'], reverse=True)
     return out
 

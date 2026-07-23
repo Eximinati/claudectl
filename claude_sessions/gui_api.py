@@ -435,13 +435,19 @@ def api_session_delete(q, body):
 
 def api_archived(q, body):
     from .session_menu import _arch_of
-    from .sessions import scan_sessions, load_name, format_age
+    from .sessions import scan_sessions, load_name, format_age, get_session_stats
+    from .gui import _used_omni
     folder = _arch_of(_folder(q.get('cfgdir'), q['enc']))
     out = []
     for mtime, sid, preview, count in scan_sessions(folder):
+        omni = False
+        try:
+            omni = _used_omni(get_session_stats(os.path.join(folder, f'{sid}.jsonl')))
+        except Exception:
+            pass
         out.append({'sid': sid, 'title': load_name(folder, sid) or '',
                     'preview': preview, 'age': format_age(mtime).strip(),
-                    'count': count})
+                    'count': count, 'omni': omni})
     return {'sessions': out}
 
 
@@ -1229,7 +1235,7 @@ def api_job_start(q, body):
         # errors, and optimize_plan_council quietly no-ops the plan back
         # unchanged with no error shown.
         via = body.get('via', 'anthropic')
-        omni_env = omniroute_env(s) if via == 'omniroute' else {}
+        omni_env = omniroute_env(s, model='_') if via == 'omniroute' else {}
 
         def _make():
             plan = _plan(task, model, path, effort)
@@ -1259,7 +1265,7 @@ def api_job_start(q, body):
             import subprocess
             s = load_settings()
             via = body.get('via', 'anthropic')
-            omni_env = omniroute_env(s) if via == 'omniroute' else {}
+            omni_env = omniroute_env(s, model='_') if via == 'omniroute' else {}
             # write user-edited plan text before launching
             if plan_text:
                 write_plan_file(path, task, plan_text)
@@ -1268,6 +1274,24 @@ def api_job_start(q, body):
                 ui.flash(f'OmniRoute: {msg}', ok=ok)
                 if not ok:
                     raise RuntimeError(msg)
+                # context-window warning for free-tier OmniRoute models
+                try:
+                    _ctx = 0
+                    _md = os.path.join(path, 'CLAUDE.md') if path else ''
+                    if _md and os.path.isfile(_md):
+                        _ctx += os.path.getsize(_md)
+                    _rd = os.path.join(path, '.claude', 'rules') if path else ''
+                    if _rd and os.path.isdir(_rd):
+                        for _f in os.listdir(_rd):
+                            _fp = os.path.join(_rd, _f)
+                            if os.path.isfile(_fp) and _f.endswith('.md'):
+                                _ctx += os.path.getsize(_fp)
+                    _ctx += len(plan_text or '') * 3
+                    if _ctx // 4 > 8000:
+                        ui.flash(f"OmniRoute: CLAUDE.md + rules + plan ≈ {_ctx // 4 // 1000}k tokens — "
+                                 "small-context model may degrade", ok=False, secs=3)
+                except Exception:
+                    pass
             if body.get('model'):
                 model = body['model']
             elif omni_env:
@@ -1380,11 +1404,80 @@ def api_omniroute_status(q, body):
 
 
 def api_omniroute_models(q, body):
+    """Return models whose backing provider is usable, not just catalogued.
+
+    OmniRoute's /v1/models returns the full routable catalog regardless of
+    which providers actually have API keys configured. This endpoint
+    cross-references against the live health endpoint to exclude models from
+    providers that are explicitly unhealthy (OPEN or HALF_OPEN circuit breaker).
+
+    ``auto/*`` router models are always included (they server-side-pick the
+    best healthy provider).  ``auto/coding`` is always prepended as the default.
+    """
     from . import omniroute
     from .config import load_settings
     s = load_settings()
-    models = omniroute.list_models(s.get('omniroute_base_url', ''), s.get('omniroute_api_key', ''))
-    return {'models': [m for m, _l in models], 'labels': {m: l for m, l in models}}
+    base = s.get('omniroute_base_url', '')
+    key = s.get('omniroute_api_key', '')
+    models = omniroute.list_models(base, key)
+    if not models:
+        return {'models': ['auto/coding'], 'labels': {'auto/coding': 'auto/coding (dynamic router)'}}
+
+    # Fetch provider breaker states — only exclude providers that are
+    # EXPLICITLY failing (OPEN or HALF_OPEN).  Everything else (CLOSED,
+    # unknown, or not in the breaker list) is included.  This is a fail-open
+    # approach: configured providers like opencode show up unless they're
+    # provably broken, rather than needing to be proven healthy.
+    unhealthy_providers = set()
+    try:
+        health_data = omniroute._get(base, '/api/monitoring/health', key, timeout=4)
+        for breaker in (health_data or {}).get('providerBreakers', []):
+            if breaker.get('state') in ('OPEN', 'HALF_OPEN'):
+                unhealthy_providers.add(breaker.get('provider', ''))
+    except Exception:
+        unhealthy_providers = None  # health unreachable → show everything
+
+    # Prefix→provider mapping
+    PREFIX_TO_PROVIDER = {
+        'auto': '',
+        'tllm': 'theoldllm',
+        'oc': 'opencode',
+        'nvidia': 'nvidia',
+        'aug': 'auggie',
+        'ddgw': 'duckduckgo-web',
+        'veo-free': 'opencode',
+        'veoaifree-web': 'opencode',
+        'no-think': 'theoldllm',
+        'pepper': 'chipotle',
+        'mcode': 'mimocode',
+    }
+
+    filtered = []
+    seen = set()
+    filtered.append('auto/coding')
+    seen.add('auto/coding')
+
+    for mid, lbl in models:
+        if mid in seen:
+            continue
+        prefix = mid.split('/')[0] if '/' in mid else mid
+        provider = PREFIX_TO_PROVIDER.get(prefix, '')
+
+        if prefix == 'auto':
+            # auto/* routers are always safe
+            filtered.append(mid)
+            seen.add(mid)
+        elif provider and unhealthy_providers is not None and provider in unhealthy_providers:
+            # Provider is explicitly broken — skip
+            continue
+        else:
+            # Provider is either healthy, not in the breaker list, or health
+            # endpoint was unreachable — include it
+            filtered.append(mid)
+            seen.add(mid)
+
+    return {'models': filtered, 'labels': {m: (lbl if m == lbl else m)
+                                           for m, lbl in models if m in filtered}}
 
 
 def api_plan_edit(q, body):
