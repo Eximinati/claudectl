@@ -178,10 +178,9 @@ def run_with_progress(args, crumbs, label, timeout=120, cwd=None):
     import subprocess
     from . import memory
     if getattr(memory._tls, 'silent', False):
+        from .gui_api import _run_cancellable
         try:
-            p = subprocess.run(args, capture_output=True, text=True,
-                               encoding='utf-8', errors='ignore', cwd=cwd, timeout=timeout)
-            return (p.stdout or ''), False
+            return _run_cancellable(args, cwd=cwd, timeout=timeout), False
         except Exception:
             return None, False
     import threading
@@ -240,10 +239,9 @@ def run_with_progress_stdin(args, stdin_text, crumbs, label, timeout=240, cwd=No
     import subprocess
     from . import memory
     if getattr(memory._tls, 'silent', False):
+        from .gui_api import _run_cancellable
         try:
-            p = subprocess.run(args, input=stdin_text, capture_output=True, text=True,
-                               encoding='utf-8', errors='ignore', cwd=cwd, timeout=timeout)
-            return (p.stdout or ''), False
+            return _run_cancellable(args, input_text=stdin_text, cwd=cwd, timeout=timeout), False
         except Exception:
             return None, False
     import threading

@@ -57,16 +57,7 @@ def test_plan_execute_reject(monkeypatch, tmp_path):
 
 
 def test_plan_headless_in_background_job_thread(monkeypatch, tmp_path):
-    # regression: run_with_progress_stdin's clear-screen fallback
-    # (os.system('cls'), used when VT mode isn't available -- true for a
-    # console-less GUI job thread) spawns a real console per render tick.
-    # At ~10 ticks/sec for up to 600s that looked like terminals endlessly
-    # opening/closing until the app was killed. memory._tls.silent is set
-    # by every GUI job (gui_api.start_job) -- run_with_progress_stdin
-    # itself must honor it (see tests/test_ui_progress.py for that check
-    # directly); this confirms _plan() still gets the right result through
-    # that path with no separate bypass of its own.
-    from claude_sessions import config, memory
+    from claude_sessions import config, memory, gui_api
     monkeypatch.setattr(config, 'get_claude_exe', lambda: r'C:\fake.exe')
     monkeypatch.setattr(memory._tls, 'silent', True, raising=False)
 
@@ -76,15 +67,11 @@ def test_plan_headless_in_background_job_thread(monkeypatch, tmp_path):
         raise AssertionError('render_frame must not run in silent mode')
     monkeypatch.setattr(ui.render, 'render_frame', boom)
 
-    import subprocess
     captured = {}
-
-    class FakeResult:
-        stdout = '1. step one\n2. step two'
-    def fake_run(args, **kw):
+    def fake_run_cancellable(args, **kw):
         captured['args'] = args
-        return FakeResult()
-    monkeypatch.setattr(subprocess, 'run', fake_run)
+        return '1. step one\n2. step two'
+    monkeypatch.setattr(gui_api, '_run_cancellable', fake_run_cancellable)
 
     out = plan_execute._plan('do the thing', 'claude-opus-4-8', str(tmp_path), effort='xhigh')
     assert out == '1. step one\n2. step two'
@@ -96,18 +83,14 @@ def test_plan_prompt_includes_weak_model_instructions(monkeypatch, tmp_path):
     # the plan is written once by a strong model but EXECUTED by a cheaper
     # one -- the generation prompt must carry WEAK_MODEL_PLAN_INSTRUCTIONS so
     # the resulting plan is unambiguous enough for a weaker executor.
-    from claude_sessions import config, memory
+    from claude_sessions import config, memory, gui_api
     monkeypatch.setattr(config, 'get_claude_exe', lambda: r'C:\fake.exe')
     monkeypatch.setattr(memory._tls, 'silent', True, raising=False)
-    import subprocess
     captured = {}
-
-    class FakeResult:
-        stdout = '1. step'
-    def fake_run(args, **kw):
-        captured['input'] = kw.get('input')
-        return FakeResult()
-    monkeypatch.setattr(subprocess, 'run', fake_run)
+    def fake_run_cancellable(args, **kw):
+        captured['input'] = kw.get('input_text')
+        return '1. step'
+    monkeypatch.setattr(gui_api, '_run_cancellable', fake_run_cancellable)
 
     plan_execute._plan('do the thing', 'claude-opus-4-8', str(tmp_path))
     assert plan_execute.WEAK_MODEL_PLAN_INSTRUCTIONS in captured['input']
@@ -194,19 +177,13 @@ def test_council_routes_through_omniroute_when_configured(monkeypatch, tmp_path)
 
 
 def test_headless_never_prefixes_model(monkeypatch, tmp_path):
-    # OmniRoute's live catalog has no 'anthropic/' namespace (aggregator-named
-    # instead: 'aug/', 'tllm/', 'ddgw/') -- a guessed prefix 404s. Caller is
-    # responsible for passing a model id valid for the target; _headless
-    # must pass it through untouched, prefixed or not, omni_env or not.
-    from claude_sessions import config
+    from claude_sessions import config, gui_api
     monkeypatch.setattr(config, 'get_claude_exe', lambda: r'C:\fake.exe')
     captured = {}
-    class FakeResult:
-        stdout = 'ok'
-    def fake_run(args, **k):
+    def fake_run_cancellable(args, **kw):
         captured['args'] = args
-        return FakeResult()
-    monkeypatch.setattr(subprocess, 'run', fake_run)
+        return 'ok'
+    monkeypatch.setattr(gui_api, '_run_cancellable', fake_run_cancellable)
 
     plan_execute._headless('claude-sonnet-5', 'p', str(tmp_path),
                            omni_env={'ANTHROPIC_BASE_URL': 'http://localhost:20128'})
@@ -430,3 +407,75 @@ def test_replan_calls_save(monkeypatch, tmp_path):
     result = plan_execute.replan('original task', 'make it shorter')
     assert result == 'regenerated plan'
     assert any(c[0] == 'save' for c in calls)
+
+
+# ── cancel ───────────────────────────────────────────────────
+
+def test_cancel_stops_job(monkeypatch, tmp_path):
+    """job_cancel sets cancel_event, kills registered procs, and the job
+    thread exits with status='cancelled' within a short timeout."""
+    import time
+    import threading
+    from claude_sessions import gui_api
+    from claude_sessions.gui_api import start_job, job_cancel, JobCancelled
+
+    exited = threading.Event()
+    loop_results = []
+
+    def _looping_fn():
+        import os
+        j = gui_api._JOBCTX.job
+        # register a fake proc so cancel can kill it
+        class FakeProc:
+            pid = 99999
+            def poll(self): return None
+            def kill(self): loop_results.append('killed')
+        if j:
+            j.setdefault('procs', []).append(FakeProc())
+        while not j.get('cancel_event', threading.Event()).is_set():
+            time.sleep(0.01)
+        loop_results.append('exited')
+        exited.set()
+
+    jid = start_job('cancel-test', _looping_fn)
+    time.sleep(0.1)  # let thread start and enter loop
+    job_cancel(jid)
+    exited.wait(timeout=3)
+
+    job = gui_api._job(jid)
+    assert job is not None
+    assert job['status'] == 'cancelled'
+    assert job['cancel_event'].is_set()
+    assert job['result'] is None
+    assert 'exited' in loop_results
+    assert 'killed' in loop_results
+
+
+def test_cancel_awaiting_releases_gate(monkeypatch, tmp_path):
+    """Cancelling a job at an approval gate rejects it and sets status to cancelled."""
+    import time
+    import threading
+    from claude_sessions import gui_api
+    from claude_sessions.gui_api import start_job, job_cancel
+
+    gate_reached = threading.Event()
+
+    def _gate_fn():
+        j = gui_api._JOBCTX.job
+        j['gate'] = {'title': 'Approve?', 'diff': [], 'old': '', 'new': ''}
+        j['status'] = 'awaiting'
+        gate_reached.set()
+        j['decision_evt'].wait()
+        # after cancel releases the event, check if we were cancelled
+        return 'should not reach' if not j.get('cancelled') else None
+
+    jid = start_job('gate-test', _gate_fn)
+    gate_reached.wait(timeout=3)
+    time.sleep(0.05)
+    job_cancel(jid)
+    time.sleep(0.2)
+
+    job = gui_api._job(jid)
+    assert job is not None
+    assert job['status'] == 'cancelled'
+    assert job['cancelled'] is True

@@ -18,6 +18,7 @@ Two ideas make this thin:
 
 import json
 import os
+import subprocess
 import threading
 import time
 import uuid
@@ -30,6 +31,70 @@ from . import config as _c
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
 _JOBCTX = threading.local()          # .job set on job threads
+
+
+class JobCancelled(Exception):
+    """Raised inside a job thread when the user cancels."""
+
+
+def _run_cancellable(cmd, input_text=None, capture_output=True, text=True,
+                     encoding='utf-8', errors='ignore', cwd=None, env=None,
+                     timeout=600):
+    """subprocess.run replacement that honours the current job's cancel_event.
+
+    Returns stdout string (or '' on cancel/failure). Raises JobCancelled if
+    the user cancels while the subprocess is running."""
+    job = getattr(_JOBCTX, 'job', None)
+    if job and job.get('cancel_event', threading.Event()).is_set():
+        raise JobCancelled
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE if capture_output else None,
+                                stderr=subprocess.STDOUT if capture_output else None,
+                                text=text, encoding=encoding, errors=errors,
+                                cwd=cwd, env=env)
+    except Exception:
+        return ''
+    if job is not None:
+        job.setdefault('procs', []).append(proc)
+    killed = threading.Event()
+
+    def _watch():
+        if job is None:
+            return
+        while not killed.is_set():
+            if job['cancel_event'].wait(timeout=1.0):
+                break
+        if not killed.is_set() and proc.poll() is None:
+            try:
+                if os.name == 'nt':
+                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)],
+                                   capture_output=True)
+                else:
+                    proc.kill()
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_watch, daemon=True)
+    t.start()
+    try:
+        stdout, _ = proc.communicate(input=input_text, timeout=timeout)
+        return (stdout or '').strip() if capture_output else ''
+    except subprocess.TimeoutExpired:
+        try: proc.kill()
+        except Exception: pass
+        return ''
+    except Exception:
+        try: proc.kill()
+        except Exception: pass
+        return ''
+    finally:
+        killed.set()
+        t.join(timeout=2)
+        if job is not None and proc in job.get('procs', []):
+            job['procs'].remove(proc)
+        if job is not None and job['cancel_event'].is_set():
+            raise JobCancelled
 
 
 def _job(jid):
@@ -45,7 +110,8 @@ def start_job(label, fn, inputs=None):
            'result': None, 'error': '', 'gate': None,
            'decision': None, 'decision_evt': threading.Event(),
            'inputs': list(inputs or []), 'started': time.time(),
-           'cancelled': False}
+           'cancelled': False,
+           'cancel_event': threading.Event(), 'procs': []}
     with _JOBS_LOCK:
         _JOBS[jid] = job
 
@@ -57,6 +123,9 @@ def start_job(label, fn, inputs=None):
             job['result'] = fn()
             if job['status'] == 'running':
                 job['status'] = 'done'
+        except JobCancelled:
+            if job['status'] != 'cancelled':
+                job['status'] = 'cancelled'
         except Exception as e:
             _c.log.exception('gui job failed: %s', label)
             job['error'] = str(e)
@@ -99,9 +168,22 @@ def job_cancel(jid):
     if not job:
         return False
     if job['status'] == 'awaiting':      # a cancel at the gate = reject
-        return job_decide(jid, False)
+        job['decision'] = False
+        job['status'] = 'cancelled'
+        job['decision_evt'].set()
     job['cancelled'] = True
-    job['status'] = 'cancelled'
+    job['cancel_event'].set()
+    for p in list(job.get('procs', [])):
+        if p.poll() is None:
+            try:
+                p.kill()
+                if os.name == 'nt':
+                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(p.pid)],
+                                   capture_output=True)
+            except Exception:
+                pass
+    if job['status'] != 'cancelled':
+        job['status'] = 'cancelled'
     return True
 
 

@@ -120,7 +120,10 @@ async function runJob(kind,params,onDone){
   let __plMsgs='',__plSub='',__plLabel='';
   $('#jovl').classList.add('show');$('#jGate').style.display='none';
   $('#jCancelRow').style.display='';
-  $('#jCancel').onclick=async()=>{await post(`/api/job/${jid}/cancel`);};
+  $('#jCancel').onclick=async()=>{
+    const btn=$('#jCancel');btn.disabled=true;btn.textContent='Cancelling…';
+    await post(`/api/job/${jid}/cancel`);
+  };
   const poll=async()=>{
     const st=await api(`/api/job/${jid}`);
     if(!st){$('#jovl').classList.remove('show');return;}

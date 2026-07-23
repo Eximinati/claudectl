@@ -199,10 +199,9 @@ def _headless(model, prompt, cwd, omni_env=None):
     env = os.environ.copy()
     if omni_env:
         env.update(omni_env)
+    from .gui_api import _run_cancellable
     try:
-        p = subprocess.run(args, input=prompt, capture_output=True, text=True,
-                           encoding='utf-8', errors='ignore', cwd=cwd, timeout=600, env=env)
-        return (p.stdout or '').strip()
+        return _run_cancellable(args, input_text=prompt, cwd=cwd, env=env)
     except Exception:
         return ''
 

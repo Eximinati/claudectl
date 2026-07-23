@@ -294,11 +294,9 @@ def _claude_stdin(prompt, cwd, timeout=EXTRACT_TIMEOUT,
     if m:
         args += ['--model', m]
     if getattr(_tls, 'silent', False):
-        import subprocess
+        from .gui_api import _run_cancellable
         try:
-            p = subprocess.run(args, input=prompt, capture_output=True, text=True,
-                               encoding='utf-8', errors='ignore', cwd=cwd, timeout=timeout)
-            return p.stdout or ''
+            return _run_cancellable(args, input_text=prompt, cwd=cwd, timeout=timeout)
         except Exception:
             return ''
     from .ui import run_with_progress_stdin
@@ -611,6 +609,10 @@ def refresh_memory(project_path, proj_folder, project_name, auto_cap=None):
             snap['generated_at'] = _iso()
             save_memory(project_path, proj_folder, snap)
         _report_progress(f"memory {i + 1}/{n}")
+        from .gui_api import JobCancelled, _JOBCTX
+        _job = getattr(_JOBCTX, 'job', None)
+        if _job and _job.get('cancel_event', threading.Event()).is_set():
+            raise JobCancelled
 
     module_edges, unit_rank = _module_graph(project_path, proj_folder, units)
     for e in kept:

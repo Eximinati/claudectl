@@ -3,10 +3,8 @@ carry `--model <extract_model>` when set, and no `--model` when the setting is
 blank (account default). Verifies the shared memory._claude_stdin helper.
 """
 
-import subprocess
-
 from harness import Sandbox
-from claude_sessions import config, memory
+from claude_sessions import config, memory, gui_api
 
 
 def _write_settings(sb, **kw):
@@ -20,16 +18,12 @@ def _capture_args(monkeypatch):
     """Run _claude_stdin in silent mode with a fake exe/subprocess and return
     the argv it built."""
     seen = {}
-
-    class _P:
-        stdout = '{}'
-
-    def fake_run(args, **kw):
+    def fake_cancel(args, **kw):
         seen['args'] = args
-        return _P()
+        return '{}'
 
     monkeypatch.setattr(config, 'get_claude_exe', lambda: r'C:\fake\claude.exe')
-    monkeypatch.setattr(subprocess, 'run', fake_run)
+    monkeypatch.setattr(gui_api, '_run_cancellable', fake_cancel)
     memory._tls.silent = True
     try:
         memory._claude_stdin('hello', cwd='.')
@@ -59,12 +53,9 @@ def test_explicit_model_override_beats_setting(monkeypatch, tmp_path):
     _write_settings(sb, extract_model='claude-haiku-4-5')
     seen = {}
 
-    class _P:
-        stdout = '{}'
-
     monkeypatch.setattr(config, 'get_claude_exe', lambda: r'C:\fake\claude.exe')
-    monkeypatch.setattr(subprocess, 'run',
-                        lambda args, **kw: (seen.__setitem__('args', args), _P())[1])
+    monkeypatch.setattr(gui_api, '_run_cancellable',
+                        lambda args, **kw: (seen.__setitem__('args', args), '{}')[1])
     memory._tls.silent = True
     try:
         memory._claude_stdin('hi', cwd='.', model='')          # force default

@@ -898,6 +898,15 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
                 ])
                 spin_i += 1
                 time.sleep(0.1)
+                # Check background-job cancel
+                from .gui_api import _JOBCTX, JobCancelled
+                _j = getattr(_JOBCTX, 'job', None)
+                if _j and _j.get('cancel_event', threading.Event()).is_set():
+                    try: proc.terminate()
+                    except Exception: pass
+                    cancelled = True
+                    done = True
+                    break
                 # Drain ALL pending input — wheel/held arrows otherwise pile up
                 # and replay into the next screen
                 while True:
@@ -922,6 +931,10 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
         return
 
     if cancelled:
+        from .gui_api import _JOBCTX, JobCancelled
+        _j = getattr(_JOBCTX, 'job', None)
+        if _j:
+            raise JobCancelled
         print(f"\n\n  Cancelled. Falling back to standard scaffold...")
         time.sleep(1)
         scaffold_claude_md(project_path, proj_folder)
