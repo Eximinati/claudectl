@@ -202,7 +202,7 @@ def _new_agent_ai(project_path):
         "description: <one sentence, written so Claude knows WHEN to delegate to this agent>\n"
         "tools: <comma-separated subset of Read, Write, Edit, Bash, Glob, Grep, "
         "WebFetch, WebSearch, Task, TodoWrite — omit the line to inherit all>\n"
-        "model: <one of haiku-4-5, sonnet-4-6, opus-4-8, fable-5 — omit to inherit>\n"
+        "model: <one of haiku-4-5, sonnet-5, opus-5, fable-5 — omit to inherit>\n"
         "---\n\n"
         "<the system prompt body: role, focus, step-by-step approach, constraints>\n\n"
         "Do NOT create or write any files and do not use any tools — return the "

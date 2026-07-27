@@ -138,7 +138,7 @@ def test_preset_key_recommended(monkeypatch, tmp_path):
 def test_preset_key_deep_reasoning(monkeypatch, tmp_path):
     Sandbox(monkeypatch, tmp_path)
     result, _ = run_menu(monkeypatch, flat(typed('3'), ENTER))
-    assert result['model'] == 'claude-opus-4-8'
+    assert result['model'] == 'claude-opus-5'
     assert result['effort'] == 'xhigh'
 
 
@@ -159,7 +159,7 @@ def test_model_card_left_right(monkeypatch, tmp_path):
 def test_advisor_warns_on_bad_combo(monkeypatch, tmp_path):
     Sandbox(monkeypatch, tmp_path)
     # Model -> opus (DOWN to model, RIGHT x3 = haiku,sonnet,opus), effort stays default->low
-    keys = flat(DOWN, RIGHT, RIGHT, RIGHT,   # model = opus-4-8
+    keys = flat(DOWN, RIGHT, RIGHT, RIGHT,   # model = opus-5
                 UP, RIGHT,                    # back to effort, -> low
                 ESC)
     _, cap = run_menu(monkeypatch, keys)

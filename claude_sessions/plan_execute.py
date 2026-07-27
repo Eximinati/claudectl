@@ -1,6 +1,6 @@
 """Plan→Execute — two-model run from the launcher.
 
-Plan a task headlessly with an accurate model (default Opus 4.8), let the user
+Plan a task headlessly with an accurate model (default Opus 5), let the user
 approve/edit the plan, then launch an interactive session with a cheaper/faster
 model (default Sonnet 5) seeded with the approved plan. Big token savings:
 expensive reasoning happens once, execution runs on the cheap tier.
@@ -223,7 +223,7 @@ def _headless(model, prompt, cwd, omni_env=None, cfgdir=''):
         return ''
 
 
-COUNCIL_MODELS = ['claude-sonnet-5', 'claude-opus-4-8', 'claude-haiku-4-5']
+COUNCIL_MODELS = ['claude-sonnet-5', 'claude-opus-5', 'claude-haiku-4-5']
 
 # OmniRoute's own stable meta-router ids (confirmed present in its live
 # /v1/models catalog) -- used instead of COUNCIL_MODELS when routing through
@@ -297,7 +297,7 @@ def write_plan_file(project_path, task, plan):
 def replan(task, feedback):
     """Re-generate plan with feedback appended to the original task prompt."""
     prompt = task + "\n\nFeedback/constraints based on prior review:\n" + feedback
-    plan = _plan(prompt, _c.load_settings().get('plan_model', 'claude-opus-4-8'),
+    plan = _plan(prompt, _c.load_settings().get('plan_model', 'claude-opus-5'),
                  os.getcwd())
     if plan:
         save_plan(plan, plan_store_path())
@@ -449,7 +449,7 @@ def run(project_path, proj_folder, project_name, plan=None, per_step=False, shou
         return False
 
     s = load_settings()
-    plan_model = s.get('plan_model', 'claude-opus-4-8')
+    plan_model = s.get('plan_model', 'claude-opus-5')
     omni_env = _c.omniroute_env(s)
     if omni_env:
         from . import omniroute

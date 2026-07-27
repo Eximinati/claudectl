@@ -64,7 +64,7 @@ _DEFAULT_SETTINGS = {
     'memory_auto_refresh': 'open',  # 'off' | 'open' (auto-refresh on project open) | 'hub'
     'memory_lessons_autoapprove': 0.8,  # lessons with confidence >= this auto-approve (0 = off)
     'conventions_to_global': True,  # promote cross-project conventions to ~/.claude/CLAUDE.md
-    'plan_model': 'claude-opus-4-8',   # Plan→Execute: model that writes the plan
+    'plan_model': 'claude-opus-5',     # Plan→Execute: model that writes the plan
     'exec_model': 'claude-sonnet-5',   # Plan→Execute: model that executes it
     'extract_model': 'claude-haiku-4-5',  # economy model for claudectl's OWN internal
                                           # calls (memory/lessons/CLAUDE.md/agent/hook/
@@ -330,8 +330,8 @@ W = 62
 EFFORTS       = ['',        'low', 'medium', 'high', 'xhigh', 'max']
 EFFORT_LABELS = ['default', 'low', 'medium', 'high', 'xhigh', 'max']
 # Full model ids — claude.exe rejects bare version strings like 'sonnet-4-6'
-MODELS        = ['', 'claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-fable-5']
-MODEL_LABELS  = ['default', 'haiku-4-5', 'sonnet-5', 'opus-4-8', 'fable-5']
+MODELS        = ['', 'claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5']
+MODEL_LABELS  = ['default', 'haiku-4-5', 'sonnet-5', 'opus-5', 'fable-5']
 PERMS         = ['',        'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk']
 PERM_LABELS   = ['default', 'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk']
 PERM_RISKY    = {'bypassPermissions', 'dontAsk'}   # shown with warning tint
@@ -343,7 +343,8 @@ THINKING_LABELS = ['default', '4k', '8k', '16k', '32k']
 # ── cost estimation ($ per MTok; substring-matched on message.model) ──
 COST_PER_MTOK = {
     'fable-5':    {'in': 10.0, 'out': 50.0},
-    'opus-4':     {'in': 5.0,  'out': 25.0},
+    'opus-5':     {'in': 5.0,  'out': 25.0},
+    'opus-4':     {'in': 5.0,  'out': 25.0},   # legacy transcripts (4.5-4.8)
     'sonnet-4-6': {'in': 3.0,  'out': 15.0},
     'sonnet':     {'in': 3.0,  'out': 15.0},
     'haiku-4-5':  {'in': 1.0,  'out': 5.0},
@@ -359,13 +360,13 @@ CACHE_WRITE_MULT = 1.25
 # high/xhigh for coding-agentic, sonnet handles ~90% of coding at ~60% of Opus
 # cost, escalate to Opus for deep refactor / hard debugging).
 # swe = SWE-bench Verified %, cap = relative capability 1-5. Grounded in
-# July-2026 benchmarks (Haiku 73 / Sonnet-5 85 / Opus-4.8 89; Fable top, no
-# public SWE score). speed labels per Anthropic (Haiku fastest, Sonnet Fast,
-# Opus Moderate, Fable slow/deep).
+# July-2026 benchmarks (Haiku 73 / Sonnet-5 85; Opus 5 and Fable top the
+# roster with no published SWE score -> '—'). speed labels per Anthropic
+# (Haiku fastest, Sonnet Fast, Opus Moderate, Fable slow/deep).
 MODEL_PROFILES = {
     'claude-haiku-4-5': {'cap': 2, 'swe': 73, 'speed': 'fast', 'best_for': 'bulk, simple edits, subagents'},
     'claude-sonnet-5':  {'cap': 4, 'swe': 85, 'speed': 'fast', 'best_for': 'default coding (~90% of tasks)'},
-    'claude-opus-4-8':  {'cap': 5, 'swe': 89, 'speed': 'med',  'best_for': 'deep refactor, hard debugging'},
+    'claude-opus-5':    {'cap': 5, 'swe': None, 'speed': 'med', 'best_for': 'deep refactor, hard debugging'},
     'claude-fable-5':   {'cap': 5, 'swe': None, 'speed': 'slow', 'best_for': 'hardest, longest-horizon work'},
 }
 EFFORT_PROFILES = {
@@ -383,7 +384,7 @@ LAUNCH_PRESETS = [
     ('Cheap & fast',  'simple / bulk work, lowest cost',
      {'model': 'claude-sonnet-5', 'effort': 'low', 'subagent_model': 'claude-haiku-4-5'}),
     ('Deep reasoning', 'hard refactor, accuracy-critical',
-     {'model': 'claude-opus-4-8', 'effort': 'xhigh'}),
+     {'model': 'claude-opus-5', 'effort': 'xhigh'}),
     ('Max capability', 'hardest, longest-horizon',
      {'model': 'claude-fable-5', 'effort': 'high'}),
 ]
@@ -440,18 +441,18 @@ def advise(model, effort):
     ei = EFFORTS.index(eff) if eff in EFFORTS else 0    # 0 default,1 low,2 med,3 high,4 xhigh,5 max
     if not MODEL_PROFILES.get(model):
         return ('tip', 'Pick a model — Sonnet 5 · high is the recommended default.')
-    if model == 'claude-opus-4-8' and ei in (1, 2):
+    if model == 'claude-opus-5' and ei in (1, 2):
         return ('tip', 'Opus is underused at this effort — Sonnet 5 · high gives ~similar quality at ~60% less cost.')
     if model == 'claude-sonnet-5' and ei >= 4:
-        return ('warn', 'Sonnet at xhigh burns heavy reasoning tokens — can cost more than Opus 4.8 · high for similar quality. Use Opus · high or Sonnet · high.')
+        return ('warn', 'Sonnet at xhigh burns heavy reasoning tokens — can cost more than Opus 5 · high for similar quality. Use Opus · high or Sonnet · high.')
     if model == 'claude-fable-5' and ei < 4:
-        return ('tip', 'Fable is the priciest tier — Opus 4.8 · xhigh handles almost everything at half the cost.')
+        return ('tip', 'Fable is the priciest tier — Opus 5 · xhigh handles almost everything at half the cost.')
     if model == 'claude-haiku-4-5' and ei >= 3:
         return ('warn', "Haiku isn't built for deep reasoning — switch to Sonnet 5 for hard tasks.")
     good = {
         'claude-haiku-4-5': 'Cheapest & fastest — great for bulk, simple edits, and subagents.',
         'claude-sonnet-5':  'Best default — ~90% of coding at Opus quality; high ≈ Opus low.',
-        'claude-opus-4-8':  'Top accuracy tier — deep refactor & hard debugging; xhigh is the coding sweet spot.',
+        'claude-opus-5':    'Top accuracy tier — deep refactor & hard debugging; xhigh is the coding sweet spot.',
         'claude-fable-5':   'Maximum capability for the hardest, longest-horizon work.',
     }
     return ('ok', good.get(model, ''))
@@ -499,8 +500,8 @@ MODEL_EFFORT_FRONTIER = [
     ('claude-haiku-4-5', 'low'),
     ('claude-sonnet-5',  'medium'),
     ('claude-sonnet-5',  'high'),
-    ('claude-opus-4-8',  'high'),
-    ('claude-opus-4-8',  'xhigh'),
+    ('claude-opus-5',    'high'),
+    ('claude-opus-5',    'xhigh'),
     ('claude-fable-5',   'xhigh'),
     ('claude-fable-5',   'max'),
 ]

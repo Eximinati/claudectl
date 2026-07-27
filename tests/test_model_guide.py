@@ -4,27 +4,27 @@ from claude_sessions import config as c
 def test_cost_bar_scales_with_pricing():
     assert c.cost_bar('claude-haiku-4-5') == '$'
     assert c.cost_bar('claude-sonnet-5') == '$$'
-    assert c.cost_bar('claude-opus-4-8') == '$$$'
+    assert c.cost_bar('claude-opus-5') == '$$$'
     assert c.cost_bar('claude-fable-5') == '$$$$$'
     assert c.cost_bar('') == ''
-    assert len(c.cost_bar('claude-opus-4-8')) >= len(c.cost_bar('claude-sonnet-5'))
+    assert len(c.cost_bar('claude-opus-5')) >= len(c.cost_bar('claude-sonnet-5'))
 
 
 def test_cap_bar():
     assert c.cap_bar('claude-haiku-4-5') == '▪▪'
-    assert len(c.cap_bar('claude-opus-4-8')) == 5
+    assert len(c.cap_bar('claude-opus-5')) == 5
     assert c.cap_bar('') == ''
 
 
 def test_advisor_flags_suboptimal_and_confirms_good():
-    lvl, msg = c.advise('claude-opus-4-8', 'low')
+    lvl, msg = c.advise('claude-opus-5', 'low')
     assert lvl == 'tip' and 'Sonnet 5' in msg           # names the better option
     assert c.advise('claude-sonnet-5', 'xhigh')[0] == 'warn'
     assert 'Opus' in c.advise('claude-sonnet-5', 'xhigh')[1]
     assert c.advise('claude-haiku-4-5', 'max')[0] == 'warn'
     assert c.advise('claude-fable-5', 'low')[0] == 'tip'
     assert c.advise('claude-sonnet-5', 'high')[0] == 'ok'
-    assert c.advise('claude-opus-4-8', 'xhigh')[0] == 'ok'
+    assert c.advise('claude-opus-5', 'xhigh')[0] == 'ok'
     assert c.advise('', '')[0] == 'tip'                 # no model -> nudge default
 
 
