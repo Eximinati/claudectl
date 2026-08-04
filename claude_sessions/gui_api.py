@@ -1399,6 +1399,35 @@ def _memfn(refresh_memory, path, folder, name):
             'pending_units': mem.get('pending_units', 0)}
 
 
+# ── Plan → Execute — resume a previously-approved plan ────────
+# Lets the Plan → Execute tab skip straight to the approve/execute editor
+# with a plan that's already on disk (or hand-pasted), instead of forcing a
+# regeneration through the plan model every time a launch attempt fails or
+# the browser gets reloaded.
+
+def api_plan_last(q, body):
+    """Read back <project>/.claudectl/plan-latest.md, split into the task
+    title write_plan_file() stamps on it and the plan body. {'exists': False}
+    if there's no saved plan for this project yet."""
+    import re
+    from .plan_execute import PLAN_FILE
+    path = q.get('path', '')
+    if not path:
+        return {'exists': False}
+    plan_path = os.path.join(path, PLAN_FILE)
+    try:
+        with open(plan_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+    except Exception:
+        return {'exists': False}
+    task = ''
+    m = re.match(r'^# Plan: (.*)\n\n', text)
+    if m:
+        task = m.group(1)
+        text = text[m.end():]
+    return {'exists': True, 'task': task, 'plan': text.strip()}
+
+
 # ── OmniRoute — free-tier execution backend ───────────────────
 # github.com/diegosouzapw/OmniRoute (MIT, diegosouzapw). Self-hosted local
 # proxy speaking the Anthropic Messages API natively — never returns the raw
@@ -1555,6 +1584,7 @@ GET_ROUTES = {
     '/api/inject/sessions': api_inject_sessions,
     '/api/omniroute/status': api_omniroute_status,
     '/api/omniroute/models': api_omniroute_models,
+    '/api/plan/last': api_plan_last,
 }
 
 POST_ROUTES = {

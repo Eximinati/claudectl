@@ -848,8 +848,17 @@ async function pePoll(){
   PE.msgs=st.messages||[];PE.elapsed=st.elapsed||0;
   if(st.status==='running'){peRenderStatus();setTimeout(pePoll,700);return;}
   if(st.status==='done')peJobDone(st.result||{});
-  else if(st.status==='cancelled')toast('Plan job cancelled','');
-  else toast(st.error||'Plan job failed','err');
+  else{
+    if(st.status==='cancelled')toast('Plan job cancelled','');
+    else toast(st.error||'Plan job failed','err');
+    // A failed/cancelled LAUNCH (e.g. a stale/unavailable OmniRoute model)
+    // shouldn't force replanning -- the plan is already safely on disk
+    // (write_plan_file runs before the exec-model check) and still held in
+    // PE.plan since peExecute() no longer discards it up front. Re-open the
+    // editor so the user can just retry, e.g. after switching Execute
+    // via/model, instead of regenerating the plan from scratch.
+    if(PE.kind==='plan_launch'&&PE.plan&&PAGE_==='project'&&TAB==='planexec')peShowPlan(PE.plan);
+  }
   peRenderStatus();   // clears the inline banner
 }
 function peJobDone(result){
@@ -860,6 +869,7 @@ function peJobDone(result){
     toast('Plan ready — review & execute'+(onPage?'':' (open the Plan → Execute tab)'),'ok');
     if(onPage)peShowPlan(result.plan);
   }else if(PE.kind==='plan_launch'){
+    PE.plan=null;   // launch actually succeeded -- now safe to consume
     toast(`Execute session launched — ${esc(result.model||'')} via ${result.via==='omniroute'?'OmniRoute':'Anthropic'}`,'ok');
   }
 }
@@ -910,7 +920,9 @@ function drawPlanExec(){
         <span class="chip" data-v="1">Optimize plan with council</span></div>
         <div style="color:var(--dim);font-size:12px;margin-top:2px">Runs the draft past extra models for critique before you review it — costs more tokens.</div></div>
       ${ST.accounts.length>1?`<div class="fld"><label>Account (plan &amp; execute)</label><div class="chips" id="peAcct"></div></div>`:''}
-      <div class="mrow"><button class="btn pri" onclick="peRun()">${ic('play')} Write the plan…</button></div></div>
+      <div class="mrow"><button class="btn pri" onclick="peRun()">${ic('play')} Write the plan…</button>
+        <button class="btn sm" onclick="peUseExisting()" title="Skip planning — paste a plan you already have and go straight to review/execute">${ic('doc')} Already have a plan?</button>
+        <span id="peLastPlanHint"></span></div></div>
     <div class="card" id="peEditCard" style="display:none"><h3>${ic('edit')} Edit plan <span class="sp"></span>
       <label style="font-size:13px;font-weight:400;display:flex;align-items:center;gap:6px;cursor:pointer">
         <input type="checkbox" id="pePerStep"> Per-step approval</label>
@@ -955,6 +967,34 @@ function drawPlanExec(){
   __peShown=false;
   peRenderStatus();
   if(!peBusy()&&PE.plan)peShowPlan(PE.plan);
+  peLoadLastPlanHint();
+}
+let __peLastPlan=null;
+async function peLoadLastPlanHint(){
+  const hint=$('#peLastPlanHint');if(!hint)return;
+  const r=await api('/api/plan/last?'+qs({path:CUR.path}));
+  __peLastPlan=r&&r.exists?r:null;
+  hint.innerHTML=__peLastPlan
+    ?`<button class="btn sm" onclick="peResumeLastPlan()">${ic('history')} Resume last plan — "${esc((__peLastPlan.task||'(untitled)').slice(0,50))}"</button>`
+    :'';
+}
+function peResumeLastPlan(){
+  if(!__peLastPlan)return;
+  $('#peTask').value=__peLastPlan.task||'';
+  window._peTask=__peLastPlan.task||'';
+  window._peExecCfg={via:chipVal($('#peVia')),execModel:$('#peExec')?chipVal($('#peExec')):'',
+                     account:$('#peAcct')?chipVal($('#peAcct')):''};
+  PE.plan=__peLastPlan.plan;
+  peShowPlan(__peLastPlan.plan);
+}
+function peUseExisting(){
+  const task=($('#peTask').value||'').trim();
+  if(!task){toast('Give the task a short title first','err');return;}
+  window._peTask=task;
+  window._peExecCfg={via:chipVal($('#peVia')),execModel:$('#peExec')?chipVal($('#peExec')):'',
+                     account:$('#peAcct')?chipVal($('#peAcct')):''};
+  PE.plan=null;   // nothing to restore until they submit — peExecute() sets it then
+  peShowPlan('');
 }
 function peViaChange(){
   const via=chipVal($('#peVia'));
@@ -1023,7 +1063,10 @@ async function peExecute(){
                    account:acctEl?chipVal(acctEl):''}:(window._peExecCfg||{});
   window._peExecCfg=cfg;
   $('#peEditCard').style.display='none';
-  PE.plan=null;   // consumed — don't re-show on return
+  // keep the (possibly hand-edited) plan in PE until the launch actually
+  // succeeds — a failed launch (stale/unavailable OmniRoute model, etc.)
+  // re-opens the editor with it instead of forcing a full replan
+  PE.plan=plan;
   peJobStart('plan_launch',{...C(),task,plan_text:plan,per_step:perStep,
     via:cfg.via,model:cfg.execModel,account:cfg.account},
     'Launching execute session'+(perStep?' (per-step)':''));

@@ -150,10 +150,12 @@ def test_omniroute_env_filters_empty_values():
     assert 'ANTHROPIC_AUTH_TOKEN' not in env
 
 
-def test_prepare_launch_unknown_model_raises_valueerror(monkeypatch):
+def test_prepare_launch_unknown_model_raises_valueerror(monkeypatch, tmp_path):
     """prepare_launch() raises ValueError for a model not in list_models()."""
     monkeypatch.setattr(omniroute, 'ensure_running', lambda *a, **k: (True, 'running'))
+    from claude_sessions import config
     from claude_sessions.config import load_settings, save_settings
+    monkeypatch.setattr(config, 'settings_file', str(tmp_path / 'claudectl.json'))
     s = load_settings()
     s['omniroute_base_url'] = 'http://localhost:20128'
     s['omniroute_api_key'] = ''
