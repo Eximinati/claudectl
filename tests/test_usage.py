@@ -91,6 +91,91 @@ def test_clamped_and_skips_nulls():
     assert _as_dict(_extract_windows(data)) == {'weekly': 100.0}
 
 
+def _creds_dir(tmp_path, expires_in=3600):
+    import json
+    import time
+    d = tmp_path / 'acct'
+    d.mkdir()
+    with open(d / '.credentials.json', 'w', encoding='utf-8') as f:
+        json.dump({'claudeAiOauth': {
+            'accessToken': 'tok', 'refreshToken': 'refresh',
+            'expiresAt': int((time.time() + expires_in) * 1000),
+            'subscriptionType': 'max', 'rateLimitTier': '20x',
+            'scopes': ['user:inference']}}, f)
+    return d
+
+
+def test_status_expired_token_skips_the_http_call(monkeypatch, tmp_path):
+    import claude_sessions.usage as u
+    d = _creds_dir(tmp_path, expires_in=-60)
+    calls = []
+    monkeypatch.setattr(u.urllib.request, 'urlopen',
+                        lambda *a, **k: calls.append(1))
+    status, data, retry = u.fetch_usage(str(d))
+    assert (status, data, retry) == ('expired', None, 0)
+    assert not calls                        # a doomed request is never sent
+
+
+def test_status_maps_http_errors(monkeypatch, tmp_path):
+    import claude_sessions.usage as u
+    d = _creds_dir(tmp_path)
+
+    def raise_code(code, headers=None):
+        def boom(*a, **k):
+            raise u.urllib.error.HTTPError('u', code, 'nope', headers or {}, None)
+        return boom
+
+    monkeypatch.setattr(u.urllib.request, 'urlopen', raise_code(401))
+    assert u.fetch_usage(str(d))[0] == 'expired'
+    monkeypatch.setattr(u.urllib.request, 'urlopen',
+                        raise_code(429, {'Retry-After': '77'}))
+    assert u.fetch_usage(str(d))[::2] == ('rate_limited', 77)
+    monkeypatch.setattr(u.urllib.request, 'urlopen', raise_code(500))
+    assert u.fetch_usage(str(d))[0] == 'error'
+
+
+def test_status_no_creds(tmp_path):
+    import claude_sessions.usage as u
+    assert u.fetch_usage(str(tmp_path / 'nothing'))[0] == 'no_creds'
+
+
+def test_poll_keeps_last_good_data_and_never_writes_creds(monkeypatch, tmp_path):
+    """A failing poll degrades `status` but keeps the last percentages, and the
+    credentials file is left byte-identical — claudectl never rewrites it."""
+    import claude_sessions.usage as u
+    d = _creds_dir(tmp_path)
+    path = d / '.credentials.json'
+    before = path.read_bytes()
+    monkeypatch.setattr(u, '_acct_state', {})
+    monkeypatch.setattr(u, 'fetch_usage', lambda _d: ('ok', REAL, 0))
+    assert u._poll_account('work', str(d), 'other') is True
+    st = u._acct_state[str(d)]
+    assert st['status'] == 'ok' and st['data'] is REAL
+    assert st['tier'] == '20x' and st['plan'] == 'max'
+    monkeypatch.setattr(u, 'fetch_usage', lambda _d: ('rate_limited', None, 30))
+    st.pop('retry_at', None)
+    assert u._poll_account('work', str(d), 'other') is False
+    st = u._acct_state[str(d)]
+    assert st['status'] == 'rate_limited' and st['data'] is REAL   # not clobbered
+    assert st['retry_at'] > 0
+    assert path.read_bytes() == before
+
+
+def test_status_line_names_a_dead_account(monkeypatch):
+    """A dataless account is reported by name, never as a silent dash."""
+    import claude_sessions.usage as u
+    monkeypatch.setattr(u, '_started', True)
+    monkeypatch.setattr(u, '_ready', True)
+    monkeypatch.setattr(u, '_data', REAL)
+    monkeypatch.setattr(u, '_acct_state', {
+        r'C:\.claude': {'name': 'default', 'email': 'me@a.com', 'data': REAL,
+                        'status': 'ok'},
+        r'C:\.claude-old': {'name': 'old', 'email': 'old@b.com', 'data': None,
+                            'status': 'expired'}})
+    line = u.usage_status_line()
+    assert 'old@b.com' in line and 'claude login' in line
+
+
 def test_empty_and_nondict():
     assert _extract_windows(None) == []
     assert _extract_windows({}) == []

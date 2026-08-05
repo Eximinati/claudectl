@@ -521,20 +521,29 @@ def api_usage_plan(q, body):
         state = dict(usage_mod._acct_state)
     # every configured account must appear even before async data lands
     names = {d: n for n, d in usage_mod._targets()}
-    seen = set()
-    for d, st in state.items():
-        seen.add(d)
+    now = time.time()
+
+    def row(d, st, name):
         data = st.get('data')
         wins = usage_mod._extract_windows(data) if data else []
-        out.append({'account': st.get('name') or names.get(d, os.path.basename(d)),
-                    'email': st.get('email', ''),
-                    'windows': [{'label': l, 'pct': p,
-                                 'resets': usage_mod._fmt_reset(r) if r else ''}
-                                for l, p, r in wins]})
+        status = st.get('status') or 'pending'
+        fetched = st.get('fetched_at') or 0
+        return {'account': st.get('name') or name, 'email': st.get('email', ''),
+                'dir': d, 'status': status,
+                'status_text': usage_mod.STATUS_TEXT.get(status, status),
+                'stale_secs': int(now - fetched) if fetched else None,
+                'retry_in': max(0, int(st.get('retry_at', 0) - now)) or None,
+                'plan': st.get('plan', ''), 'tier': st.get('tier', ''),
+                'spend': st.get('spend'),
+                'windows': [{'label': l, 'pct': p,
+                             'resets': usage_mod._fmt_reset(r) if r else ''}
+                            for l, p, r in wins]}
+
+    for d, st in state.items():
+        out.append(row(d, st, names.get(d, os.path.basename(d))))
     for d, name in names.items():
-        if d in seen:
-            continue
-        out.append({'account': name, 'email': '', 'windows': []})
+        if d not in state:
+            out.append(row(d, {}, name))
     return {'accounts': out}
 
 
@@ -547,6 +556,7 @@ def api_search_index(q, body):
 # ── home dashboard ───────────────────────────────────────────
 
 _DASH_TTL = 10
+_DASH_DAYS = 30          # one scan feeds every chart range the UI offers (7/14/30)
 _dash_cache = None
 _dash_cached_at = 0.0
 
@@ -559,22 +569,18 @@ def api_dashboard(q, body):
     now = time.monotonic()
     if _dash_cache is not None and now - _dash_cached_at < _DASH_TTL:
         return _dash_cache
-    from datetime import datetime, timedelta
-    from .stats import usage_by_day
-    from .sessions import load_recent_sessions, get_session_stats, load_name
+    from datetime import datetime
+    from .stats import assemble_breakdown
+    from .sessions import load_recent_sessions, get_session_stats, load_name, format_age
     from . import mcp as mcp_mod
     from . import failover as fov
     from .gui import _used_omni
 
-    rows = list(usage_by_day(_entries(), days=7, silent=True))
-    by_day = {d: (sum(u.values()), round(c, 2), n) for d, u, c, n in rows}
+    bd = assemble_breakdown(_entries(), days=_DASH_DAYS)
+    week = bd['days'][-7:]                         # exactly 7, oldest→newest
     tkey = datetime.now().strftime('%Y-%m-%d')
-    tk, tc, ts = by_day.get(tkey, (0, 0.0, 0))
-    week = []
-    for i in range(6, -1, -1):                     # exactly 7, oldest→newest
-        d = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
-        w_tok, w_cost, _n = by_day.get(d, (0, 0.0, 0))
-        week.append({'date': d, 'tokens': w_tok, 'cost': w_cost})
+    tday = next((d for d in bd['days'] if d['date'] == tkey), None) or {}
+    tk, tc, ts = tday.get('tokens', 0), tday.get('cost', 0.0), tday.get('sessions', 0)
 
     with _JOBS_LOCK:
         items = list(_JOBS.items())
@@ -595,12 +601,16 @@ def api_dashboard(q, body):
                           r.get('encoded_name', ''))
         jsonl = os.path.join(pf, f"{r['session_id']}.jsonl")
         st = get_session_stats(jsonl)
-        recent.append({'id': r['session_id'],
+        mtime = int(st.get('last_ts') or r.get('timestamp') or 0)
+        recent.append({'id': r['session_id'], 'sid': r['session_id'],
+                       'path': r['project_path'],
+                       'encoded': r.get('encoded_name', ''),
+                       'cfgdir': r.get('cfgdir') or _c.config_dir,
                        'project': os.path.basename(r['project_path']) or r['project_path'],
                        'title': (load_name(pf, r['session_id']) or st.get('title')
                                  or r.get('preview') or r['session_id'][:8]),
-                       'msgs': st.get('count', 0),
-                       'mtime': int(st.get('last_ts') or r.get('timestamp') or 0),
+                       'msgs': st.get('count', 0), 'mtime': mtime,
+                       'age': format_age(mtime).strip() if mtime else '',
                        'omni': bool(_used_omni(st))})
 
     f_running, f_port = False, None
@@ -612,7 +622,8 @@ def api_dashboard(q, body):
         pass
 
     _dash_cache = {'today': {'tokens': tk, 'cost': tc, 'sessions': ts},
-                   'week': week, 'jobs': jobs, 'mcp': mcp_rows,
+                   'week': week, 'breakdown': bd, 'days': _DASH_DAYS,
+                   'jobs': jobs, 'mcp': mcp_rows,
                    'recent': recent,
                    'failover': {'running': f_running, 'port': f_port},
                    'generated_at': int(time.time())}

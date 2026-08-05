@@ -946,22 +946,24 @@ def test_gui_state_exposes_frontier(monkeypatch, tmp_path):
         srv.shutdown()
 
 
-def test_gui_home_bento_dashboard_and_recent_age(monkeypatch, tmp_path):
-    """Home is a bento-style dashboard (continue/usage/projects/search/actions
-    tiles), not the old 3D swipeable card deck -- and each recent row still
-    carries a human 'age' for the continue tile."""
+def test_gui_home_dashboard_zones_and_recent_age(monkeypatch, tmp_path):
+    """Home is the dense dashboard grid (accounts rail / chart+KPIs / projects /
+    continue / system / recent), not the old bento tiles or the 3D card deck --
+    and each recent row still carries a human 'age' for the continue tile."""
     from claude_sessions.gui_html import PAGE
-    # the old deck is gone entirely
+    # the old deck and the old bento tiles are gone entirely
     for dead in ('deckMarkup', 'renderDeck', 'bindDeckSwipe', 'deckNext',
-                 'deckPrev', 'deckBring', 'deckCardClick', 'DECK_ORDER'):
+                 'deckPrev', 'deckBring', 'deckCardClick', 'DECK_ORDER',
+                 'projectsTileHtml', 'loadHomeUsage', 'function spark('):
         assert dead not in PAGE, dead
-    assert 'class="deck"' not in PAGE and 'class="deckcard"' not in PAGE
-    # the new dashboard tiles exist
-    assert 'class="bento"' in PAGE
-    for tile in ('t-continue', 't-usage', 't-projects', 't-search', 't-actions'):
-        assert f'class="card {tile}"' in PAGE
-    assert 'function continueTileHtml' in PAGE and 'function projectsTileHtml' in PAGE
-    assert 'function loadHomeUsage' in PAGE and 'function drawHomeSearchResults' in PAGE
+    assert 'class="deck"' not in PAGE and 'class="bento"' not in PAGE
+    # the dashboard zones exist
+    assert 'class="dash"' in PAGE
+    for zone in ('d-acct', 'd-chart', 'd-projects', 'd-continue', 'd-live', 'd-recent'):
+        assert f'class="card {zone}"' in PAGE, zone
+    assert 'function continueTileHtml' in PAGE and 'function projectsListHtml' in PAGE
+    assert 'function tokenChart' in PAGE and 'function acctCard' in PAGE
+    assert 'function kpiHtml' in PAGE and 'function drawHomeSearchResults' in PAGE
     # continue-tile resume reuses the one-click + inline-tune helpers, not askLaunch
     home_resume = PAGE[PAGE.index('function homeResume('):PAGE.index('function toggleHomeTune')]
     assert 'askLaunch' not in home_resume and 'doQuickLaunch' in home_resume

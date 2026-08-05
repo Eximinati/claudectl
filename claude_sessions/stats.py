@@ -6,7 +6,8 @@ import json
 from .config import (COST_PER_MTOK, CACHE_READ_MULT, CACHE_WRITE_MULT,
                      load_settings, projects_dir, config_dir,
                      C_RESET, C_DIM, C_BOLD, C_TITLE)
-from .sessions import get_session_stats, scan_sessions, format_age, load_name
+from .sessions import (get_session_stats, scan_sessions, format_age, load_name,
+                       _is_anthropic_model, _used_omni)
 from . import sessions as _sessions
 from . import render
 
@@ -84,11 +85,17 @@ def _cost_table():
     return table
 
 
+_FREE_RATES = {'in': 0.0, 'out': 0.0}
+_GUESS_RATES = {'in': 5.0, 'out': 25.0}
+
+
 def _rates_for(model, table):
     for pattern, rates in table.items():
         if pattern in model:
             return rates, True
-    return {'in': 5.0, 'out': 25.0}, False   # unknown model: opus-tier guess
+    if not _is_anthropic_model(model):
+        return _FREE_RATES, False        # OmniRoute free-tier model: costs nothing
+    return _GUESS_RATES, False           # unknown Claude id: opus-tier guess
 
 
 def estimate_cost(usage_by_model):
@@ -211,6 +218,113 @@ def assemble_project_usage(entries, silent=True):
         rows.append(p)
     rows.sort(key=lambda p: p['cost'], reverse=True)
     return rows
+
+
+def _merge_ubm(dst, src):
+    for m, mu in (src or {}).items():
+        agg = dst.setdefault(m, {'in': 0, 'out': 0, 'cache_read': 0, 'cache_create': 0})
+        for k in agg:
+            agg[k] += mu.get(k, 0)
+
+
+def _omni_tokens(usage_by_model):
+    return sum(sum(mu.values()) for m, mu in (usage_by_model or {}).items()
+               if not _is_anthropic_model(m))
+
+
+def _omni_saved(usage_by_model):
+    """What the free-tier (non-Anthropic) tokens would have cost at Opus rates."""
+    total = 0.0
+    for m, u in (usage_by_model or {}).items():
+        if _is_anthropic_model(m):
+            continue
+        total += (u.get('in', 0) * _GUESS_RATES['in']
+                  + u.get('out', 0) * _GUESS_RATES['out']
+                  + u.get('cache_read', 0) * _GUESS_RATES['in'] * CACHE_READ_MULT
+                  + u.get('cache_create', 0) * _GUESS_RATES['in'] * CACHE_WRITE_MULT) / 1e6
+    return total
+
+
+def assemble_breakdown(entries, days=14, silent=True):
+    """Everything the home dashboard shows, from ONE transcript scan:
+    per-day tokens split by account (oldest→newest, exactly `days` entries),
+    per-account totals, per-project totals with the OmniRoute flag, and the
+    grand totals. Day/account/total rows are window-scoped; project rows span
+    all history, since that list doubles as the recency browser."""
+    from datetime import datetime, timedelta
+    from .config import all_config_dirs
+
+    now = datetime.now()
+    win = [(now - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(days - 1, -1, -1)]
+    acct_of = {d: n for n, d in all_config_dirs()}
+    day_b = {d: {'tokens': 0, 'sessions': 0, 'ubm': {}, 'accounts': {}} for d in win}
+    acct_b, proj_b = {}, {}
+
+    for item in iter_all_sessions(entries, 'DASHBOARD', silent=silent):
+        if item is None:
+            break
+        mtime, ppath, enc, _sid, stats, cfgdir = item
+        acct = acct_of.get(cfgdir) or os.path.basename(cfgdir)
+        ubm = stats.get('usage_by_model') or {}
+        tokens = sum(_sum_usage(stats).values())
+
+        p = proj_b.setdefault(enc, {
+            'path': ppath, 'name': os.path.basename(ppath) or ppath, 'enc': enc,
+            'cfgdir': cfgdir, 'accounts': [], 'sessions': 0, 'msgs': 0,
+            'tokens': 0, 'omni_tokens': 0, 'omni': False, 'mtime': mtime, 'ubm': {}})
+        p['sessions'] += 1
+        p['msgs'] += stats.get('count', 0)
+        p['tokens'] += tokens
+        p['omni_tokens'] += _omni_tokens(ubm)
+        p['omni'] = p['omni'] or _used_omni(stats)
+        p['mtime'] = max(p['mtime'], mtime)
+        if acct not in p['accounts']:
+            p['accounts'].append(acct)
+        _merge_ubm(p['ubm'], ubm)
+
+        day = _day_of(stats, mtime)
+        if day not in day_b:
+            continue                       # outside the window
+        b = day_b[day]
+        b['tokens'] += tokens
+        b['sessions'] += 1
+        b['accounts'][acct] = b['accounts'].get(acct, 0) + tokens
+        _merge_ubm(b['ubm'], ubm)
+        a = acct_b.setdefault(acct, {'account': acct, 'tokens': 0, 'sessions': 0,
+                                     'omni_tokens': 0, 'ubm': {}})
+        a['tokens'] += tokens
+        a['sessions'] += 1
+        a['omni_tokens'] += _omni_tokens(ubm)
+        _merge_ubm(a['ubm'], ubm)
+
+    day_rows = []
+    for d in win:
+        b = day_b[d]
+        day_rows.append({'date': d, 'tokens': b['tokens'], 'sessions': b['sessions'],
+                         'cost': round(estimate_cost(b['ubm'])[0], 2),
+                         'accounts': b['accounts']})
+    acct_rows = sorted(
+        ({'account': a['account'], 'tokens': a['tokens'], 'sessions': a['sessions'],
+          'omni_tokens': a['omni_tokens'],
+          'cost': round(estimate_cost(a['ubm'])[0], 2)} for a in acct_b.values()),
+        key=lambda r: r['tokens'], reverse=True)
+    proj_rows = []
+    for p in proj_b.values():
+        cost, exact = estimate_cost(p['ubm'])
+        p.pop('ubm')
+        p.update(cost=round(cost, 2), exact=exact,
+                 age=format_age(p['mtime']).strip())
+        proj_rows.append(p)
+    proj_rows.sort(key=lambda r: r['mtime'], reverse=True)
+    all_ubm = {}
+    for a in acct_b.values():
+        _merge_ubm(all_ubm, a['ubm'])
+    return {'days': day_rows, 'accounts': acct_rows, 'projects': proj_rows,
+            'totals': {'tokens': sum(r['tokens'] for r in day_rows),
+                       'cost': round(estimate_cost(all_ubm)[0], 2),
+                       'sessions': sum(r['sessions'] for r in acct_rows),
+                       'omni_tokens': sum(r['omni_tokens'] for r in acct_rows),
+                       'omni_saved': round(_omni_saved(all_ubm), 2)}}
 
 
 def assemble_session_usage(proj_folder):

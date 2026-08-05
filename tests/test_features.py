@@ -125,6 +125,14 @@ def test_estimate_cost_unknown_model_flagged():
     assert exact is False
 
 
+def test_estimate_cost_omni_is_free():
+    """OmniRoute free-tier models must not be billed at the Opus guess rate."""
+    cost, exact = estimate_cost({'big-pickle': {'in': 1_000_000, 'out': 1_000_000,
+                                                'cache_read': 0, 'cache_create': 0}})
+    assert cost == 0.0
+    assert exact is False       # still flagged: no published rate for it
+
+
 def test_fmt_tok():
     assert fmt_tok(999) == '999'
     assert fmt_tok(12_300) == '12.3k'

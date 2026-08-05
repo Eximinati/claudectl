@@ -54,6 +54,63 @@ def _seed(sb, monkeypatch):
     return actual, enc, sid
 
 
+def _write_today(path, model, tokens=1000):
+    """Transcript stamped *now*, so it lands inside the breakdown window."""
+    import datetime
+    ts = datetime.datetime.now().astimezone().isoformat()
+    rows = [{'role': 'user', 'content': 'hello there', 'timestamp': ts},
+            {'type': 'assistant',
+             'message': {'role': 'assistant', 'model': model,
+                         'usage': {'input_tokens': tokens, 'output_tokens': tokens,
+                                   'cache_read_input_tokens': 0,
+                                   'cache_creation_input_tokens': 0},
+                         'content': [{'type': 'text', 'text': 'hi'}]},
+             'timestamp': ts}]
+    with open(path, 'w', encoding='utf-8') as f:
+        for r in rows:
+            f.write(json.dumps(r) + '\n')
+
+
+def test_dashboard_breakdown_splits_accounts_and_flags_omni(monkeypatch, tmp_path):
+    """One scan feeds the whole dashboard: per-day tokens attributed per account,
+    per-project OmniRoute flag, and free-tier tokens costed at zero."""
+    sb = _fresh(monkeypatch, tmp_path)
+    second = tmp_path / 'cfg2' / 'projects'
+    second.mkdir(parents=True)
+    monkeypatch.setattr('claude_sessions.config.all_config_dirs',
+                        lambda: [('default', str(sb.cfg)), ('work', str(tmp_path / 'cfg2'))])
+    actual = str(sb.root / 'work' / 'alpha')
+    os.makedirs(actual, exist_ok=True)
+    enc = 'X--enc-alpha'
+    (sb.projects / enc).mkdir()
+    (second / enc).mkdir()
+    _write_today(sb.projects / enc / 'a.jsonl', 'claude-sonnet-4-6')
+    _write_today(second / enc / 'b.jsonl', 'big-pickle')       # OmniRoute free tier
+    for mod in ('claude_sessions.gui.find_actual_path',
+                'claude_sessions.paths.find_actual_path'):
+        monkeypatch.setattr(mod, lambda e: actual if e == enc else None)
+    srv, base = _serve(monkeypatch)
+    try:
+        _code, d = _req(f'{base}/api/dashboard')
+        bd = d['breakdown']
+        accts = {a['account']: a for a in bd['accounts']}
+        assert set(accts) == {'default', 'work'}
+        assert accts['work']['omni_tokens'] > 0
+        assert accts['work']['cost'] == 0.0            # free-tier model costs nothing
+        assert accts['default']['omni_tokens'] == 0
+        assert accts['default']['cost'] > 0
+        today = bd['days'][-1]
+        assert today['tokens'] > 0
+        assert sum(today['accounts'].values()) == today['tokens']
+        assert set(today['accounts']) == {'default', 'work'}
+        proj = bd['projects'][0]
+        assert proj['omni'] is True
+        assert sorted(proj['accounts']) == ['default', 'work']
+        assert bd['totals']['omni_saved'] > 0          # what OmniRoute avoided
+    finally:
+        srv.shutdown()
+
+
 def test_dashboard_week_is_7_and_increasing(monkeypatch, tmp_path):
     sb = _fresh(monkeypatch, tmp_path)
     _seed(sb, monkeypatch)

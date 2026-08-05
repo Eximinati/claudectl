@@ -23,11 +23,17 @@ function setLoading(on){
 }
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
 function C(){return {path:CUR.path,enc:CUR.encoded,cfgdir:CUR.primary_cfgdir};}
-/* stable per-account color: default = green, others spread on the hue wheel */
+/* stable per-account color: default = the theme's green, others take a FIXED
+   (hue, lightness) ramp — not a generated hue wheel. Each slot's lightness is
+   tuned so every colour lands in the OKLCH mid band and stays distinguishable
+   under deuteranopia on BOTH dark and light theme surfaces (checked with the
+   dataviz palette validator). A 7th+ account folds to neutral, never a new hue. */
+const ACCT_RAMP=[[265,65],[25,45],[190,38],[330,54],[70,32],[215,58]];
 function acctColor(name){
   if(!name||name==='default')return 'var(--ok)';
-  const i=Math.max(0,(ST.accounts||[]).findIndex(a=>a.name===name));
-  return `hsl(${(255+i*137)%360} 75% 66%)`;
+  const i=(ST.accounts||[]).findIndex(a=>a.name===name);
+  if(i<0||i>=ACCT_RAMP.length)return 'var(--dim)';
+  return `hsl(${ACCT_RAMP[i][0]} 80% ${ACCT_RAMP[i][1]}%)`;
 }
 function qs(o){return Object.entries(o).map(([k,v])=>k+'='+encodeURIComponent(v)).join('&');}
 
@@ -261,37 +267,39 @@ document.addEventListener('keydown',e=>{
   }
 });
 
-/* ── home: bento dashboard ── */
+/* ── home: dashboard ── */
 function fmtTok(n){
   if(n>=1e6)return (n/1e6).toFixed(1)+'M';
   if(n>=1e3)return (n/1e3).toFixed(1)+'k';
   return String(n);
 }
 function drawHome(){
-  $('#ttl').textContent='Welcome';$('#tpath').textContent='';
-  const rec=ST.recent||[],projs=ST.projects||[];
+  $('#ttl').textContent='Dashboard';$('#tpath').textContent='';
   $('#content').innerHTML=`
-    <section id="dash-usage" class="dash-card"></section>
-    <section id="dash-week" class="dash-card"></section>
-    <div class="bento">
-    <div class="card t-continue">${continueTileHtml(rec)}
-      <div id="dashRecent"></div></div>
-    <div class="card t-usage">${ic('chart')} <b>Usage</b>
-      <div class="tstat" id="tUsageStat">loading…</div>
-      <div id="dashJobs" class="dash-line"></div>
-      <div id="dashMcp" class="dash-line"></div></div>
-    <div class="card t-projects">${projectsTileHtml(projs)}</div>
-    <div class="card t-search">${ic('search')} <b>Search sessions</b>
-      <div class="fld" style="margin-top:8px"><input id="hqSearch" placeholder="Type to jump to any session…"></div>
-      <div id="hqRes"></div></div>
-    <div class="card t-actions">
-      <button class="btn" onclick="openProjectByPath()">${ic('folder')} Open project</button>
-      <button class="btn" onclick="go('settings')">${ic('settings')} Settings</button>
-      <button class="btn" onclick="go('accounts')">${ic('group')} Accounts</button>
-    </div>
+  <div class="dash">
+    <section class="card d-acct"><div class="lbl">Plan usage by account</div>
+      <div class="acct-rail" id="dashAcct"></div></section>
+    <section class="card d-chart">
+      <div class="kpi" id="dashKpi"></div>
+      <div class="tchart" id="dashChart"></div></section>
+    <section class="card d-projects">
+      <div class="lbl">Projects <span id="dashProjN" style="color:var(--dim2)"></span></div>
+      <div class="dlist" id="dashProjects"></div></section>
+    <section class="card d-continue" id="dashContinue">${continueTileHtml(ST.recent||[])}</section>
+    <section class="card d-live"><div class="lbl">System</div>
+      <div id="dashLive"></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px">
+        <button class="btn sm" onclick="openProjectByPath()">${ic('folder')} Open project</button>
+        <button class="btn sm" onclick="go('usage')">${ic('chart')} Usage</button>
+        <button class="btn sm" onclick="go('settings')">${ic('settings')} Settings</button>
+        <button class="btn sm" onclick="go('accounts')">${ic('group')} Accounts</button>
+      </div></section>
+    <section class="card d-recent"><div class="lbl">Recent sessions</div>
+      <div class="fld"><input id="hqSearch" placeholder="Search every session…"></div>
+      <div id="hqRes"></div>
+      <div class="dlist" id="dashRecent"></div></section>
   </div>`;
   bindHomeSearch();
-  loadHomeUsage();
   startDashboard();
 }
 /* ── dashboard tiles: account usage, 7-day sparkline, jobs/MCP/recent ── */
@@ -309,39 +317,75 @@ document.addEventListener('visibilitychange',()=>{_VIS=!document.hidden;if(_VIS&
 window.addEventListener('blur',()=>{_VIS=false;stopDashboard();});
 window.addEventListener('focus',()=>{_VIS=true;if(PAGE_==='home')startDashboard();});
 function setV(el,v){if(!el)return;if(el.__v!==v){el.__v=v;el.innerHTML=v;}}
-/* inline 7-day token sparkline — no deps, sequential single hue, thin mark */
-function spark(values){
-  if(!values||values.length<2)return '—';
-  const w=100,h=24,pad=2;
-  const max=Math.max(...values),min=Math.min(...values);
-  const flat=max===min;                       // guard min===max, not max===0
-  const pts=values.map((v,i)=>{
-    const x=pad+(w-2*pad)*i/(values.length-1);
-    const y=flat?h-1:h-pad-(h-2*pad)*(v-min)/(max-min);
-    return x.toFixed(1)+','+y.toFixed(1);
-  }).join(' ');
-  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="34" preserveAspectRatio="none" aria-hidden="true">
-    <polyline fill="none" stroke="var(--cyan)" stroke-width="2"
-      stroke-linejoin="round" stroke-linecap="round" points="${pts}"/></svg>`;
+/* ── daily token chart: stacked columns by account, inline SVG, no deps ── */
+let CHART_DAYS=14;
+function setChartDays(n){CHART_DAYS=n;refreshDashboard();}
+function niceMax(v){                          // round the top reference line up
+  if(v<=0)return 0;
+  const p=Math.pow(10,Math.floor(Math.log10(v)));
+  return Math.ceil(v/p*2)/2*p;
+}
+function tokenChart(days,accounts){
+  const rows=days.slice(-CHART_DAYS);
+  const names=accounts.slice(0,6).map(a=>a.account);
+  const W=720,H=176,PL=46,PB=20,PT=16;        // viewBox units; CSS scales width
+  const max=niceMax(Math.max(...rows.map(r=>r.tokens||0),0));
+  const y=v=>max?H-PB-(H-PB-PT)*v/max:H-PB;
+  const slot=(W-PL)/Math.max(rows.length,1),bw=Math.min(30,slot-4);
+  const step=rows.length<=8?1:rows.length<=16?2:3;
+  const peak=rows.reduce((b,r)=>(r.tokens||0)>(b.tokens||0)?r:b,rows[0]||{});
+  const bars=rows.map((r,i)=>{
+    const x=PL+slot*i+(slot-bw)/2;
+    let acc=0,segs='';
+    names.forEach((n,ai)=>{
+      const v=(r.accounts||{})[n]||0;if(!v)return;
+      const top=y(acc+v),bot=y(acc),h=Math.max(1,bot-top-2);   // 2px surface gap
+      acc+=v;
+      segs+=`<rect class="seg" x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}"
+        height="${h.toFixed(1)}" rx="2" fill="${acctColor(n)}"><title>${esc(r.date)} · ${esc(n)}: ${fmtTok(v)} tok</title></rect>`;
+    });
+    const other=(r.tokens||0)-acc;
+    if(other>0){const top=y(acc+other),bot=y(acc);
+      segs+=`<rect class="seg" x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}"
+        height="${Math.max(1,bot-top-2).toFixed(1)}" rx="2" fill="var(--dim2)"><title>${esc(r.date)} · other: ${fmtTok(other)} tok</title></rect>`;}
+    const today=i===rows.length-1;
+    const tick=(i%step===0||today||i===0)
+      ?`<text class="${today?'now':''}" x="${(x+bw/2).toFixed(1)}" y="${H-6}" text-anchor="middle">${today?'today':esc(r.date.slice(5))}</text>`:'';
+    const lab=(r===peak&&r.tokens)
+      ?`<text class="big" x="${(x+bw/2).toFixed(1)}" y="${(y(r.tokens)-5).toFixed(1)}" text-anchor="middle">${fmtTok(r.tokens)}</text>`:'';
+    return segs+tick+lab;
+  }).join('');
+  const legend=names.map(n=>`<span><i class="dot" style="background:${acctColor(n)}"></i>${esc(n)}</span>`).join('')
+    +`<span class="sp"></span>`
+    +[7,14,30].map(n=>`<span class="chip${CHART_DAYS===n?' on':''}" onclick="setChartDays(${n})">${n}d</span>`).join('');
+  return `<div class="lg">${legend}</div>
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Tokens per day, stacked by account">
+      <line class="gl" x1="${PL}" y1="${PT}" x2="${W}" y2="${PT}"/>
+      <text x="${PL-6}" y="${PT+3}" text-anchor="end">${max?fmtTok(max):''}</text>
+      <line class="gl" x1="${PL}" y1="${H-PB}" x2="${W}" y2="${H-PB}"/>
+      <text x="${PL-6}" y="${H-PB+3}" text-anchor="end">0</text>
+      ${bars}
+      ${max?'':`<text class="none" x="${W/2}" y="${(H-PB+PT)/2}" text-anchor="middle">No usage in this range yet</text>`}
+    </svg>`;
 }
 async function refreshDashboard(){
   if(document.hidden||!_VIS)return;       // hidden (incl. Qt minimized via blur)
   let d=null,plan=null;
   try{[d,plan]=await Promise.all([api('/api/dashboard'),api('/api/usage/plan')]);}
   catch(e){d=null;}
-  const omniTag='<span class="tag" style="color:var(--violet);border-color:currentColor;background:transparent" title="Executed via OmniRoute (free-tier model)">omni</span>';
   if(d){
-    setV($('#dash-week'),`<div class="dlbl">Tokens · last 7 days</div>`+
-      spark((d.week||[]).map(x=>x.tokens||0)));
-    const jobs=(d.jobs||[]).map(j=>j.kind+':'+j.status+' '+j.elapsed+'s').join(' · ');
-    setV($('#dashJobs'),`<div class="dlbl" style="margin-top:8px">Jobs</div>`+
-      `<div class="drow">${jobs?esc(jobs):'none'}</div>`);
-    const mcp=(d.mcp||[]).map(m=>`<span class="chip" style="${m.running?'color:var(--ok)':'color:var(--dim2)'}">${esc(m.name)}</span>`).join(' ');
-    setV($('#dashMcp'),mcp?`<div class="dlbl" style="margin-top:8px">MCP</div><div class="drow">${mcp}</div>`:'');
-    setV($('#dashRecent'),(d.recent||[]).map(r=>`
+    const bd=d.breakdown||{days:[],accounts:[],projects:[],totals:{}};
+    setV($('#dashChart'),tokenChart(bd.days||[],bd.accounts||[]));
+    setV($('#dashKpi'),kpiHtml(d,bd));
+    setV($('#dashProjects'),projectsListHtml(bd.projects||[]));
+    setV($('#dashProjN'),`· ${(bd.projects||[]).length}`);
+    setV($('#dashLive'),liveHtml(d));
+    setV($('#dashRecent'),(d.recent||[]).map((r,i)=>`
       <div class="hrow"><div class="info"><b>${esc(r.project)}</b>
         <span style="color:var(--dim)">${esc(r.title)} · ${r.msgs} msgs</span></div>
-        ${r.omni?omniTag:''}</div>`).join(''));
+        ${r.omni?OMNI_TAG:''}
+        <span class="num">${esc(r.age||'')}</span>
+        <button class="btn sm" onclick="dashResume(${i})">Resume</button></div>`).join(''));
     const hc=$('#hdrChips');
     if(hc){                                  // header chips: failover + mcp
       const fov=d.failover&&d.failover.running
@@ -350,26 +394,50 @@ async function refreshDashboard(){
       const all=(d.mcp||[]),up=all.filter(m=>m.running).length;
       setV(hc, fov+`<span class="hchip${up?' ok':''}" title="MCP servers">mcp ${up}/${all.length}</span>`);
     }
+    DASH_RECENT=d.recent||[];
   }else{
-    setV($('#dash-week'),'<div style="color:var(--dim2)">offline</div>');
-    setV($('#dashJobs'),'');
-    setV($('#dashMcp'),'');
-    setV($('#dashRecent'),'');
+    setV($('#dashLive'),'<div style="color:var(--dim2)">offline</div>');
   }
-  if(plan)setV($('#dash-usage'),`<div class="dlbl">Plan usage by account</div>`+
-    (plan.accounts||[]).map(usageRow).join('')||'<div style="color:var(--dim2)">—</div>');
-  else setV($('#dash-usage'),'<div style="color:var(--dim2)">offline</div>');
+  if(plan)setV($('#dashAcct'),(plan.accounts||[]).map(acctCard).join('')
+    ||'<div style="color:var(--dim2)">no accounts configured</div>');
+  else setV($('#dashAcct'),'<div style="color:var(--dim2)">offline</div>');
+}
+const OMNI_TAG='<span class="tag" style="color:var(--violet);border-color:currentColor;background:transparent" title="Ran on OmniRoute (free-tier model)">omni</span>';
+let DASH_RECENT=[];
+function dashResume(i){
+  const r=DASH_RECENT[i];if(!r)return;
+  const [model,effort]=defaultModelEffort();
+  doQuickLaunch({path:r.path,enc:r.encoded,choice:'resume:'+r.sid,cfgdir:r.cfgdir},model,effort);
+}
+function kpiHtml(d,bd){
+  const t=d.today||{},tot=bd.totals||{};
+  const wk=(bd.days||[]).slice(-7);
+  const wtok=wk.reduce((a,r)=>a+(r.tokens||0),0),wcost=wk.reduce((a,r)=>a+(r.cost||0),0);
+  const stat=(v,l,title)=>`<div class="k" title="${esc(title||l)}"><div class="kv2">${v}</div><div class="kl">${esc(l)}</div></div>`;
+  const age=d.generated_at?Math.max(0,Math.round(Date.now()/1000-d.generated_at)):null;
+  return stat(fmtTok(t.tokens||0),'today tok')
+    +stat(fmtTok(wtok),'7d tok')
+    +stat('$'+wcost.toFixed(2),'7d est. cost','API-rate estimate, cache-aware; OmniRoute models count as free')
+    +stat(String(t.sessions||0),'sessions today')
+    +stat(fmtTok(tot.omni_tokens||0),'omni tok',`free-tier tokens over ${d.days||30}d — about $${(tot.omni_saved||0).toFixed(2)} of Opus-rate work`)
+    +`<span class="sp"></span>`
+    +`<span class="fresh">${age==null?'':'updated '+age+'s ago'}</span>`;
+}
+function liveHtml(d){
+  const jobs=(d.jobs||[]).map(j=>`<div class="drow"><span class="pulse"></span> ${esc(j.kind)} · ${esc(j.status)} · ${j.elapsed}s</div>`).join('');
+  const all=d.mcp||[],up=all.filter(m=>m.running).length;
+  const mcp=all.map(m=>`<span class="chip" style="${m.running?'color:var(--ok)':'color:var(--dim2)'}">${esc(m.name)}</span>`).join('');
+  const fov=d.failover&&d.failover.running
+    ?`<span style="color:var(--ok)">failover proxy on${d.failover.port?' :'+d.failover.port:''}</span>`
+    :'<span style="color:var(--dim2)">failover proxy off</span>';
+  return (jobs||`<div class="drow">no jobs running</div>`)
+    +`<div class="drow" style="margin-top:6px">${fov} · <span style="color:${up===all.length?'var(--ok)':'var(--warn)'}">mcp ${up}/${all.length}</span></div>`
+    +(mcp?`<div class="drow" style="margin-top:4px">${mcp}</div>`:'');
 }
 function continueTileHtml(rec){
   if(!rec.length)return `<b>Welcome</b><p style="color:var(--dim);margin-top:8px">
     Open a project on the left to get started.</p>`;
   const r=rec[0];
-  const rest=rec.slice(1).map((x,i)=>`
-    <div class="hrow">
-      <div class="info"><b>${esc(x.project)}</b> <span style="color:var(--dim)">${esc(x.name)}</span></div>
-      <span style="color:var(--dim);font-size:12px">${x.age?esc(x.age)+' ago':''}</span>
-      <button class="btn sm" onclick="homeResume(${i+1})">Resume</button>
-    </div>`).join('');
   return `<div class="lbl">Continue where you left off</div>
     <div class="hn">${esc(r.project)}</div>
     <div class="hs">${esc(r.name)}</div>
@@ -383,8 +451,7 @@ function continueTileHtml(rec){
       <div class="frontends"><span>Cheap &amp; fast</span><span>Max power</span></div>
       <div class="frontread" id="hqFrontRead"></div>
       <button class="btn sm pri" onclick="homeResumeTuned()" style="margin-top:8px">Resume with these settings →</button>
-    </div>
-    ${rest?`<div class="lbl" style="margin-top:16px">Other recent sessions</div>${rest}`:''}`;
+    </div>`;
 }
 function homeResume(i){
   const r=ST.recent[i];
@@ -417,22 +484,52 @@ function homeResumeTuned(){
   doQuickLaunch({path:r.path,enc:r.encoded,choice:'resume:'+r.sid,cfgdir:r.cfgdir},row[0],row[1]);
   toggleHomeTune();
 }
-function projectsTileHtml(projs){
-  const n=projs.length,mem=projs.filter(p=>p.auto_memory).length,latest=projs[0];
-  return `<div class="lbl">Projects</div>
-    <div class="tstat">${n} total <span style="color:var(--dim);font-size:12px;font-weight:400">· ${mem} with auto-memory</span></div>
-    ${latest?`<div style="margin-top:10px;font-size:12px;color:var(--dim)">Most recent</div>
-      <div class="hlink" onclick="openProject(ST.projects[0])">${esc(latest.name)}</div>`:''}`;
+/* one account card in the home rail — a degraded account is NAMED, never '—' */
+function acctCard(a){
+  const wins=a.windows||[],ok=a.status==='ok';
+  const bad=a.status==='expired'||a.status==='no_creds';
+  const cls='acct-card'+(bad?' bad':'')+(!ok&&wins.length?' stale':'');
+  const meter=(w,sub)=>`<div class="arow${sub?' sub':''}">
+    <span class="al" title="${esc(w.label)}">${esc(w.label)}</span>
+    <span class="bar${w.pct>=80?' hot':''}"><i style="width:${Math.min(100,w.pct)}%"></i></span>
+    <span class="ap"${w.pct>=80?' style="color:var(--err)"':''}>${Math.round(w.pct)}%</span>
+    ${w.resets?`<span class="rs">resets ${esc(w.resets)}</span>`:''}</div>`;
+  const known=['session','weekly'];
+  const bars=known.filter(k=>wins.some(w=>w.label===k)).map(k=>meter(wins.find(w=>w.label===k))).join('')
+    +wins.filter(w=>!known.includes(w.label)).map(w=>meter(w,true)).join('');
+  const skel=`<div class="arow"><span class="al">session</span><span class="bar shimmer"></span><span class="ap"></span></div>
+    <div class="arow"><span class="al">weekly</span><span class="bar shimmer"></span><span class="ap"></span></div>`;
+  let note='';
+  if(bad)note=`<div class="st err">${esc(a.status_text||'not logged in')}
+    <span class="hlink" onclick="acctReconnect('${esc(a.account)}','${esc((a.dir||'').replace(/\\/g,'\\\\'))}')">Reconnect ›</span></div>`;
+  else if(a.status==='rate_limited')note=`<div class="st warn">rate-limited${a.retry_in?' · retry in '+a.retry_in+'s':''}</div>`;
+  else if(a.status==='error')note=`<div class="st warn">${esc(a.status_text||'usage unavailable')}</div>`;
+  else if(a.stale_secs!=null&&a.stale_secs>600)note=`<div class="st dim">as of ${Math.round(a.stale_secs/60)}m ago</div>`;
+  return `<div class="${cls}">
+    <div class="ah"><span class="dot" style="background:${acctColor(a.account)}"></span>
+      <b title="${esc(a.email||a.account)}">${esc(a.email||a.account)}</b>
+      ${a.plan||a.tier?`<span class="plan">${esc(a.plan||a.tier)}</span>`:''}</div>
+    ${bars||(a.status==='pending'?skel:'')}
+    ${a.spend?`<div class="st dim">credits ${esc(a.spend.currency)} ${a.spend.used.toFixed(2)} · ${Math.round(a.spend.pct)}%</div>`:''}
+    ${note}</div>`;
 }
-async function loadHomeUsage(){
-  try{
-    const [daily,projects]=await Promise.all([
-      api('/api/usage/daily?days=7'),api('/api/usage/projects')]);
-    const tok=(daily.days||[]).reduce((a,d)=>a+(d.tokens||0),0);
-    const cost=(projects.projects||[]).reduce((a,p)=>a+(p.cost||0),0);
-    const el=$('#tUsageStat');if(!el)return;
-    el.innerHTML=`${fmtTok(tok)} tok <span style="color:var(--dim);font-size:12px;font-weight:400">· $${cost.toFixed(2)} · 7d</span>`;
-  }catch(_e){const el=$('#tUsageStat');if(el)el.textContent='—';}
+async function acctReconnect(name,dir){
+  const r=await post('/api/accounts/terminal',{name:name,dir:dir});
+  toast(r.ok?'Terminal opened — run /login there':'Failed: '+(r.error||''),r.ok?'ok':'err');
+}
+/* recency-sorted project list that fills the card (scrolls past ~8 rows) */
+function projectsListHtml(projs){
+  if(!projs.length)return '<div style="color:var(--dim2)">no projects yet</div>';
+  return projs.map(p=>`<div class="hrow" style="cursor:pointer" onclick="openProjectByEnc('${esc(p.enc)}')">
+    <div class="info"><b>${esc(p.name)}</b>
+      ${(p.accounts||[]).map(a=>`<span class="dot" title="${esc(a)}" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${acctColor(a)}"></span>`).join('')}
+      ${p.omni?OMNI_TAG:''}</div>
+    <span class="num">${fmtTok(p.tokens||0)} · $${(p.cost||0).toFixed(2)}</span>
+    <span class="num">${esc(p.age||'')}</span></div>`).join('');
+}
+function openProjectByEnc(enc){
+  const p=(ST.projects||[]).find(x=>x.encoded===enc);
+  if(p)openProject(p);else toast('Project not found','err');
 }
 /* ── home search: shares the SIDX cache with pgSearch() below ── */
 let PENDING_SEARCH_Q='';
@@ -443,7 +540,8 @@ function bindHomeSearch(){
 }
 async function drawHomeSearchResults(){
   const q=($('#hqSearch').value||'').toLowerCase().trim();
-  const res=$('#hqRes');if(!res)return;
+  const res=$('#hqRes'),list=$('#dashRecent');if(!res)return;
+  if(list)list.style.display=q?'none':'';       // search replaces the recent list
   if(!q){res.innerHTML='';return;}
   if(!SIDX){const d=await api('/api/search-index');SIDX=d.rows||[];}
   const m=SIDX.filter(r=>q.split(/\s+/).every(w=>r.haystack.includes(w)));

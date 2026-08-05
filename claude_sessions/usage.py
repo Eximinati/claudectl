@@ -22,40 +22,78 @@ _RETRY_BASE  = 30    # first backoff after a failed fetch; doubles each fail
 _RETRY_MAX   = 600   # backoff ceiling
 _MAX_FAILS   = 3     # give up (blank line) only after this many failures with no data yet
 
+STATUS_TEXT = {
+    'pending':      'checking…',
+    'expired':      'session expired — run claude login for this account',
+    'rate_limited': 'rate-limited by the API',
+    'no_creds':     'not logged in',
+    'error':        'usage unavailable',
+}
+
 _lock       = threading.Lock()
 _started    = False
 _ready      = False
 _data       = None   # active account's usage (back-compat: single-account + stats)
-_acct_state = {}     # cfgdir -> {'name','email','data'} for every configured account
-_retry_after = 0     # seconds requested by a 429 Retry-After header (0 = none)
+_acct_state = {}     # cfgdir -> {'name','email','data','status',...} per account
 
 
-def _read_token(cfgdir=None):
+def _creds(cfgdir=None):
+    """The account's stored OAuth block, read-only. claudectl NEVER writes this
+    file: refreshing an access token can rotate the refresh token, and a bad
+    write-back would log the account out of Claude Code itself."""
     try:
         p = os.path.join(cfgdir or _c.config_dir, '.credentials.json')
         with open(p, 'r', encoding='utf-8') as f:
-            d = json.load(f)
-        return (d.get('claudeAiOauth') or {}).get('accessToken')
+            return json.load(f).get('claudeAiOauth') or {}
     except Exception:
-        return None
+        return {}
+
+
+def _read_token(cfgdir=None):
+    return _creds(cfgdir).get('accessToken')
+
+
+def _token_expired(cfgdir=None):
+    """True when the stored access token is past its expiry — an idle account
+    whose token Claude Code hasn't refreshed. Saves a doomed HTTP call."""
+    exp = _creds(cfgdir).get('expiresAt')
+    try:
+        return bool(exp) and float(exp) / 1000.0 <= time.time()
+    except (TypeError, ValueError):
+        return False
 
 
 def _account_email(cfgdir=None):
     """Best-effort account email/label from the account's stored credentials."""
-    for fn in ('.credentials.json',):
-        try:
-            with open(os.path.join(cfgdir or _c.config_dir, fn), encoding='utf-8') as f:
-                d = json.load(f)
-            oauth = d.get('claudeAiOauth') or {}
-            acc = oauth.get('account') or {}
-            for k in ('email_address', 'emailAddress', 'email'):
-                if oauth.get(k):
-                    return oauth[k]
-                if acc.get(k):
-                    return acc[k]
-        except Exception:
-            continue
+    oauth = _creds(cfgdir)
+    acc = oauth.get('account') or {}
+    for k in ('email_address', 'emailAddress', 'email'):
+        if oauth.get(k):
+            return oauth[k]
+        if acc.get(k):
+            return acc[k]
     return ''
+
+
+def account_meta(cfgdir=None):
+    """Plan labels shown next to the meters ('Max 20x')."""
+    oauth = _creds(cfgdir)
+    return {'plan': oauth.get('subscriptionType') or '',
+            'tier': oauth.get('rateLimitTier') or ''}
+
+
+def _spend_of(data):
+    """Pay-as-you-go credit spend, when the account has it enabled."""
+    sp = (data or {}).get('spend') or {}
+    if not sp.get('enabled'):
+        return None
+    used = sp.get('used') or {}
+    try:
+        amount = (used.get('amount_minor') or 0) / (10 ** (used.get('exponent') or 2))
+    except (TypeError, ValueError):
+        amount = 0.0
+    return {'used': round(amount, 2), 'pct': sp.get('percent') or 0,
+            'currency': used.get('currency') or 'USD'}
 
 
 def _targets():
@@ -77,69 +115,87 @@ def _targets():
 
 
 def fetch_usage(cfgdir=None):
-    """GET the OAuth usage endpoint for an account. Returns parsed dict or None."""
+    """GET the OAuth usage endpoint for an account.
+    Returns (status, data|None) where status is one of
+    'ok' | 'expired' | 'rate_limited' | 'no_creds' | 'error', plus the seconds
+    a 429 asked us to wait (0 when it didn't)."""
     token = _read_token(cfgdir)
     if not token:
-        return None
+        return 'no_creds', None, 0
+    if _token_expired(cfgdir):
+        return 'expired', None, 0       # doomed call — skip it entirely
     req = urllib.request.Request(USAGE_URL, headers={
         'Authorization': f'Bearer {token}',
         'anthropic-beta': 'oauth-2025-04-20',
         'Content-Type': 'application/json',
         'User-Agent': 'claudectl',
     })
-    global _retry_after
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
-            _retry_after = 0
-            return json.loads(r.read().decode('utf-8', 'replace'))
+            return 'ok', json.loads(r.read().decode('utf-8', 'replace')), 0
     except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return 'expired', None, 0
         if e.code == 429:                      # honor Retry-After; don't hammer
             try:
-                _retry_after = max(_retry_after, int(e.headers.get('Retry-After') or 0))
+                return 'rate_limited', None, int(e.headers.get('Retry-After') or 0)
             except (TypeError, ValueError):
-                _retry_after = 0
-        return None
+                return 'rate_limited', None, 0
+        return 'error', None, 0
     except Exception:
-        return None
+        return 'error', None, 0
+
+
+def _poll_account(name, d, active):
+    """One account: fetch, record status, keep the last good data. Returns True
+    on a live fetch. Per-account backoff, so a dead account can't slow the rest."""
+    global _data, _ready
+    now = time.time()
+    with _lock:
+        st = _acct_state.setdefault(d, {'status': 'pending'})
+        if st.get('retry_at', 0) > now:
+            return False
+    try:
+        status, data, retry_after = fetch_usage(d)
+    except Exception:
+        _c.log.exception('usage fetch failed')
+        status, data, retry_after = 'error', None, 0
+    with _lock:
+        st = _acct_state.setdefault(d, {})
+        st['name'] = name
+        st['status'] = status
+        st.update(account_meta(d))
+        if not st.get('email'):
+            st['email'] = _account_email(d)
+        if status == 'ok':
+            st['data'] = data                      # never clobbered by a failure
+            st['spend'] = _spend_of(data)
+            st['fetched_at'] = now
+            st.pop('retry_at', None)
+            if os.path.normcase(os.path.abspath(d)) == active:
+                _data = data
+        else:
+            back = max(retry_after, _RETRY_BASE if status != 'expired' else _REFRESH_SEC)
+            st['retry_at'] = now + min(back, _RETRY_MAX)
+        _ready = True
+    return status == 'ok'
 
 
 def _background():
-    """Poll every configured account forever: refresh live values, retry
-    transient failures, never clobber good data with a None. Updates per-account
-    state + the active account's `_data` (back-compat)."""
-    global _data, _ready
+    """Poll every configured account forever, recording each one's health."""
     fails = 0
     while True:
-        targets = _targets()
         active = os.path.normcase(os.path.abspath(_c.config_dir))
         any_ok = False
-        for name, d in targets:
-            try:
-                data = fetch_usage(d)
-            except Exception:
-                _c.log.exception('usage fetch failed')
-                data = None
-            with _lock:
-                st = _acct_state.setdefault(d, {})
-                st['name'] = name
-                if data is not None:
-                    st['data'] = data
-                    if not st.get('email'):
-                        st['email'] = _account_email(d)
-                    any_ok = True
-                    if os.path.normcase(os.path.abspath(d)) == active:
-                        _data = data
-                _ready = True
+        for name, d in _targets():
+            any_ok = _poll_account(name, d, active) or any_ok
             time.sleep(1)            # small gap between accounts (avoid a burst)
-        with _lock:
-            if not any_ok:
-                fails += 1
         if any_ok:
             fails = 0
             sleep = _REFRESH_SEC
-        else:                        # exponential backoff, never faster than a 429 Retry-After
+        else:                        # nothing live at all — exponential backoff
+            fails += 1
             sleep = min(_RETRY_BASE * (2 ** max(0, fails - 1)), _RETRY_MAX)
-            sleep = max(sleep, _retry_after)
         time.sleep(sleep)
 
 
@@ -153,21 +209,14 @@ def _ensure_started():
 
 
 def refresh_now():
-    """One synchronous fetch pass over every account (GUI refresh button)."""
+    """One synchronous fetch pass over every account (GUI refresh button) —
+    ignores the per-account backoff, the user asked explicitly."""
     _ensure_started()
+    active = os.path.normcase(os.path.abspath(_c.config_dir))
     for name, d in _targets():
-        try:
-            data = fetch_usage(d)
-        except Exception:
-            data = None
-        if data is None:
-            continue
         with _lock:
-            st = _acct_state.setdefault(d, {})
-            st['name'] = name
-            st['data'] = data
-            if not st.get('email'):
-                st['email'] = _account_email(d)
+            _acct_state.setdefault(d, {}).pop('retry_at', None)
+        _poll_account(name, d, active)
 
 
 def _fmt_reset(iso):
@@ -269,10 +318,14 @@ def _account_grid(accts):
     the bar, %, and reset time, padded to a fixed width so columns line up."""
     from . import render
     rows = []                       # (label, {col: (pct, reset)})
+    notes = []                      # accounts with no data — named, never silent
     seen_cols, cols = set(), []
-    for name, email, adata in accts:
+    for name, email, adata, status in accts:
         w = _extract_windows(adata)
         if not w:
+            if status and status != 'ok':
+                notes.append(f"  {_c.C_DIM}{email or name}: "
+                             f"{_c.C_WARN}{STATUS_TEXT.get(status, status)}{_c.C_RESET}")
             continue
         d = {}
         for lbl, pct, reset in w:
@@ -282,7 +335,7 @@ def _account_grid(accts):
                 cols.append(lbl)
         rows.append((email or name or '?', d))
     if not rows:
-        return ''
+        return '\n'.join(notes)
     cols = [c for c in cols if any(r[1].get(c, (0,))[0] for r in rows)]
     if not cols:
         cols = list(seen_cols)[:1]
@@ -306,7 +359,7 @@ def _account_grid(accts):
                 cells.append(' ' * _CELL_W)
         out.append(f"  {_c.C_TITLE}{render.trunc(label, name_w):<{name_w}}{_c.C_RESET}  "
                    + '  '.join(cells))
-    return '\n'.join(out)
+    return '\n'.join(out + notes)
 
 
 def _one_account_line(windows, prefix=''):
@@ -332,8 +385,9 @@ def usage_status_line():
     with _lock:
         ready = _ready
         data = _data
-        accts = [(v.get('name', ''), v.get('email', ''), v.get('data'))
-                 for v in _acct_state.values() if v.get('data')]
+        accts = [(v.get('name', ''), v.get('email', ''), v.get('data'),
+                  v.get('status', '')) for v in _acct_state.values()
+                 if v.get('data') or v.get('status') not in (None, '', 'ok')]
     if not ready:
         return f'  {_c.C_DIM}Plan usage: checking...{_c.C_RESET}'
 
