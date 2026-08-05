@@ -289,7 +289,7 @@ def _claude_stdin(prompt, cwd, timeout=EXTRACT_TIMEOUT,
     exe = get_claude_exe()
     if not exe:
         return ''
-    args = [exe, '-p', '--disallowedTools', 'Write,Edit,NotebookEdit,Bash']
+    args = [exe, '-p', '--max-turns', '20', '--disallowedTools', 'Write,Edit,NotebookEdit,Bash']
     m = extract_model() if model is None else (model or '').strip()
     if m:
         args += ['--model', m]

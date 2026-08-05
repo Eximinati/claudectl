@@ -119,6 +119,11 @@ def start_job(label, fn, inputs=None):
            'cancel_event': threading.Event(), 'procs': []}
     with _JOBS_LOCK:
         _JOBS[jid] = job
+        terminal = [j for j in _JOBS.values() if j['status'] != 'running']
+        if len(terminal) > 50:                 # keep newest 50 terminal, drop rest
+            terminal.sort(key=lambda j: j['started'], reverse=True)
+            for j in terminal[50:]:
+                _JOBS.pop(j['id'], None)
 
     def _run():
         from . import memory
@@ -514,14 +519,22 @@ def api_usage_plan(q, body):
     out = []
     with usage_mod._lock:
         state = dict(usage_mod._acct_state)
+    # every configured account must appear even before async data lands
+    names = {d: n for n, d in usage_mod._targets()}
+    seen = set()
     for d, st in state.items():
+        seen.add(d)
         data = st.get('data')
         wins = usage_mod._extract_windows(data) if data else []
-        out.append({'account': st.get('name', os.path.basename(d)),
+        out.append({'account': st.get('name') or names.get(d, os.path.basename(d)),
                     'email': st.get('email', ''),
                     'windows': [{'label': l, 'pct': p,
                                  'resets': usage_mod._fmt_reset(r) if r else ''}
                                 for l, p, r in wins]})
+    for d, name in names.items():
+        if d in seen:
+            continue
+        out.append({'account': name, 'email': '', 'windows': []})
     return {'accounts': out}
 
 
@@ -529,6 +542,82 @@ def api_search_index(q, body):
     from .search import build_search_index
     rows, partial = build_search_index(_entries())
     return {'rows': rows, 'partial': partial}
+
+
+# ── home dashboard ───────────────────────────────────────────
+
+_DASH_TTL = 10
+_dash_cache = None
+_dash_cached_at = 0.0
+
+
+def api_dashboard(q, body):
+    """Home-screen aggregate: today/week usage, live jobs, MCP status,
+    cross-account recent sessions, failover proxy state. Cached _DASH_TTL
+    seconds so MCP status (subprocess-spawning) isn't recomputed every poll."""
+    global _dash_cache, _dash_cached_at
+    now = time.monotonic()
+    if _dash_cache is not None and now - _dash_cached_at < _DASH_TTL:
+        return _dash_cache
+    from datetime import datetime, timedelta
+    from .stats import usage_by_day
+    from .sessions import load_recent_sessions, get_session_stats, load_name
+    from . import mcp as mcp_mod
+    from . import failover as fov
+    from .gui import _used_omni
+
+    rows = list(usage_by_day(_entries(), days=7, silent=True))
+    by_day = {d: (sum(u.values()), round(c, 2), n) for d, u, c, n in rows}
+    tkey = datetime.now().strftime('%Y-%m-%d')
+    tk, tc, ts = by_day.get(tkey, (0, 0.0, 0))
+    week = []
+    for i in range(6, -1, -1):                     # exactly 7, oldest→newest
+        d = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
+        w_tok, w_cost, _n = by_day.get(d, (0, 0.0, 0))
+        week.append({'date': d, 'tokens': w_tok, 'cost': w_cost})
+
+    with _JOBS_LOCK:
+        items = list(_JOBS.items())
+    jobs = []
+    for jid, _jd in items:
+        st = job_status(jid)
+        if st:
+            jobs.append({'id': st['id'], 'kind': st.get('label', ''),
+                         'status': st.get('status', ''),
+                         'elapsed': st.get('elapsed', 0)})
+
+    mcp_rows = [{'name': n, 'running': s == 'ok'}
+                for n, s in mcp_mod.get_mcp_status()]
+
+    recent = []
+    for r in load_recent_sessions(5):
+        pf = os.path.join(r.get('cfgdir') or _c.config_dir, 'projects',
+                          r.get('encoded_name', ''))
+        jsonl = os.path.join(pf, f"{r['session_id']}.jsonl")
+        st = get_session_stats(jsonl)
+        recent.append({'id': r['session_id'],
+                       'project': os.path.basename(r['project_path']) or r['project_path'],
+                       'title': (load_name(pf, r['session_id']) or st.get('title')
+                                 or r.get('preview') or r['session_id'][:8]),
+                       'msgs': st.get('count', 0),
+                       'mtime': int(st.get('last_ts') or r.get('timestamp') or 0),
+                       'omni': bool(_used_omni(st))})
+
+    f_running, f_port = False, None
+    try:
+        lock = fov._read_lock()
+        if lock and fov._pid_alive(lock.get('pid')):
+            f_running, f_port = True, lock.get('port')
+    except Exception:
+        pass
+
+    _dash_cache = {'today': {'tokens': tk, 'cost': tc, 'sessions': ts},
+                   'week': week, 'jobs': jobs, 'mcp': mcp_rows,
+                   'recent': recent,
+                   'failover': {'running': f_running, 'port': f_port},
+                   'generated_at': int(time.time())}
+    _dash_cached_at = time.monotonic()
+    return _dash_cache
 
 
 # ── managers: hooks / agents / mcp / accounts ────────────────
@@ -1616,6 +1705,7 @@ GET_ROUTES = {
     '/api/usage/project': api_usage_project,
     '/api/usage/plan': api_usage_plan,
     '/api/search-index': api_search_index,
+    '/api/dashboard': api_dashboard,
     '/api/hooks': api_hooks_get,
     '/api/agents/library': api_agents_library,
     '/api/agents/read': api_agent_read,

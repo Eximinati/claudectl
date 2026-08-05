@@ -7,6 +7,7 @@ const post=(p,body)=>api(p,{method:'POST',body:JSON.stringify(body||{})});
 
 let ST=null, CUR=null, TAB='sessions', PAGE_='home', PENDING=null, SESS=[];
 let ACTIVE_MEM=new Set();   // project paths whose memory is refreshing right now
+let _VIS=true;              // QtWebEngine stays 'visible' when minimized — blur toggles this
 
 function toast(msg,cls){const w=$('#toast-wrap');const t=document.createElement('div');
   t.className='toast '+(cls||'');t.textContent=msg;w.appendChild(t);
@@ -125,6 +126,7 @@ async function runJob(kind,params,onDone){
     await post(`/api/job/${jid}/cancel`);
   };
   const poll=async()=>{
+    if(document.hidden||!_VIS){setTimeout(poll,600);return;}   // keep chain alive
     const st=await api(`/api/job/${jid}`);
     if(!st){$('#jovl').classList.remove('show');return;}
     if(st.label!==__plLabel){__plLabel=st.label;$('#jLabel').textContent=st.label;}
@@ -194,6 +196,7 @@ function drawProjects(){
 
 /* ── router ── */
 function go(page){PAGE_=page;CUR=page==='project'?CUR:null;
+  stopDashboard();   // a detached home view never keeps fetching/writing
   applyTheme(ST.theme);   // drop any unsaved theme preview
   render();}
 function render(){
@@ -206,6 +209,58 @@ function render(){
   else drawPage(PAGE_);
 }
 
+/* ── command palette (Ctrl+K) — navigates the real NAV/TABS route list ── */
+let PAL_EL=null;
+function palette(){
+  if(PAL_EL)return;
+  const entries=[['home','Home'],...NAV.map(([id,,l])=>[id,l]),
+    ...(CUR?TABS.map(([id,l])=>[id,l]):[])];
+  const ov=document.createElement('div');
+  ov.className='palette';
+  ov.innerHTML=`<div class="pbox"><input id="pInp" placeholder="Jump to…"
+    autocomplete="off" spellcheck="false"><div id="pList"></div></div>`;
+  ov.addEventListener('mousedown',e=>{if(e.target===ov)closePalette();});
+  document.body.appendChild(ov);
+  PAL_EL=ov;
+  const inp=$('#pInp'),list=$('#pList');
+  let rows=[],sel=0;
+  const draw=()=>{
+    const q=(inp.value||'').toLowerCase();
+    rows=entries.filter(([id,l])=>!q||l.toLowerCase().includes(q));
+    sel=Math.min(sel,Math.max(0,rows.length-1));
+    list.innerHTML=rows.map(([id,l],i)=>
+      `<div class="prow${i===sel?' sel':''}" data-id="${id}">${esc(l)}</div>`).join('')
+      ||'<div class="pempty">no match</div>';
+    const el=list.children[sel];if(el)el.scrollIntoView({block:'nearest'});
+  };
+  const pick=()=>{
+    const r=rows[sel];if(!r)return;
+    closePalette();
+    const id=r[0];
+    if(id==='home')go('home');
+    else if(NAV.some(n=>n[0]===id))go(id);
+    else{TAB=id;go('project');}              // project tab
+  };
+  inp.addEventListener('input',()=>{sel=0;draw();});
+  inp.addEventListener('keydown',e=>{
+    if(e.key==='ArrowDown'){e.preventDefault();sel=Math.min(rows.length-1,sel+1);draw();}
+    else if(e.key==='ArrowUp'){e.preventDefault();sel=Math.max(0,sel-1);draw();}
+    else if(e.key==='Enter'){e.preventDefault();pick();}
+    else if(e.key==='Escape'){e.preventDefault();closePalette();}
+  });
+  draw();
+  inp.focus();
+}
+function closePalette(){const el=PAL_EL;PAL_EL=null;if(el)el.remove();}
+document.addEventListener('keydown',e=>{
+  if((e.ctrlKey||e.metaKey)&&(e.key==='k'||e.key==='K')){
+    const t=document.activeElement;
+    if(t&&(t.tagName==='TEXTAREA'||t.tagName==='INPUT'))return;
+    e.preventDefault();                    // stops the browser find bar
+    if(PAL_EL)closePalette();else palette();
+  }
+});
+
 /* ── home: bento dashboard ── */
 function fmtTok(n){
   if(n>=1e6)return (n/1e6).toFixed(1)+'M';
@@ -215,10 +270,16 @@ function fmtTok(n){
 function drawHome(){
   $('#ttl').textContent='Welcome';$('#tpath').textContent='';
   const rec=ST.recent||[],projs=ST.projects||[];
-  $('#content').innerHTML=`<div class="bento">
-    <div class="card t-continue">${continueTileHtml(rec)}</div>
+  $('#content').innerHTML=`
+    <section id="dash-usage" class="dash-card"></section>
+    <section id="dash-week" class="dash-card"></section>
+    <div class="bento">
+    <div class="card t-continue">${continueTileHtml(rec)}
+      <div id="dashRecent"></div></div>
     <div class="card t-usage">${ic('chart')} <b>Usage</b>
-      <div class="tstat" id="tUsageStat">loading…</div></div>
+      <div class="tstat" id="tUsageStat">loading…</div>
+      <div id="dashJobs" class="dash-line"></div>
+      <div id="dashMcp" class="dash-line"></div></div>
     <div class="card t-projects">${projectsTileHtml(projs)}</div>
     <div class="card t-search">${ic('search')} <b>Search sessions</b>
       <div class="fld" style="margin-top:8px"><input id="hqSearch" placeholder="Type to jump to any session…"></div>
@@ -231,6 +292,73 @@ function drawHome(){
   </div>`;
   bindHomeSearch();
   loadHomeUsage();
+  startDashboard();
+}
+/* ── dashboard tiles: account usage, 7-day sparkline, jobs/MCP/recent ── */
+let DASH_TIMER=null;
+function startDashboard(){
+  stopDashboard();
+  refreshDashboard();
+  DASH_TIMER=setInterval(refreshDashboard,5000);
+}
+function stopDashboard(){
+  if(DASH_TIMER){clearInterval(DASH_TIMER);DASH_TIMER=null;}
+}
+/* QtWebEngine keeps the page 'visible' while minimized — guard on blur too */
+document.addEventListener('visibilitychange',()=>{_VIS=!document.hidden;if(_VIS&&PAGE_==='home')refreshDashboard();});
+window.addEventListener('blur',()=>{_VIS=false;stopDashboard();});
+window.addEventListener('focus',()=>{_VIS=true;if(PAGE_==='home')startDashboard();});
+function setV(el,v){if(!el)return;if(el.__v!==v){el.__v=v;el.innerHTML=v;}}
+/* inline 7-day token sparkline — no deps, sequential single hue, thin mark */
+function spark(values){
+  if(!values||values.length<2)return '—';
+  const w=100,h=24,pad=2;
+  const max=Math.max(...values),min=Math.min(...values);
+  const flat=max===min;                       // guard min===max, not max===0
+  const pts=values.map((v,i)=>{
+    const x=pad+(w-2*pad)*i/(values.length-1);
+    const y=flat?h-1:h-pad-(h-2*pad)*(v-min)/(max-min);
+    return x.toFixed(1)+','+y.toFixed(1);
+  }).join(' ');
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="34" preserveAspectRatio="none" aria-hidden="true">
+    <polyline fill="none" stroke="var(--cyan)" stroke-width="2"
+      stroke-linejoin="round" stroke-linecap="round" points="${pts}"/></svg>`;
+}
+async function refreshDashboard(){
+  if(document.hidden||!_VIS)return;       // hidden (incl. Qt minimized via blur)
+  let d=null,plan=null;
+  try{[d,plan]=await Promise.all([api('/api/dashboard'),api('/api/usage/plan')]);}
+  catch(e){d=null;}
+  const omniTag='<span class="tag" style="color:var(--violet);border-color:currentColor;background:transparent" title="Executed via OmniRoute (free-tier model)">omni</span>';
+  if(d){
+    setV($('#dash-week'),`<div class="dlbl">Tokens · last 7 days</div>`+
+      spark((d.week||[]).map(x=>x.tokens||0)));
+    const jobs=(d.jobs||[]).map(j=>j.kind+':'+j.status+' '+j.elapsed+'s').join(' · ');
+    setV($('#dashJobs'),`<div class="dlbl" style="margin-top:8px">Jobs</div>`+
+      `<div class="drow">${jobs?esc(jobs):'none'}</div>`);
+    const mcp=(d.mcp||[]).map(m=>`<span class="chip" style="${m.running?'color:var(--ok)':'color:var(--dim2)'}">${esc(m.name)}</span>`).join(' ');
+    setV($('#dashMcp'),mcp?`<div class="dlbl" style="margin-top:8px">MCP</div><div class="drow">${mcp}</div>`:'');
+    setV($('#dashRecent'),(d.recent||[]).map(r=>`
+      <div class="hrow"><div class="info"><b>${esc(r.project)}</b>
+        <span style="color:var(--dim)">${esc(r.title)} · ${r.msgs} msgs</span></div>
+        ${r.omni?omniTag:''}</div>`).join(''));
+    const hc=$('#hdrChips');
+    if(hc){                                  // header chips: failover + mcp
+      const fov=d.failover&&d.failover.running
+        ? `<span class="hchip ok" title="Failover proxy">failover${d.failover.port?':'+d.failover.port:''}</span>`
+        : `<span class="hchip" title="Failover proxy stopped">failover</span>`;
+      const all=(d.mcp||[]),up=all.filter(m=>m.running).length;
+      setV(hc, fov+`<span class="hchip${up?' ok':''}" title="MCP servers">mcp ${up}/${all.length}</span>`);
+    }
+  }else{
+    setV($('#dash-week'),'<div style="color:var(--dim2)">offline</div>');
+    setV($('#dashJobs'),'');
+    setV($('#dashMcp'),'');
+    setV($('#dashRecent'),'');
+  }
+  if(plan)setV($('#dash-usage'),`<div class="dlbl">Plan usage by account</div>`+
+    (plan.accounts||[]).map(usageRow).join('')||'<div style="color:var(--dim2)">—</div>');
+  else setV($('#dash-usage'),'<div style="color:var(--dim2)">offline</div>');
 }
 function continueTileHtml(rec){
   if(!rec.length)return `<b>Welcome</b><p style="color:var(--dim);margin-top:8px">
@@ -645,6 +773,7 @@ async function toggleWorklog(on){
 }
 /* live progress of a running memory scan (fg job or bg worker) */
 async function pollMemProg(){
+  if(document.hidden||!_VIS){setTimeout(pollMemProg,2500);return;}
   const el=$('#memProg');
   if(el&&PAGE_==='project'&&TAB==='memory'){
     try{
@@ -844,6 +973,7 @@ async function peJobStart(kind,params,label){
 }
 async function pePoll(){
   const jid=PE.jid;if(!jid)return;
+  if(document.hidden||!_VIS)return;        // finally-block re-arms the chain
   let terminal=false;
   try{
     let st=null;
@@ -2091,36 +2221,40 @@ document.querySelector('.brand').style.cursor='pointer';
 document.querySelector('.brand').onclick=()=>go('home');
 
 /* ── all-accounts usage banner (mirrors the TUI's grid) ── */
-let _uTries=0,_uTimer=null;
+let _uTimer=null;
+/* one account row — always rendered, '—' until windows have data */
+function usageRow(a){
+  const wins=(a.windows||[]).map(w=>`<span class="uwin${w.pct>=80?' hot':''}">
+    <span class="ulbl">${esc(w.label)}</span>
+    <span class="ubarm"><i style="width:${Math.min(100,w.pct)}%"></i></span>
+    <span class="upct">${Math.round(w.pct)}%</span>
+    ${w.resets?`<span class="urst">→ ${esc(w.resets)}</span>`:''}
+  </span>`).join('');
+  return `<div class="urow">
+    <span class="uacct" title="${esc(a.email||a.account)}">${esc(a.email||a.account)}</span>
+    ${wins||'<span style="color:var(--dim2)">—</span>'}
+  </div>`;
+}
 async function drawUsageBar(force){
   clearTimeout(_uTimer);
+  if(document.hidden||!_VIS){_uTimer=setTimeout(drawUsageBar,60000);return;}
   if(force)$('#uRefresh').innerHTML='<span class="spin"></span>';
   try{
     const d=await api('/api/usage/plan'+(force?'?refresh=1':''));
-    const rows=(d.accounts||[]).filter(a=>(a.windows||[]).length);
     $('#ubar').innerHTML=`<div class="urow">
       <button class="btn sm" id="uRefresh" title="Refresh usage now"
         onclick="drawUsageBar(true)">${ic('refresh')}</button>
       <div style="flex:1;display:flex;flex-direction:column;gap:2px">
-      ${rows.map(a=>`<div class="urow">
-        <span class="uacct" title="${esc(a.email||a.account)}">${esc(a.email||a.account)}</span>
-        ${a.windows.map(w=>`<span class="uwin${w.pct>=80?' hot':''}">
-          <span class="ulbl">${esc(w.label)}</span>
-          <span class="ubarm"><i style="width:${Math.min(100,w.pct)}%"></i></span>
-          <span class="upct">${Math.round(w.pct)}%</span>
-          ${w.resets?`<span class="urst">→ ${esc(w.resets)}</span>`:''}
-        </span>`).join('')}</div>`).join('')
-        ||'<span style="color:var(--dim2)">usage: no data yet</span>'}
+        ${(d.accounts||[]).map(usageRow).join('')}
       </div></div>`;
-    // background fetch may not have data yet — retry briefly, then settle
-    if(!rows.length&&_uTries++<10)_uTimer=setTimeout(drawUsageBar,3000);
-    else _uTimer=setTimeout(drawUsageBar,60000);
+    _uTimer=setTimeout(drawUsageBar,60000);
   }catch(e){_uTimer=setTimeout(drawUsageBar,60000);}
 }
 
 /* global poll: which projects' memory is updating right now (scheduler or
    on-open), so the sidebar markers stay live regardless of the open page */
 async function pollActiveMem(){
+  if(document.hidden||!_VIS){setTimeout(pollActiveMem,4000);return;}
   try{
     const d=await api('/api/memory/active');
     const next=new Set(d.active||[]);

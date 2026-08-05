@@ -576,6 +576,7 @@ def build_launch_command(path, encoded_name, choice, opts):
     # Pin the account/config dir explicitly — overrides any ambient
     # CLAUDE_CONFIG_DIR claudectl itself may have been launched under.
     env['CLAUDE_CONFIG_DIR'] = cfgdir
+    env['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'] = '1'
     # launch-economy env: cap thinking tokens / route subagents to a cheap model
     if opts.get('max_thinking'):
         env['MAX_THINKING_TOKENS'] = str(opts['max_thinking'])

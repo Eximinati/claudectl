@@ -387,6 +387,7 @@ def build_exec_launch(project_path, proj_folder, task, exec_model, omni_env=None
 
     env = os.environ.copy()
     env['CLAUDE_CONFIG_DIR'] = cfgdir or config_dir
+    env['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'] = '1'
     extra = read_extra_paths(proj_folder)
     if extra:
         env['PATH'] = ';'.join(extra) + ';' + env.get('PATH', '')

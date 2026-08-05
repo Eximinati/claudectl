@@ -13,7 +13,7 @@ import re
 from .memory import tokens_estimate
 
 RULE_PREFIX = 'claudectl-mem-'
-RULE_MAX_TOKENS = 600
+RULE_MAX_TOKENS = 400
 
 
 def _sanitize(s):

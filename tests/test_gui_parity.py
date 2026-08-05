@@ -681,6 +681,7 @@ def test_job_plan_make_council_uses_omniroute_when_via_selected(monkeypatch, tmp
     s['omniroute_api_key'] = 'secret'
     cfg.save_settings(s)
     monkeypatch.setattr(plan_execute, '_plan', lambda task, m, cwd, effort='', cfgdir='': 'draft plan')
+    monkeypatch.setattr(plan_execute, 'check_endpoint', lambda *a, **k: None)
     seen = {}
     def fake_council(task, plan, cwd, models=None, omni_env=None, cfgdir=''):
         seen['omni_env'] = omni_env

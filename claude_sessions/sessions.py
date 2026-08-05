@@ -64,7 +64,7 @@ def _parse_session(jsonl_path):
         return cached[1]
 
     try:
-        with open(jsonl_path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(jsonl_path, 'r', encoding='utf-8', errors='replace') as f:
             lines = f.readlines()
     except Exception:
         return dict(_EMPTY_STATS)
@@ -147,7 +147,7 @@ def get_session_stats(jsonl_path):
 def get_session_rich_summary(jsonl_path, max_user_msgs=15):
     """Extract ai-title + significant user messages for AI context building."""
     try:
-        with open(jsonl_path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(jsonl_path, 'r', encoding='utf-8', errors='replace') as f:
             lines = f.readlines()
     except Exception:
         return '', []
@@ -238,7 +238,7 @@ def session_changed_files(jsonl_path):
     by edit count desc."""
     counts = {}
     try:
-        with open(jsonl_path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(jsonl_path, 'r', encoding='utf-8', errors='replace') as f:
             lines = f.readlines()
     except Exception:
         return []
@@ -332,7 +332,7 @@ def is_internal_session(jsonl_path):
     sessions with entrypoint 'sdk-cli'; interactive ones use 'cli'. These are
     not user conversations — exclude them from the browser and lesson scans."""
     try:
-        with open(jsonl_path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(jsonl_path, 'r', encoding='utf-8', errors='replace') as f:
             for _ in range(5):
                 line = f.readline()
                 if not line:
