@@ -65,6 +65,7 @@ _DEFAULT_SETTINGS = {
     'memory_lessons_autoapprove': 0.8,  # lessons with confidence >= this auto-approve (0 = off)
     'conventions_to_global': True,  # promote cross-project conventions to ~/.claude/CLAUDE.md
     'plan_model': 'claude-opus-5',     # Plan→Execute: model that writes the plan
+    'plan_timeout_sec': 900,           # cap on one headless plan-generation call
     'exec_model': 'claude-sonnet-5',   # Plan→Execute: model that executes it
     'extract_model': 'claude-haiku-4-5',  # economy model for claudectl's OWN internal
                                           # calls (memory/lessons/CLAUDE.md/agent/hook/
@@ -84,6 +85,12 @@ _DEFAULT_SETTINGS = {
     'omniroute_exec_model': '',   # Plan→Execute exec model, routed free-tier via
                                    # OmniRoute instead of the real Anthropic API.
                                    # '' = disabled (exec_model/real API as usual).
+    'failover_models': [],        # ordered model ids claudectl's own proxy retries
+                                   # when a turn errors before any byte reaches the
+                                   # client. [] = feature off (no separate flag —
+                                   # a second switch is a second thing to desync).
+    'failover_port':   20129,     # loopback port for that proxy (OmniRoute: 20128)
+    'failover_quiet':  False,     # True = hide the proxy console window
 }
 
 
@@ -476,8 +483,16 @@ def omniroute_env(s=None, model=None):
     s = load_settings() if s is None else s
     if not s.get('omniroute_exec_model') and not model:
         return {}
+    # When failover candidates are configured, claude talks to claudectl's own
+    # proxy instead of OmniRoute directly, and the proxy forwards to
+    # omniroute_base_url — see failover.py. Kept a PURE mapping here (no I/O, no
+    # spawning, no raising); starting the daemon belongs where OmniRoute's own
+    # ensure_running already governs launch failure.
+    _url = s.get('omniroute_base_url') or ''
+    if [m for m in (s.get('failover_models') or []) if str(m or '').strip()]:
+        _url = 'http://127.0.0.1:%d' % int(s.get('failover_port') or 20129)
     env = {
-        'ANTHROPIC_BASE_URL': s.get('omniroute_base_url') or '',
+        'ANTHROPIC_BASE_URL': _url,
         'ANTHROPIC_AUTH_TOKEN': s.get('omniroute_api_key') or '',
         'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1',
         # NOTE: CLAUDE_CODE_SUBAGENT_MODEL was previously set to

@@ -479,3 +479,70 @@ def test_cancel_awaiting_releases_gate(monkeypatch, tmp_path):
     assert job is not None
     assert job['status'] == 'cancelled'
     assert job['cancelled'] is True
+
+
+# ── un-stick guarantees ───────────────────────────────────────
+
+def test_job_forces_terminal_status_on_base_exception(monkeypatch, tmp_path):
+    """Step 6: a job body that dies via BaseException (not caught by
+    except Exception) must still leave a terminal status — never 'running'."""
+    import time
+    from claude_sessions import gui_api
+    from claude_sessions.gui_api import start_job
+
+    def _boom():
+        raise KeyboardInterrupt          # BaseException, skips except Exception
+    jid = start_job('base-ex', _boom)
+    deadline = time.time() + 3
+    job = None
+    while time.time() < deadline:
+        job = gui_api._job(jid)
+        if job and job['status'] != 'running':
+            break
+        time.sleep(0.02)
+    assert job is not None
+    assert job['status'] == 'error'
+    assert 'terminal status' in (job['error'] or '')
+
+
+def test_cancel_not_overwritten_by_late_error(monkeypatch, tmp_path):
+    """A user cancel sets status='cancelled'; a failure that surfaces in the
+    thread afterwards must not overwrite it back to 'error'."""
+    import time
+    import threading
+    from claude_sessions import gui_api
+    from claude_sessions.gui_api import start_job, job_cancel
+
+    def _late_error():
+        j = gui_api._JOBCTX.job
+        while not j.get('cancel_event', threading.Event()).is_set():
+            time.sleep(0.01)
+        raise RuntimeError('planning failed')    # lands after cancel already won
+    jid = start_job('late-error', _late_error)
+    time.sleep(0.1)
+    job_cancel(jid)
+    time.sleep(0.3)
+    job = gui_api._job(jid)
+    assert job is not None
+    assert job['status'] == 'cancelled'
+
+
+def test_check_endpoint_unreachable_raises_and_empty_is_noop():
+    import socket
+    import pytest
+    s = socket.socket()
+    s.bind(('127.0.0.1', 0))
+    port = s.getsockname()[1]
+    s.close()                       # nothing listening -> connection refused
+    with pytest.raises(RuntimeError, match='not reachable'):
+        plan_execute.check_endpoint('http://127.0.0.1:%d' % port, 'Test endpoint')
+    plan_execute.check_endpoint('')      # empty base -> no-op
+    plan_execute.check_endpoint(None)    # None base -> no-op
+
+
+def test_plan_timeout_default_and_settings_override(monkeypatch):
+    from claude_sessions import config as _c
+    monkeypatch.setattr(_c, 'load_settings', lambda: {'plan_timeout_sec': 123})
+    assert plan_execute._plan_timeout() == 123
+    monkeypatch.setattr(_c, 'load_settings', lambda: {})
+    assert plan_execute._plan_timeout() == plan_execute._PLAN_TIMEOUT == 900

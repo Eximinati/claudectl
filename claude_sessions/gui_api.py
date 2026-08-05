@@ -83,6 +83,11 @@ def _run_cancellable(cmd, input_text=None, capture_output=True, text=True,
     except subprocess.TimeoutExpired:
         try: proc.kill()
         except Exception: pass
+        if job is not None:
+            job.setdefault('messages', []).append(
+                {'ok': False, 'text': 'timed out after %ss — upstream may be an '
+                                      'unresponsive OmniRoute/failover endpoint'
+                                      % timeout})
         return ''
     except Exception:
         try: proc.kill()
@@ -128,9 +133,18 @@ def start_job(label, fn, inputs=None):
                 job['status'] = 'cancelled'
         except Exception as e:
             _c.log.exception('gui job failed: %s', label)
-            job['error'] = str(e)
-            job['status'] = 'error'
+            if job['status'] != 'cancelled':   # a user cancel already won — keep it
+                job['error'] = str(e)
+                job['status'] = 'error'
         finally:
+            # A job thread must ALWAYS leave a terminal status. If the body died
+            # some other way (BaseException such as a thread kill, or a failure
+            # swallowed by an inner helper) with status still 'running', force
+            # 'error' so the UI banner can never spin forever.
+            if job['status'] == 'running':
+                job['status'] = 'error'
+                job['error'] = job.get('error') or \
+                    'job ended without setting a terminal status'
             _JOBCTX.job = None
 
     threading.Thread(target=_run, daemon=True).start()
@@ -1241,6 +1255,17 @@ def api_job_start(q, body):
         via = body.get('via', 'anthropic')
         omni_env = omniroute_env(s, model='_') if via == 'omniroute' else {}
 
+        # Pre-flight: fail fast (~5s) if the endpoint the headless `claude`
+        # call will talk to is unreachable, instead of spawning a job that
+        # spins for up to plan_timeout_sec. _plan() inherits the process env;
+        # the council (omni_env) may target a different base, so check both.
+        from .plan_execute import check_endpoint
+        try:
+            check_endpoint(os.environ.get('ANTHROPIC_BASE_URL', ''))
+            check_endpoint((omni_env or {}).get('ANTHROPIC_BASE_URL', ''))
+        except RuntimeError as e:
+            return {'ok': False, 'error': str(e)}
+
         def _make():
             plan = _plan(task, model, path, effort, cfgdir)
             if not plan:
@@ -1290,6 +1315,15 @@ def api_job_start(q, body):
                         raise RuntimeError(
                             f"OmniRoute: exec model '{_exec_model_check}' is no longer available — "
                             "pick a new one in Settings or switch to Auto")
+                # omniroute_env() already repointed ANTHROPIC_BASE_URL at the
+                # failover proxy when candidates are configured, so it has to be
+                # up before claude is handed that URL.
+                from . import failover
+                if failover.enabled(s):
+                    _fok, _fmsg = failover.ensure_running(s)
+                    ui.flash(f'Failover proxy: {_fmsg}', ok=_fok)
+                    if not _fok:
+                        raise RuntimeError(_fmsg)
                 # context-window warning for free-tier OmniRoute models
                 try:
                     _ctx = 0
@@ -1331,6 +1365,14 @@ def api_job_start(q, body):
         effort = body.get('effort', '')
         cfgdir = body.get('account') or ''
 
+        # Pre-flight: same fast-fail guard as plan_make — replan() also spawns
+        # headless `claude` under the process env.
+        from .plan_execute import check_endpoint
+        try:
+            check_endpoint(os.environ.get('ANTHROPIC_BASE_URL', ''))
+        except RuntimeError as e:
+            return {'ok': False, 'error': str(e)}
+
         def _replan():
             revised = replan_from_plan(plan_text or task, feedback, model, path, effort, cfgdir)
             if not revised:
@@ -1359,6 +1401,44 @@ def api_job_start(q, body):
             ok, msg = omniroute.ensure_running(s.get('omniroute_base_url', ''))
             return {'ok': ok, 'message': msg}
         jid = start_job('Starting OmniRoute', _ensure)
+    elif kind == 'omniroute_probe':
+        from . import omniroute
+        from .config import load_settings
+
+        def _probe():
+            s = load_settings()
+            base, key = s.get('omniroute_base_url', ''), s.get('omniroute_api_key', '')
+            ids = body.get('models') or []
+            if not ids:
+                usable, autos, _ex = omniroute.usable_models(base, key)
+                # auto/* last: the meta-routers add a server-side selection step
+                # that itself hangs, so they are the slowest thing to probe and
+                # the least reliable thing to route through.
+                ids = [u['id'] for u in usable] + autos[:1]
+            # Bounded by default — an unbounded verify run costs minutes. `full`
+            # forces a re-probe of models cached as permanently dead.
+            # Small by default: each probe is a real billed request, and on free
+            # tiers repeated runs exhaust the key (confirmed — probing pushed
+            # OpenRouter's free models into 'Key limit exceeded'). Enough to seed
+            # a failover list; the proxy refines it from real turns for free.
+            full = bool(body.get('full'))
+            res = omniroute.probe_models(
+                base, ids, key,
+                timeout=int(body.get('timeout') or 15),
+                want=int(body.get('want') or 3),
+                budget=int(body.get('budget') or 45),
+                skip={} if full else None)
+            omniroute.save_dead(res, clear=full)
+            working = [r['id'] for r in res if r['ok']]
+            return {'ok': bool(working), 'results': res, 'working': working}
+        jid = start_job('Verifying models', _probe)
+    elif kind == 'failover_stop':
+        from . import failover
+
+        def _fstop():
+            ok, msg = failover.stop_running()
+            return {'ok': ok, 'message': msg}
+        jid = start_job('Stopping failover proxy', _fstop)
     elif kind == 'omniroute_test_connection':
         from . import omniroute
         conn_id = body.get('conn_id', '')
@@ -1438,92 +1518,71 @@ def api_omniroute_status(q, body):
     from .config import load_settings
     s = load_settings()
     base, key = s.get('omniroute_base_url', ''), s.get('omniroute_api_key', '')
-    reachable = omniroute.is_reachable(base, key)
-    out = {'reachable': reachable, 'model_count': 0, 'configured': 0, 'active': 0,
-           'connections': []}
-    if reachable:
-        out['model_count'] = len(omniroute.list_models(base, key))
-        out.update({k: v for k, v in omniroute.provider_status(base).items()
-                    if k in ('configured', 'active')})
-        out['connections'] = omniroute.cli_connections()
-    return out
+    # ONE concurrent fetch of both payloads, then everything is derived locally.
+    # Each OmniRoute round trip costs ~2s on a loaded instance, so the previous
+    # five serial calls made this handler a ~13s page stall.
+    entries, h = omniroute.fetch_both(base, key)
+    summary = h.get('summary') or {}
+    usable, _autos, _ex = omniroute.classify_models(entries, h)
+    return {
+        'reachable': bool(entries or h.get('providers')),
+        'model_count': len(entries),
+        'configured': summary.get('configuredCount', 0),
+        'active': summary.get('activeCount', 0),
+        # providerHealth over HTTP is the signal that works here; the CLI is
+        # secondary because `providers list --json` crashes on this platform and
+        # returns [] even with providers connected (see module doc).
+        'providers': h.get('providers', []),
+        'lockouts': h.get('lockouts', []),
+        'connections': omniroute.cli_connections(),
+        'usable_count': len(usable),
+    }
 
 
 def api_omniroute_models(q, body):
-    """Return models whose backing provider is usable, not just catalogued.
+    """Models that can actually serve a session, not the whole routable catalog.
 
-    OmniRoute's /v1/models returns the full routable catalog regardless of
-    which providers actually have API keys configured. This endpoint
-    cross-references against the live health endpoint to exclude models from
-    providers that are explicitly unhealthy (OPEN or HALF_OPEN circuit breaker).
+    Each entry's own ``owned_by`` is cross-referenced against live providerHealth
+    — the previous version guessed the provider from a hardcoded id-prefix table,
+    which mislabelled every provider not in the table and then failed open, so
+    models from providers that were never configured were offered as choices.
+    That is how a launch lands on 'minimax-m3-free' (owned_by 'opencode', not
+    connected) and 401s on every turn.
 
-    ``auto/*`` router models are always included (they server-side-pick the
-    best healthy provider).  ``auto/coding`` is always prepended as the default.
+    ``all=1`` returns the unfiltered catalog for the user who wants to see it.
     """
     from . import omniroute
     from .config import load_settings
     s = load_settings()
     base = s.get('omniroute_base_url', '')
     key = s.get('omniroute_api_key', '')
-    models = omniroute.list_models(base, key)
-    if not models:
-        return {'models': ['auto/coding'], 'labels': {'auto/coding': 'auto/coding (dynamic router)'}}
 
-    # Fetch provider breaker states — only exclude providers that are
-    # EXPLICITLY failing (OPEN or HALF_OPEN).  Everything else (CLOSED,
-    # unknown, or not in the breaker list) is included.  This is a fail-open
-    # approach: configured providers like opencode show up unless they're
-    # provably broken, rather than needing to be proven healthy.
-    unhealthy_providers = set()
-    try:
-        health_data = omniroute._get(base, '/api/monitoring/health', key, timeout=4)
-        for breaker in (health_data or {}).get('providerBreakers', []):
-            if breaker.get('state') in ('OPEN', 'HALF_OPEN'):
-                unhealthy_providers.add(breaker.get('provider', ''))
-    except Exception:
-        unhealthy_providers = None  # health unreachable → show everything
+    entries, h = omniroute.fetch_both(base, key)
 
-    # Prefix→provider mapping
-    PREFIX_TO_PROVIDER = {
-        'auto': '',
-        'tllm': 'theoldllm',
-        'oc': 'opencode',
-        'nvidia': 'nvidia',
-        'aug': 'auggie',
-        'ddgw': 'duckduckgo-web',
-        'veo-free': 'opencode',
-        'veoaifree-web': 'opencode',
-        'no-think': 'theoldllm',
-        'pepper': 'chipotle',
-        'mcode': 'mimocode',
-    }
+    if str(q.get('all') or '') in ('1', 'true'):
+        ids = ['auto/coding'] + [m['id'] for m in entries if m['id'] != 'auto/coding']
+        return {'models': ids,
+                'labels': {m['id']: (m.get('name') or m['id']) for m in entries},
+                'usable': [], 'excluded': {}, 'filtered': False}
 
-    filtered = []
-    seen = set()
-    filtered.append('auto/coding')
-    seen.add('auto/coding')
+    usable, autos, excluded = omniroute.classify_models(entries, h)
+    if not usable and not autos:
+        return {'models': ['auto/coding'],
+                'labels': {'auto/coding': 'auto/coding (dynamic router)'},
+                'usable': [], 'excluded': excluded, 'filtered': True}
 
-    for mid, lbl in models:
-        if mid in seen:
-            continue
-        prefix = mid.split('/')[0] if '/' in mid else mid
-        provider = PREFIX_TO_PROVIDER.get(prefix, '')
-
-        if prefix == 'auto':
-            # auto/* routers are always safe
-            filtered.append(mid)
-            seen.add(mid)
-        elif provider and unhealthy_providers is not None and provider in unhealthy_providers:
-            # Provider is explicitly broken — skip
-            continue
-        else:
-            # Provider is either healthy, not in the breaker list, or health
-            # endpoint was unreachable — include it
-            filtered.append(mid)
-            seen.add(mid)
-
-    return {'models': filtered, 'labels': {m: (lbl if m == lbl else m)
-                                           for m, lbl in models if m in filtered}}
+    ids, labels = [], {}
+    for a in (['auto/coding'] + [x for x in autos if x != 'auto/coding']):
+        ids.append(a)
+        labels[a] = a + (' (dynamic router)' if a == 'auto/coding' else '')
+    for u in usable:
+        ids.append(u['id'])
+        ctx = ('%dk' % (u['context'] // 1000)) if u['context'] else ''
+        tail = ' · '.join(x for x in (u['provider'], ctx,
+                                      'recovering' if u['state'] == 'HALF_OPEN' else '') if x)
+        labels[u['id']] = '%s — %s' % (u['label'], tail) if tail else u['label']
+    return {'models': ids, 'labels': labels, 'usable': usable,
+            'excluded': excluded, 'filtered': True}
 
 
 def api_plan_edit(q, body):

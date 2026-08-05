@@ -829,37 +829,57 @@ async function injectFlow(){
    completion no matter which page the user wandered to. */
 let PE={jid:null,kind:'',label:'',status:'',msgs:[],elapsed:0,plan:null};
 let __peShown=false,__peSub='',__peMsgs='';
+let peLastChange=0,peLastSig='';    // stall watchdog: last poll where anything changed
 function peBusy(){return !!PE.jid&&PE.status==='running';}
+function peStalled(){return peBusy()&&peLastChange&&(Date.now()-peLastChange)>120000;}
 async function peJobStart(kind,params,label){
   if(peBusy()){toast('A plan job is already running — cancel it first','err');return;}
   const r=await post('/api/job',{kind,...params});
   if(!r.ok){toast(r.error||'Could not start','err');return;}
   PE={jid:r.job,kind,label,status:'running',msgs:[],elapsed:0,plan:PE.plan};
   __peShown=false;   // force a fresh banner build
+  peLastChange=0;peLastSig='';      // fresh baseline — don't inherit the last job's stall
   peRenderStatus();
   pePoll();
 }
 async function pePoll(){
   const jid=PE.jid;if(!jid)return;
-  const st=await api(`/api/job/${jid}`);
-  if(PE.jid!==jid)return;              // superseded by a newer job, or cleared
-  if(!st){PE.status='';peRenderStatus();return;}
-  PE.status=st.status;PE.label=st.label||PE.label;
-  PE.msgs=st.messages||[];PE.elapsed=st.elapsed||0;
-  if(st.status==='running'){peRenderStatus();setTimeout(pePoll,700);return;}
-  if(st.status==='done')peJobDone(st.result||{});
-  else{
-    if(st.status==='cancelled')toast('Plan job cancelled','');
-    else toast(st.error||'Plan job failed','err');
-    // A failed/cancelled LAUNCH (e.g. a stale/unavailable OmniRoute model)
-    // shouldn't force replanning -- the plan is already safely on disk
-    // (write_plan_file runs before the exec-model check) and still held in
-    // PE.plan since peExecute() no longer discards it up front. Re-open the
-    // editor so the user can just retry, e.g. after switching Execute
-    // via/model, instead of regenerating the plan from scratch.
-    if(PE.kind==='plan_launch'&&PE.plan&&PAGE_==='project'&&TAB==='planexec')peShowPlan(PE.plan);
+  let terminal=false;
+  try{
+    let st=null;
+    try{ st=await api(`/api/job/${jid}`); }
+    catch(e){ st=null; }            // transient network/backend hiccup — retry next tick
+    if(PE.jid!==jid)return;          // superseded by a newer job, or cleared
+    if(!st){ peRenderStatus(); return; }  // fetch failed: keep the banner, reschedule below
+    PE.status=st.status;PE.label=st.label||PE.label;
+    PE.msgs=st.messages||[];PE.elapsed=st.elapsed||0;
+    // stall watchdog: status/label/messages changing = progress (elapsed alone
+    // ticks every second and is NOT progress)
+    const sig=`${st.status}|${st.label}|${(st.messages||[]).slice(-3)
+      .map(m=>(m.ok?'1':'0')+m.text).join('\u0001')}`;
+    if(sig!==peLastSig){peLastSig=sig;peLastChange=Date.now();}
+    if(st.status==='running'){peRenderStatus();return;}
+    terminal=true;
+    if(st.status==='done')peJobDone(st.result||{});
+    else{
+      if(st.status==='cancelled')toast('Plan job cancelled','');
+      else toast(st.error||'Plan job failed','err');
+      // A failed/cancelled LAUNCH (e.g. a stale/unavailable OmniRoute model)
+      // shouldn't force replanning -- the plan is already safely on disk
+      // (write_plan_file runs before the exec-model check) and still held in
+      // PE.plan since peExecute() no longer discards it up front. Re-open the
+      // editor so the user can just retry, e.g. after switching Execute
+      // via/model, instead of regenerating the plan from scratch.
+      if(PE.kind==='plan_launch'&&PE.plan&&PAGE_==='project'&&TAB==='planexec')peShowPlan(PE.plan);
+    }
+    peRenderStatus();   // clears the inline banner
+  }catch(e){
+    // never let a render error kill the poll chain either
+  }finally{
+    // Reschedule on BOTH the success and the error path — a dead chain is the
+    // bug. Stop only on a terminal status or when a newer job supersedes us.
+    if(!terminal&&PE.jid===jid)setTimeout(pePoll,700);
   }
-  peRenderStatus();   // clears the inline banner
 }
 function peJobDone(result){
   const onPage=PAGE_==='project'&&TAB==='planexec';
@@ -892,7 +912,11 @@ function peRenderStatus(){
         <button class="btn sm danger" onclick="peCancel()">Cancel</button></div>`;
       $('#peLbl').textContent=PE.label||'Working…';
     }
-    const sub=`${PE.elapsed||0}s elapsed — keep using claudectl; you'll be notified when it's done`;
+    // stall watchdog: 2min with no status/label/message change while running —
+    // hint that upstream is wedged and surface the Cancel path
+    const sub=peStalled()
+      ? `${PE.elapsed||0}s elapsed — still running, NO progress for 2m (upstream may be stuck). Click Cancel to stop.`
+      : `${PE.elapsed||0}s elapsed — keep using claudectl; you'll be notified when it's done`;
     if(sub!==__peSub){__peSub=sub;const s=$('#peSub');if(s)s.textContent=sub;}
     const msgs=(PE.msgs||[]).slice(-3).map(m=>`<div class="${m.ok?'':'bad'}">${esc(m.text)}</div>`).join('');
     if(msgs!==__peMsgs){__peMsgs=msgs;const m=$('#peMsgs');if(m)m.innerHTML=msgs;}
@@ -1485,9 +1509,36 @@ async function pgSettings(){
     <div class="mrow">
       <button class="btn sm" onclick="orRefresh()">${ic('refresh')} Refresh</button>
       <button class="btn sm" onclick="orLiveTest()">${ic('bolt')} Send a live test</button>
+      <button class="btn sm" onclick="orProbe()" title="Sends a few real requests to find working models. Each one is a billed request — on free tiers repeated runs will exhaust the key, so this stops as soon as it finds enough. The proxy then refines the list from real sessions at no cost.">${ic('check')} Find working models</button>
       <button class="btn sm" onclick="orDashboard()">${ic('ext')} Open OmniRoute dashboard</button>
       <span class="sp"></span>
-      <button class="btn pri" onclick="orSave()">Save</button></div></div>
+      <button class="btn pri" onclick="orSave()">Save</button></div>
+    <div id="orProbeOut" style="font-size:12.5px;margin-top:6px"></div>
+
+    <div style="border-top:1px solid var(--line);margin:14px 0 10px"></div>
+    <h3 style="font-size:14px;margin:0 0 6px">${ic('refresh')} Model failover
+      <span class="sp"></span><span id="foDot" class="tag">off</span></h3>
+    <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Claude Code retries a failed turn against the
+      <b>same</b> model ~10× with backoff, so a model that has been dropped upstream (<code>401 not supported</code>)
+      or whose provider rejects a tool schema (<code>400</code>) makes a session look frozen. List fallback models
+      below and claudectl runs its own local proxy that retries the <b>next</b> one whenever a turn fails before any
+      output reaches the session. Leave the list empty to disable.</p>
+    <div class="fld"><label>Fallback models — one per line, tried in order after the selected model</label>
+      <textarea id="foModels" rows="4" spellcheck="false"
+        placeholder="auto/coding:free&#10;auto/best-coding&#10;auto/fast"></textarea></div>
+    <div class="grid2">
+      <div class="fld"><label>Proxy port</label><input id="foPort" placeholder="20129"></div>
+      <div class="fld"><label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="foQuiet" style="width:auto;margin:0"> Hide the proxy console window</label>
+        <div style="color:var(--dim);font-size:12px;margin-top:4px">The window logs every turn — which model was
+          tried, what failed, what served it. It doubles as live plan-execution progress. Hiding it keeps the log
+          at <code>~/.claude/failover.log</code>.</div></div>
+    </div>
+    <div id="foResult" style="color:var(--dim);font-size:12.5px;margin:4px 0"></div>
+    <div class="mrow">
+      <button class="btn sm" onclick="foStop()">${ic('close')} Stop proxy</button>
+      <span class="sp"></span>
+      <button class="btn pri" onclick="foSave()">Save failover</button></div></div>
   <div class="card"><h3>Interface</h3>
     <p style="color:var(--dim);font-size:13px">Default interface on startup — the toggle in the bottom-left does the same. <code>--tui</code>/<code>--gui</code> flags always override.</p></div>
   <div class="card"><h3>${ic('refresh')} Auto-memory <span class="sp"></span>
@@ -1524,6 +1575,10 @@ async function pgSettings(){
   chipsFill($('#sPlanMod'),o.models,o.model_labels,ST.plan_model||'');
   chipsFill($('#sExecMod'),o.models,o.model_labels,ST.exec_model||'');
   $('#orUrl').value=ST.omniroute_base_url||'';
+  $('#foModels').value=(ST.failover_models||[]).join('\n');
+  $('#foPort').value=ST.failover_port||20129;
+  $('#foQuiet').checked=!!ST.failover_quiet;
+  foDot();
   drawAutoMemList();
   orRefresh();
 }
@@ -1561,34 +1616,63 @@ async function orRefresh(){
       <div class="mrow" style="margin-top:0"><button class="btn sm" onclick="orStart()">${ic('bolt')} Start now</button></div>`;
     return;
   }
-  // OmniRoute's own per-connection test can be flat-out wrong (confirmed:
-  // reported working no-auth connections as "error"/"not supported") --
-  // a listed connection is a real fact (it's configured); whether it WORKS
-  // is only trustworthy from "Send a live test" below. So the connection
-  // count drives the dot (neutral 'ok' once >0), never the self-check flag.
-  const nConn=(st.connections||[]).length;
-  dot.textContent=nConn>0?`${nConn} provider(s) connected`:'0 providers connected';
-  dot.className='tag '+(nConn>0?'ok':'warn');
-  if(warn)warn.style.display=nConn>0?'none':'';
-  if(conns)conns.innerHTML=(st.connections||[]).map(c=>
-    `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12.5px">
-      <span class="tag ok">connected</span>
-      <b>${esc(c.name||c.provider)}</b>
-      <span style="color:var(--dim)">${esc(c.provider)}</span>
-      <span class="sp"></span>
-      <button class="btn sm" onclick="orTestConn('${esc(c.id)}')" title="OmniRoute's own self-check — can be wrong; use 'Send a live test' below for the real answer">${ic('refresh')} Self-check</button></div>`
-  ).join('')||'<div style="color:var(--dim);font-size:12.5px">No providers connected yet.</div>';
+  // Provider state comes from OmniRoute's HTTP providerHealth, not its CLI --
+  // `providers list --json` crashes on this platform and returns nothing even
+  // with providers connected, which is why this card used to read "0 providers
+  // connected" while 5 were live. CLOSED = healthy, HALF_OPEN = recovering,
+  // OPEN = tripped.
+  const provs=st.providers||[];
+  const ok=provs.filter(p=>p.state==='CLOSED').length;
+  const half=provs.filter(p=>p.state==='HALF_OPEN').length;
+  const usable=st.usable_count||0;
+  dot.textContent=provs.length
+    ?`${ok} healthy${half?` · ${half} recovering`:''} · ${usable} usable model${usable===1?'':'s'}`
+    :'0 providers connected';
+  dot.className='tag '+(ok>0&&usable>0?'ok':'warn');
+  if(warn)warn.style.display=(ok>0)?'none':'';
+  const STATE={CLOSED:['ok','healthy'],HALF_OPEN:['warn','recovering'],OPEN:['err','down']};
+  let html=provs.map(p=>{
+    const[cls,lbl]=STATE[p.state]||['','unknown'];
+    return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12.5px">
+      <span class="tag ${cls}">${lbl}</span><b>${esc(p.name)}</b>
+      <span style="color:var(--dim)">${p.failures?esc(p.failures+' failure'+(p.failures===1?'':'s')):''}</span>
+      </div>`;}).join('');
+  (st.lockouts||[]).forEach(l=>{
+    const mins=Math.round((l.remaining_ms||0)/60000);
+    html+=`<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12.5px">
+      <span class="tag warn">locked</span><b>${esc(l.model||l.provider)}</b>
+      <span style="color:var(--dim)">${esc(l.reason||'')}${mins?` · ${mins} min left`:''}</span></div>`;
+  });
+  if(conns)conns.innerHTML=html||'<div style="color:var(--dim);font-size:12.5px">No providers connected yet.</div>';
   const m=await api('/api/omniroute/models');
   const wrap=$('#orModWrap');if(!wrap)return;
   const cur=ST.omniroute_exec_model||OR_AUTO;
+  // Only models on a configured, non-tripped provider that can actually run a
+  // session. The full catalog lists every routable id regardless of whether a
+  // provider backing it is connected, so offering it invites picking a model
+  // that 401s on every turn.
+  const real=(m.usable||[]).map(u=>u.id);
+  const pinIds=real.length?real:m.models.filter(x=>!x.startsWith('auto/'));
+  const nEx=Object.values(m.excluded||{}).reduce((a,v)=>a+v.length,0);
+  const exLines=Object.entries(m.excluded||{}).map(([why,ids])=>
+    `<div style="padding:2px 0"><b>${ids.length}</b> · ${esc(why)}
+      <span style="color:var(--dim)">${esc(ids.slice(0,4).join(', '))}${ids.length>4?', …':''}</span></div>`).join('');
   wrap.innerHTML=`<div class="fld"><label>Execute model</label>
     <div class="chips" id="sOrAuto"></div>
-    <details style="margin-top:8px">
-      <summary style="cursor:pointer;color:var(--dim);font-size:12px">Pin a specific model instead (${m.models.length} available)</summary>
+    <details style="margin-top:8px"${pinIds.length&&!real.length?'':''}>
+      <summary style="cursor:pointer;color:var(--dim);font-size:12px">Pin a specific model instead —
+        ${pinIds.length} that can actually run a session</summary>
       <div class="chips" id="sOrPin" style="margin-top:6px;max-height:260px;overflow-y:auto"></div>
-    </details></div>`;
+    </details>
+    ${nEx?`<details style="margin-top:6px">
+      <summary style="cursor:pointer;color:var(--dim);font-size:12px">${nEx} catalogued models hidden — why</summary>
+      <div style="font-size:12px;margin-top:6px;line-height:1.55">${exLines}
+        <div style="color:var(--dim);margin-top:6px">A provider must be connected in the OmniRoute
+          dashboard before its models can serve anything, and a session needs tool support and a real
+          context window.</div></div></details>`:''}
+    </div>`;
   chipsFill($('#sOrAuto'),[OR_AUTO],['Auto — best free model, auto-fallback'],cur===OR_AUTO?OR_AUTO:'');
-  chipsFill($('#sOrPin'),m.models,m.models.map(id=>m.labels[id]||id),cur!==OR_AUTO?cur:'');
+  chipsFill($('#sOrPin'),pinIds,pinIds.map(id=>m.labels[id]||id),cur!==OR_AUTO?cur:'');
   $('#sOrAuto').querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>
     $('#sOrPin').querySelectorAll('.chip').forEach(x=>x.classList.remove('on'))));
   $('#sOrPin').querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>
@@ -1631,6 +1715,85 @@ async function orSave(){
   $('#orKey').value='';
   toast('OmniRoute settings saved','ok');
   orRefresh();
+}
+
+/* Probe every candidate with a real request. The catalog and the health endpoint
+   can only predict; providerHealth membership in particular means "attempted",
+   not "configured" (it grows as requests are made), so this is the one check
+   that settles it — and its output is exactly the failover candidate list. */
+let ORPROBE=[];
+function orProbe(full){
+  const out=$('#orProbeOut');
+  out.innerHTML=`<span style="color:var(--dim)">Probing with real requests — stops as soon as 4 answer, ${full?'re-testing everything (spends more quota)':'skipping models already known dead'}, ${full?'240':'45'}s ceiling…</span>`;
+  runJob('omniroute_probe',full?{full:true,want:0,budget:240}:{},st=>{
+    const r=st.result||{};ORPROBE=r.results||[];
+    if(!ORPROBE.length){out.innerHTML='<span style="color:var(--dim)">Nothing to probe.</span>';return;}
+    // A timeout is not a verdict on the model -- it means the probe budget
+    // expired (requests queue inside OmniRoute). Grouping it with hard failures
+    // is what makes the same model look broken in one run and fine in the next.
+    const CLASS={works:['ok','works'],timeout:['warn','no answer in time'],
+      limited:['warn','rate/quota limit'],gone:['err','retired (410)'],
+      auth:['err','key not authorized'],skipped:['','not probed'],error:['err','error']};
+    const NOTE={timeout:'Budget expired, not a model fault — retried once already. Usually clears.',
+      limited:'Free-tier budget spent on this key. Resets on a timer.',
+      gone:'The provider removed this model id. Safe to forget.',
+      auth:'That provider\'s key is missing or rejected — fix it in the OmniRoute dashboard.',
+      skipped:'Stopped early — enough models answered, or the time ceiling was hit.'};
+    const ok=ORPROBE.filter(x=>x.ok);
+    const groups={};ORPROBE.filter(x=>!x.ok).forEach(x=>{(groups[x.status||'error']=groups[x.status||'error']||[]).push(x);});
+    out.innerHTML=
+      `<div style="margin-bottom:4px"><b>${ok.length}</b> of ${ORPROBE.length} answered.</div>`+
+      ok.map(x=>`<div style="padding:1px 0"><span class="tag ok">works</span> ${esc(x.id)}
+        <span style="color:var(--dim)">${esc(x.served&&x.served!==x.id?'served by '+x.served:'')}</span></div>`).join('')+
+      Object.entries(groups).map(([k,list])=>{
+        const[cls,lbl]=CLASS[k]||CLASS.error;
+        return `<details style="margin-top:4px"><summary style="cursor:pointer;color:var(--dim);font-size:12px">
+          ${list.length} · ${esc(lbl)}</summary>
+          ${NOTE[k]?`<div style="color:var(--dim);font-size:12px;margin:4px 0">${esc(NOTE[k])}</div>`:''}
+          ${list.map(x=>`<div style="padding:1px 0"><span class="tag ${cls}">${esc(lbl)}</span> ${esc(x.id)}
+            <span style="color:var(--dim)">${esc((x.detail||'').slice(0,80))}</span></div>`).join('')}</details>`;
+      }).join('')+
+      `<div class="mrow" style="margin-top:6px">
+        ${ok.length?`<button class="btn sm" onclick="orUseWorking()">${ic('check')} Use these as the failover list</button>`:''}
+        <button class="btn sm" onclick="orProbe(true)" title="Re-tests every model including ones cached as permanently dead — slower">${ic('refresh')} Re-test everything</button></div>`;
+    toast(ok.length?`${ok.length} model(s) actually work`:'No model answered — no provider is serving requests','ok');
+  });
+}
+async function orUseWorking(){
+  const ids=ORPROBE.filter(x=>x.ok).map(x=>x.id).slice(0,8);
+  if(!ids.length)return;
+  $('#foModels').value=ids.join('\n');
+  await foSave();
+  toast('Failover list set from the models that actually answered','ok');
+}
+
+/* ── model failover (claudectl's own proxy — see failover.py) ── */
+function foDot(){
+  const d=$('#foDot');if(!d)return;
+  const n=(ST.failover_models||[]).length;
+  d.textContent=n?`${n} fallback${n>1?'s':''}`:'off';
+  d.style.color=n?'var(--ok)':'var(--dim)';
+  d.style.borderColor='currentColor';d.style.background='transparent';
+}
+async function foSave(){
+  const models=$('#foModels').value.split('\n').map(s=>s.trim()).filter(Boolean).slice(0,8);
+  const port=parseInt($('#foPort').value,10)||20129;
+  await post('/api/settings',
+    {failover_models:models,failover_port:port,failover_quiet:$('#foQuiet').checked});
+  ST=await api('/api/state');
+  $('#foModels').value=(ST.failover_models||[]).join('\n');
+  foDot();
+  $('#foResult').innerHTML=models.length
+    ?`<span style="color:var(--ok)">${ic('check')} Failover on — the proxy starts with your next Plan → Execute run.</span>`
+    :`<span style="color:var(--dim)">Failover off — sessions go straight to OmniRoute.</span>`;
+  toast('Failover settings saved','ok');
+}
+function foStop(){
+  runJob('failover_stop',{},st=>{
+    const r=st.result||{};
+    $('#foResult').textContent=r.message||'stopped';
+    toast(r.ok?'Failover proxy stopped':'Could not stop the proxy','ok');
+  });
 }
 const AM_INTERVALS=[[900,'every 15 min'],[1800,'every 30 min'],[3600,'every 60 min'],
   [7200,'every 2 hours'],[21600,'every 6 hours']];

@@ -19,6 +19,42 @@ from . import config as _c
 
 PLAN_FILE = os.path.join('.claudectl', 'plan-latest.md')
 
+# Hard cap on a headless plan-generation call. A dead/slow OmniRoute upstream
+# (or a failover proxy whose candidates are all unreachable) must never leave
+# the plan job spinning in 'running' forever. Overridable via the
+# CLAUDECTL_PLAN_TIMEOUT env var or the plan_timeout_sec setting (see
+# _plan_timeout); the value here is the floor default.
+_PLAN_TIMEOUT = int(os.environ.get('CLAUDECTL_PLAN_TIMEOUT', '900'))
+
+
+def _plan_timeout():
+    """Effective plan-generation timeout in seconds: settings
+    'plan_timeout_sec' wins, then the env/constant default (900)."""
+    try:
+        return int(_c.load_settings().get('plan_timeout_sec') or _PLAN_TIMEOUT)
+    except Exception:
+        return _PLAN_TIMEOUT
+
+
+def check_endpoint(base, label='OmniRoute/failover endpoint'):
+    """Fast pre-flight reachability check before spawning headless `claude`.
+
+    Any HTTP status (401/404/…) means the port is alive and speaking HTTP — the
+    proxy may still route /v1/messages fine even when /v1/models is rejected, so
+    HTTPError is treated as *healthy*. Only connection-level failures abort.
+    Raises RuntimeError naming the endpoint; never blocks longer than 5s."""
+    base = (base or '').rstrip('/')
+    if not base:
+        return
+    import urllib.request
+    import urllib.error
+    try:
+        urllib.request.urlopen(base + '/v1/models', timeout=5)
+    except urllib.error.HTTPError:
+        pass                        # any HTTP status = alive
+    except Exception as e:
+        raise RuntimeError('%s %s is not reachable: %s' % (label, base, e))
+
 
 def plan_store_path():
     """Return path for plan persistence (JSON), stored near the settings file."""
@@ -177,7 +213,7 @@ def _plan(task, plan_model, cwd, effort='', cfgdir=''):
     from .ui import run_with_progress_stdin
     out, _cancelled = run_with_progress_stdin(
         args, prompt, ('CLAUDECTL', 'PLAN'),
-        f'Planning with {plan_model}...', timeout=600, cwd=cwd, env=env)
+        f'Planning with {plan_model}...', timeout=_plan_timeout(), cwd=cwd, env=env)
     result = (out or '').strip()
     if result:
         try: save_plan(result, plan_store_path())
@@ -216,9 +252,18 @@ def _headless(model, prompt, cwd, omni_env=None, cfgdir=''):
         env['CLAUDE_CONFIG_DIR'] = cfgdir
     if omni_env:
         env.update(omni_env)
+        # Council voices bypass the failover proxy on purpose: they are short
+        # blocking calls, optimize_plan_council() already degrades to the
+        # unmodified plan when they fail, and they run BEFORE the exec launch
+        # starts the proxy -- so routing them through it would just silently
+        # disable the council whenever failover is configured.
+        _direct = _c.load_settings().get('omniroute_base_url') or ''
+        if _direct:
+            env['ANTHROPIC_BASE_URL'] = _direct
     from .gui_api import _run_cancellable
     try:
-        return _run_cancellable(args, input_text=prompt, cwd=cwd, env=env)
+        return _run_cancellable(args, input_text=prompt, cwd=cwd, env=env,
+                                timeout=_plan_timeout())
     except Exception:
         return ''
 
@@ -538,6 +583,14 @@ def run(project_path, proj_folder, project_name, plan=None, per_step=False, shou
         if not ok:
             flash(f"OmniRoute: {msg}", ok=False, secs=2.5)
             return False
+        # omni_env already points ANTHROPIC_BASE_URL at claudectl's own failover
+        # proxy when candidates are configured; it must be up before launching.
+        from . import failover
+        if failover.enabled(s):
+            fok, fmsg = failover.ensure_running(s)
+            if not fok:
+                flash(f"Failover proxy: {fmsg}", ok=False, secs=3)
+                return False
         # catch a stale/renamed omniroute_exec_model here, before launching --
         # otherwise the exec session opens fine and only fails once `claude`
         # itself tries the model, deep inside the new terminal with no easy

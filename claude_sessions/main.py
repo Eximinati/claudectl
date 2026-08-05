@@ -88,6 +88,15 @@ def run():
     if len(sys.argv) >= 3 and sys.argv[1] == '--bg-scan':
         _bg_scan_cli(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else '')
         return
+    # detached model-failover proxy (spawned by failover.ensure_running)
+    if len(sys.argv) >= 2 and sys.argv[1] == '--failover-serve':
+        from .failover import serve_cli
+        sys.exit(serve_cli(sys.argv[2] if len(sys.argv) > 2 else 0))
+    if len(sys.argv) >= 2 and sys.argv[1] == '--failover-stop':
+        from .failover import stop_running
+        ok, msg = stop_running()
+        print(msg)
+        sys.exit(0 if ok else 1)
 
     # ── interface pick: --gui / --tui flags beat the ui_mode setting ──
     if '--gui' in sys.argv[1:] or (

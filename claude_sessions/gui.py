@@ -245,6 +245,9 @@ def state_payload():
         'omniroute_base_url': s.get('omniroute_base_url', ''),
         'omniroute_has_key': bool(s.get('omniroute_api_key')),
         'omniroute_exec_model': s.get('omniroute_exec_model', ''),
+        'failover_models': s.get('failover_models', []),
+        'failover_port': s.get('failover_port', 20129),
+        'failover_quiet': bool(s.get('failover_quiet')),
         'theme': s.get('theme', 'default'),
         'themes': theme_palettes(),
     }
@@ -401,9 +404,17 @@ class _Handler(BaseHTTPRequestHandler):
                       'extract_model', 'review_model', 'review_min_confidence',
                       'gui_shell', 'theme', 'editor', 'claude_exe',
                       'plan_model', 'exec_model', 'omniroute_base_url',
-                      'omniroute_exec_model'):
+                      'omniroute_exec_model', 'failover_port', 'failover_quiet'):
                 if k in body:
                     s[k] = body[k]
+            # failover_models is user input that a detached daemon reads back —
+            # sanitize at this trust boundary rather than in the daemon.
+            if 'failover_models' in body:
+                raw = body['failover_models']
+                if isinstance(raw, str):
+                    raw = raw.replace(',', '\n').split('\n')
+                s['failover_models'] = [
+                    str(m).strip() for m in (raw or []) if str(m).strip()][:8]
             # api_key only overwritten when the user actually typed a new one —
             # never blanked by a settings-save round-trip that omits it because
             # the frontend never receives the raw key back to resubmit

@@ -188,6 +188,42 @@ def test_settings_ui_mode_roundtrip(monkeypatch, tmp_path):
     assert config_mod.load_settings()['ui_mode'] == 'gui'
 
 
+def test_settings_failover_roundtrip(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    srv, base = _serve(monkeypatch)
+    try:
+        code, d = _req(base + '/api/settings', body={
+            'failover_models': ['  auto/a  ', '', 'auto/b'],
+            'failover_port': 20130, 'failover_quiet': True})
+        assert code == 200 and d['ok']
+    finally:
+        srv.shutdown()
+    s = config_mod.load_settings()
+    assert s['failover_models'] == ['auto/a', 'auto/b']   # stripped, blanks dropped
+    assert s['failover_port'] == 20130
+    assert s['failover_quiet'] is True
+
+
+def test_settings_failover_accepts_newline_text_and_caps_length(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    srv, base = _serve(monkeypatch)
+    try:
+        _req(base + '/api/settings',
+             body={'failover_models': '\n'.join('m%d' % i for i in range(20))})
+    finally:
+        srv.shutdown()
+    assert config_mod.load_settings()['failover_models'] == ['m%d' % i for i in range(8)]
+
+
+def test_state_payload_exposes_failover(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    from claude_sessions.gui import state_payload
+    p = state_payload()
+    assert p['failover_models'] == []
+    assert p['failover_port'] == 20129
+    assert p['failover_quiet'] is False
+
+
 def test_rename_via_api(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     actual, enc, sid = _seed(sb, monkeypatch)

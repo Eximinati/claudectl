@@ -22,7 +22,9 @@ def test_omniroute_client_degrades_quietly_when_unreachable():
     dead = 'http://127.0.0.1:1'
     assert omniroute.is_reachable(dead, timeout=1) is False
     assert omniroute.list_models(dead) == []
-    assert omniroute.provider_status(dead) == {'catalog': 0, 'configured': 0, 'active': 0}
+    assert omniroute.catalog(dead) == []
+    assert omniroute.health(dead) == {'providers': [], 'lockouts': [], 'summary': {}}
+    assert omniroute.fetch_both(dead) == ([], {'providers': [], 'lockouts': [], 'summary': {}})
 
 
 def test_ensure_running_reports_missing_binary(monkeypatch):
@@ -39,14 +41,14 @@ def test_ensure_running_skips_start_when_already_up(monkeypatch):
     assert (ok, msg) == (True, 'already running')
 
 
-def test_provider_status_reads_health_endpoint(monkeypatch):
+def test_health_summary_carries_provider_counts(monkeypatch):
     # confirmed against a live instance: /v1/models lists a static catalog
     # regardless of connected providers -- providerSummary is the real signal
     fake_health = {'providerSummary': {'catalogCount': 257, 'configuredCount': 1,
                                         'activeCount': 1}}
     monkeypatch.setattr(omniroute, '_get', lambda base, path, key, timeout=5: fake_health)
-    assert omniroute.provider_status('http://localhost:20128') == \
-        {'catalog': 257, 'configured': 1, 'active': 1}
+    assert omniroute.health('http://localhost:20128')['summary'] == \
+        {'catalogCount': 257, 'configuredCount': 1, 'activeCount': 1}
 
 
 def test_cli_connections_missing_binary_returns_empty(monkeypatch):
@@ -88,6 +90,271 @@ def test_test_live_reports_routed_model_on_success(monkeypatch):
     monkeypatch.setattr(omniroute.urllib.request, 'urlopen', lambda req, timeout=30: FakeResp())
     ok, used, msg = omniroute.test_live('http://localhost:20128', 'auto/coding')
     assert ok is True and used == 'big-pickle' and 'oc' in msg
+
+
+def _fake_http(monkeypatch, payloads):
+    """Serve canned JSON per URL path suffix (shapes taken from a live v3.8.48)."""
+    import io
+    import json
+
+    def _open(req, timeout=30):
+        url = req.full_url if hasattr(req, 'full_url') else str(req)
+        for suffix, payload in payloads.items():
+            if url.endswith(suffix):
+                return io.BytesIO(json.dumps(payload).encode())
+        raise AssertionError('unexpected URL %s' % url)
+    monkeypatch.setattr(omniroute.urllib.request, 'urlopen',
+                        lambda req, timeout=30: _open(req, timeout))
+
+
+_HEALTH = {
+    'providerHealth': {
+        'nvidia': {'state': 'CLOSED', 'failures': 3, 'lastFailure': 'x'},
+        'mimocode': {'state': 'HALF_OPEN', 'failures': 44, 'lastFailure': 'y'},
+        'deadprov': {'state': 'OPEN', 'failures': 99, 'lastFailure': 'z'},
+    },
+    'lockouts': [{'provider': 'nvidia', 'model': 'nvidia/locked-one',
+                  'reason': 'quota_exhausted', 'remainingMs': 60000}],
+    'providerSummary': {'catalogCount': 257, 'configuredCount': 3, 'activeCount': 2},
+}
+
+_CATALOG = {'data': [
+    {'id': 'auto/coding', 'owned_by': 'combo', 'context_length': 1048576,
+     'capabilities': {'tool_calling': True}},
+    {'id': 'nvidia/good', 'owned_by': 'nvidia', 'context_length': 128000,
+     'name': 'Good', 'capabilities': {'tool_calling': True}},
+    {'id': 'nvidia/locked-one', 'owned_by': 'nvidia', 'context_length': 128000,
+     'capabilities': {'tool_calling': True}},
+    {'id': 'nvidia/no-tools', 'owned_by': 'nvidia', 'context_length': 400000,
+     'capabilities': {'tool_calling': False}},
+    {'id': 'nvidia/flux', 'owned_by': 'nvidia',
+     'capabilities': {'tool_calling': True}},          # image gen: no context window
+    {'id': 'mcode/recovering', 'owned_by': 'mimocode', 'context_length': 64000,
+     'capabilities': {'tool_calling': True}},
+    {'id': 'dead/x', 'owned_by': 'deadprov', 'context_length': 64000,
+     'capabilities': {'tool_calling': True}},
+    {'id': 'oc/minimax-m3-free', 'owned_by': 'opencode', 'context_length': 1048576,
+     'capabilities': {'tool_calling': True}},          # provider never configured
+]}
+
+
+def test_health_parses_providers_and_lockouts(monkeypatch):
+    _fake_http(monkeypatch, {'/api/monitoring/health': _HEALTH})
+    h = omniroute.health('http://localhost:20128')
+    assert [p['name'] for p in h['providers']][0] == 'nvidia'   # CLOSED sorts first
+    assert {p['name']: p['state'] for p in h['providers']}['deadprov'] == 'OPEN'
+    assert h['lockouts'][0]['model'] == 'nvidia/locked-one'
+    assert h['summary']['configuredCount'] == 3
+
+
+def test_health_fails_closed_when_unreachable():
+    h = omniroute.health('http://127.0.0.1:1')
+    assert h == {'providers': [], 'lockouts': [], 'summary': {}}
+
+
+def test_usable_models_excludes_only_the_provable(monkeypatch):
+    _fake_http(monkeypatch, {'/api/monitoring/health': _HEALTH,
+                             '/v1/models': _CATALOG})
+    usable, autos, excluded = omniroute.usable_models('http://localhost:20128')
+    ids = [u['id'] for u in usable]
+    assert 'nvidia/good' in ids
+    assert 'mcode/recovering' in ids            # HALF_OPEN is recovering, still a candidate
+    assert autos == ['auto/coding']
+    assert 'dead/x' not in ids                  # circuit OPEN
+    assert 'nvidia/locked-one' not in ids       # quota lockout
+    assert 'nvidia/flux' not in ids             # no context window: not a chat model
+    assert 'nvidia/no-tools' not in ids         # claude cannot run without tools
+    flat = {m for v in excluded.values() for m in v}
+    assert flat == {'dead/x', 'nvidia/locked-one', 'nvidia/flux', 'nvidia/no-tools'}
+
+
+def test_usable_models_does_not_treat_unseen_provider_as_unconfigured(monkeypatch):
+    """providerHealth lists providers OmniRoute has ATTEMPTED, not ones that are
+    configured — confirmed live: it grew 5 -> 9 purely from probing while
+    configuredCount stayed 5. So a provider missing from it must not be inferred
+    to be unconfigured; probe_models() is what settles whether a model works."""
+    _fake_http(monkeypatch, {'/api/monitoring/health': _HEALTH,
+                             '/v1/models': _CATALOG})
+    usable, _autos, excluded = omniroute.usable_models('http://localhost:20128')
+    ids = [u['id'] for u in usable]
+    assert 'oc/minimax-m3-free' in ids          # opencode absent from providerHealth
+    assert not any('not configured' in k for k in excluded)
+
+
+def test_probe_models_reports_per_model_reality(monkeypatch):
+    calls = []
+
+    def fake_live(base, model=None, api_key='', timeout=30):
+        calls.append(model)
+        if model == 'good':
+            return True, 'served-by-x', 'routed to served-by-x'
+        return False, '', 'HTTP 401: Model %s is not supported' % model
+    monkeypatch.setattr(omniroute, 'test_live', fake_live)
+    res = omniroute.probe_models('http://localhost:20128', ['good', 'bad', 'good'])
+    assert [r['id'] for r in res] == ['good', 'bad']        # deduped, order kept
+    assert res[0]['ok'] is True and res[0]['served'] == 'served-by-x'
+    assert res[1]['ok'] is False and 'not supported' in res[1]['detail']
+    assert res[1]['status'] == 'auth'
+    assert sorted(calls) == ['bad', 'good']
+
+
+def test_classify_failure_separates_timeout_from_verdicts():
+    assert omniroute.classify_failure('timed out') == 'timeout'
+    assert omniroute.classify_failure('HTTP 410: gone') == 'gone'
+    assert omniroute.classify_failure('HTTP 403: Key limit exceeded') == 'limited'
+    assert omniroute.classify_failure('HTTP 403: permission_error') == 'auth'
+    assert omniroute.classify_failure('HTTP 500: boom') == 'error'
+
+
+def test_probe_retries_a_timeout_once_with_a_bigger_budget(monkeypatch):
+    """A timeout is our budget expiring, not a model fault — several probes queue
+    inside one OmniRoute. Without the retry the same model reads 'failed' in one
+    run and 'works' in the next."""
+    seen = []
+
+    def fake_live(base, model=None, api_key='', timeout=30):
+        seen.append((model, timeout))
+        if len([s for s in seen if s[0] == model]) == 1:
+            return False, '', 'timed out'
+        return True, model, 'routed to ' + model
+    monkeypatch.setattr(omniroute, 'test_live', fake_live)
+    res = omniroute.probe_models('http://localhost:20128', ['slow'], timeout=10)
+    assert res[0]['ok'] is True and res[0]['status'] == 'works'
+    assert 'on retry' in res[0]['detail']
+    assert [t for _m, t in seen] == [10, 20]       # doubled budget on the retry
+
+
+def test_probe_stops_once_enough_models_answer(monkeypatch):
+    seen = []
+
+    def fake_live(base, model=None, api_key='', timeout=30):
+        seen.append(model)
+        return True, model, 'ok'
+    monkeypatch.setattr(omniroute, 'test_live', fake_live)
+    ids = ['m%d' % i for i in range(12)]
+    res = omniroute.probe_models('http://x', ids, want=2, workers=1, skip={})
+    assert len(seen) == 2                       # stopped after two answered
+    assert [r['status'] for r in res[:2]] == ['works', 'works']
+    assert res[2]['status'] == 'skipped'
+    assert [r['id'] for r in res] == ids        # every id still reported, in order
+
+
+def test_probe_honours_total_budget(monkeypatch):
+    import time as _t
+    monkeypatch.setattr(omniroute, 'test_live',
+                        lambda b, model=None, api_key='', timeout=30: (
+                            _t.sleep(0.05), (False, '', 'HTTP 500: x'))[1])
+    ids = ['m%d' % i for i in range(40)]
+    res = omniroute.probe_models('http://x', ids, want=0, budget=0.06,
+                                 workers=1, skip={})
+    assert any(r['status'] == 'skipped' for r in res)
+    assert 'time budget' in [r['detail'] for r in res if r['status'] == 'skipped'][0]
+
+
+def test_probe_skips_known_dead_without_a_request(monkeypatch):
+    seen = []
+
+    def fake_live(base, model=None, api_key='', timeout=30):
+        seen.append(model)
+        return True, model, 'ok'
+    monkeypatch.setattr(omniroute, 'test_live', fake_live)
+    res = omniroute.probe_models('http://x', ['dead', 'live'], want=0,
+                                 skip={'dead': 'gone'})
+    assert seen == ['live']                     # never asked about 'dead'
+    by = {r['id']: r for r in res}
+    assert by['dead']['status'] == 'gone' and 'not re-probed' in by['dead']['detail']
+    assert by['live']['ok'] is True
+
+
+def test_dead_cache_roundtrip_and_recovery(monkeypatch, tmp_path):
+    from claude_sessions import config as _cfg
+    monkeypatch.setattr(_cfg, 'settings_file', str(tmp_path / 'claudectl.json'))
+    omniroute.save_dead([{'id': 'a', 'status': 'gone', 'ok': False},
+                         {'id': 'b', 'status': 'auth', 'ok': False},
+                         {'id': 'c', 'status': 'timeout', 'ok': False}])
+    d = omniroute.load_dead()
+    assert d == {'a': 'gone', 'b': 'auth'}      # timeouts are never cached
+    # a model that comes back stops being skipped
+    omniroute.save_dead([{'id': 'a', 'status': 'works', 'ok': True}])
+    assert omniroute.load_dead() == {'b': 'auth'}
+
+
+def test_dead_cache_expires(monkeypatch, tmp_path):
+    import json as _j
+    import time as _t
+    from claude_sessions import config as _cfg
+    monkeypatch.setattr(_cfg, 'settings_file', str(tmp_path / 'claudectl.json'))
+    with open(omniroute.dead_path(), 'w', encoding='utf-8') as f:
+        _j.dump({'old': {'status': 'gone', 'ts': _t.time() - omniroute._DEAD_TTL - 10},
+                 'new': {'status': 'gone', 'ts': _t.time()}}, f)
+    assert omniroute.load_dead() == {'new': 'gone'}
+
+
+def test_order_fairly_round_robins_providers():
+    """Catalog order is alphabetical by provider, so one broken provider eats the
+    whole probe budget and later providers are never reached — measured: 77s spent
+    on gemini/groq/nvidia/oc left all 12 working openrouter models unprobed."""
+    ids = ['nvidia/a', 'nvidia/b', 'nvidia/c', 'openrouter/x', 'openrouter/y', 'gemini/g']
+    out = omniroute.order_fairly(ids)
+    assert {o.split('/')[0] for o in out[:3]} == {'nvidia', 'openrouter', 'gemini'}
+    assert sorted(out) == sorted(ids)          # nothing lost or duplicated
+
+
+def test_order_fairly_puts_known_good_first():
+    ids = ['nvidia/a', 'openrouter/x', 'gemini/g']
+    assert omniroute.order_fairly(ids, alive=['openrouter/x'])[0] == 'openrouter/x'
+
+
+def test_record_result_learns_from_a_real_turn(monkeypatch, tmp_path):
+    from claude_sessions import config as _cfg
+    monkeypatch.setattr(_cfg, 'settings_file', str(tmp_path / 'claudectl.json'))
+    omniroute.record_result('m1', True)
+    assert omniroute.load_alive() == ['m1']
+    omniroute.record_result('m2', False, 'HTTP 410: gone')
+    assert omniroute.load_dead() == {'m2': 'gone'}
+    # a timeout is not a verdict and must not be recorded either way
+    omniroute.record_result('m3', False, 'timed out')
+    assert 'm3' not in omniroute.load_dead() and 'm3' not in omniroute.load_alive()
+
+
+def test_record_result_is_a_noop_when_status_unchanged(monkeypatch, tmp_path):
+    from claude_sessions import config as _cfg
+    monkeypatch.setattr(_cfg, 'settings_file', str(tmp_path / 'claudectl.json'))
+    omniroute.record_result('m1', True)
+    calls = []
+    monkeypatch.setattr(omniroute, 'save_dead', lambda *a, **k: calls.append(a))
+    omniroute.record_result('m1', True)        # same status -> no rewrite per turn
+    assert calls == []
+
+
+def test_probe_does_not_retry_a_definitive_failure(monkeypatch):
+    seen = []
+
+    def fake_live(base, model=None, api_key='', timeout=30):
+        seen.append(model)
+        return False, '', 'HTTP 410: gone'
+    monkeypatch.setattr(omniroute, 'test_live', fake_live)
+    res = omniroute.probe_models('http://localhost:20128', ['dead'], timeout=10)
+    assert res[0]['status'] == 'gone'
+    assert seen == ['dead']                        # 410 is permanent, no retry
+
+
+def test_probe_models_empty_is_noop(monkeypatch):
+    monkeypatch.setattr(omniroute, 'test_live',
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError('called')))
+    assert omniroute.probe_models('http://localhost:20128', []) == []
+
+
+def test_usable_models_healthy_provider_sorts_before_recovering(monkeypatch):
+    _fake_http(monkeypatch, {'/api/monitoring/health': _HEALTH,
+                             '/v1/models': _CATALOG})
+    usable, _a, _e = omniroute.usable_models('http://localhost:20128')
+    assert usable[0]['state'] == 'CLOSED'
+
+
+def test_usable_models_fails_closed_when_unreachable():
+    usable, autos, excluded = omniroute.usable_models('http://127.0.0.1:1')
+    assert usable == [] and autos == [] and excluded == {}
 
 
 def test_cli_strips_ansi_log_preamble_before_json(monkeypatch):
