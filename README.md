@@ -8,7 +8,7 @@
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078D6">
-  <img alt="Dependencies" src="https://img.shields.io/badge/runtime%20deps-zero%20(stdlib)-brightgreen">
+  <img alt="Dependencies" src="https://img.shields.io/badge/python%20deps-zero%20(stdlib)-brightgreen">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
   <img alt="Claude Code" src="https://img.shields.io/badge/for-Claude%20Code-8A5CF6">
 </p>
@@ -219,7 +219,7 @@ Per-day table of the last 14 days — tokens in/out/cache, est. cost, sessions, 
 - **Extra PATH entries** / **Add directories** — per-project PATH dirs and `--add-dir` context roots
 
 ### Desktop GUI (`claudectl --gui`)
-Everything above, as a native desktop app — full feature parity with the TUI, served locally (loopback-only, zero deps, works offline):
+Everything above, as a native desktop app — full feature parity with the TUI, served locally (loopback-only, works offline). No Python dependencies; the browser bundle vendors three.js and anime.js (both MIT, served from `/vendor/`, never a CDN):
 
 - **Shells** — PyQt6 native window if installed, else an Edge app-mode window, else the browser (`gui_shell` setting: auto / qt / edge / browser). The bottom-left toggle (or `ui_mode`) picks which interface starts by default; `--tui`/`--gui` always override.
 - **Projects & sessions** — sidebar with live filter and quick-resume; per-session resume / fork / rename / tag / archive / restore / delete / export markdown / transcript with session info / changed files.

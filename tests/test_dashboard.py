@@ -111,6 +111,38 @@ def test_dashboard_breakdown_splits_accounts_and_flags_omni(monkeypatch, tmp_pat
         srv.shutdown()
 
 
+def test_dashboard_recent_spans_accounts_and_skips_headless_oneshots(monkeypatch, tmp_path):
+    """Recent sessions come from the transcript scan, not last-session.json —
+    that store only knows sessions claudectl itself launched, so anything opened
+    with `claude` directly (or under another account) never appeared."""
+    sb = _fresh(monkeypatch, tmp_path)
+    second = tmp_path / 'cfg2' / 'projects'
+    second.mkdir(parents=True)
+    monkeypatch.setattr('claude_sessions.config.all_config_dirs',
+                        lambda: [('default', str(sb.cfg)), ('work', str(tmp_path / 'cfg2'))])
+    actual = str(sb.root / 'work' / 'alpha')
+    os.makedirs(actual, exist_ok=True)
+    enc = 'X--enc-alpha'
+    (sb.projects / enc).mkdir()
+    (second / enc).mkdir()
+    make_jsonl(str(sb.projects / enc / 'real-default.jsonl'), n_msgs=12, title='Real work')
+    make_jsonl(str(second / enc / 'real-work.jsonl'), n_msgs=12, title='Other account')
+    make_jsonl(str(sb.projects / enc / 'oneshot.jsonl'), n_msgs=2, title='Distil lessons')
+    for mod in ('claude_sessions.gui.find_actual_path',
+                'claude_sessions.paths.find_actual_path'):
+        monkeypatch.setattr(mod, lambda e: actual if e == enc else None)
+    srv, base = _serve(monkeypatch)
+    try:
+        _code, d = _req(f'{base}/api/dashboard')
+        sids = [r['sid'] for r in d['recent']]
+        assert 'real-default' in sids and 'real-work' in sids
+        assert 'oneshot' not in sids
+        assert {r['account'] for r in d['recent']} == {'default', 'work'}
+        assert all(r['mtime'] > 0 and r['age'] for r in d['recent'])
+    finally:
+        srv.shutdown()
+
+
 def test_dashboard_week_is_7_and_increasing(monkeypatch, tmp_path):
     sb = _fresh(monkeypatch, tmp_path)
     _seed(sb, monkeypatch)

@@ -1,0 +1,163 @@
+"""Screenshot the GUI against realistic stub data and audit for layout overflow.
+
+Companion to tools/smoke_gui.py: that one checks behaviour, this one checks fit.
+The overflow audit is the useful part — it walks every dashboard card and reports
+any descendant whose box sticks out past it, which is how the oversized gauges
+were caught (a square gauge in a width:100% slot grew as tall as the card was
+wide and spilled its label out of the bottom).
+
+    py -3 tools/shot_gui.py [outdir]
+"""
+import importlib.util
+import os
+import sys
+import threading
+import time
+from http.server import ThreadingHTTPServer
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+_spec = importlib.util.spec_from_file_location('sg', os.path.join(_ROOT, 'tools', 'smoke_gui.py'))
+sg = importlib.util.module_from_spec(_spec)
+sg.__name__ = 'sg'
+_spec.loader.exec_module(sg)
+
+OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(_ROOT, 'references')
+PORT = 8801
+
+# a workspace the size of a real one: 13 projects, 10 MCP servers, 3 accounts.
+# Small stub data hides exactly the bugs that matter — an oversized gauge looks
+# fine next to two projects and breaks the card next to thirteen.
+_N = time.time()
+_PROJ = [('Claude', 4199000, 'now', ['personal', 'Lorenzo']),
+         ('repos', 4562000, '12h', ['personal', 'Lorenzo']),
+         ('Documentation', 163000, '6h', ['default']),
+         ('Waste_management_model_2026', 48000, '8h', ['default']),
+         ('IKM-Drag-Drop', 91000, '1d', ['personal', 'Lorenzo']),
+         ('siglip2-finetune', 22000, '2d', ['default']),
+         ('swift_ft', 18000, '3d', ['default']),
+         ('proj8', 9000, '4d', ['personal']),
+         ('proj9', 7000, '5d', ['default']),
+         ('proj10', 5000, '6d', ['Lorenzo']),
+         ('proj11', 4000, '7d', ['default']),
+         ('proj12', 3000, '8d', ['personal']),
+         ('proj13', 2000, '9d', ['default'])]
+sg.DASH['breakdown']['projects'] = [
+    {'name': n, 'enc': n.lower(), 'tokens': t, 'cost': t / 2e5, 'age': a,
+     'mtime': _N - i * 4000, 'accounts': acc, 'omni': i % 3 == 0,
+     'sparkline': [(i * j) % 9 + 1 for j in range(7)]}
+    for i, (n, t, a, acc) in enumerate(_PROJ)]
+sg.DASH['mcp'] = [{'name': 'server-%d' % i, 'running': i == 0} for i in range(10)]
+sg.ROUTES['/api/mcp'] = {'servers': [{'name': 'server-%d' % i,
+                                      'status': 'ok' if i == 0 else 'down'}
+                                     for i in range(10)]}
+_ACCTS = [('default', 87, '01:40', 59, 'Sun 09:00'),
+          ('personal', 82, '03:09', 57, 'Sat 08:59'),
+          ('Lorenzo', 45, '04:50', 48, 'Mon 02:00')]
+sg.PLAN['accounts'] = [
+    {'account': n, 'email': n, 'plan': 'max', 'status': 'ok',
+     'windows': [{'label': 'session', 'pct': sp, 'resets': sr},
+                 {'label': 'weekly', 'pct': wp, 'resets': wr}]}
+    for n, sp, sr, wp, wr in _ACCTS]
+sg.STATE['accounts'] = [{'name': n, 'dir': n, 'active': n == 'default'}
+                        for n, *_ in _ACCTS]
+sg.STATE['projects'] = [
+    {'name': p['name'], 'path': os.path.join('D:\\', p['name']),
+     'encoded': p['enc'], 'accounts': p['accounts'], 'primary_cfgdir': '',
+     'auto_memory': i < 2, 'last_active': p['age']}
+    for i, p in enumerate(sg.DASH['breakdown']['projects'])]
+
+# A child of a scrolling container legitimately has a rect outside it — that is
+# what scrolling means — so those are skipped or every long list reads as broken.
+OVERFLOW_JS = """[...document.querySelectorAll('.dash>.card')].map(c=>{
+  const cb=c.getBoundingClientRect();const bad=[];
+  const clipped=e=>{
+    for(let p=e.parentElement;p&&p!==c.parentElement;p=p.parentElement){
+      const o=getComputedStyle(p).overflowY;
+      if(o==='auto'||o==='scroll'||o==='hidden')return true;}
+    return false;};
+  c.querySelectorAll('*').forEach(e=>{
+    const b=e.getBoundingClientRect();
+    if(!b.height||clipped(e))return;
+    const over=Math.max(b.bottom-cb.bottom,b.right-cb.right);
+    if(over>1.5)bad.push((typeof e.className==='string'?e.className.split(' ')[0]:e.tagName)
+      +'+'+Math.round(over)+'px');});
+  return (c.className.match(/d-[\\w]+/)||['?'])[0]+': '+(bad.length?bad.join(', '):'clean');})"""
+
+
+def main():
+    from playwright.sync_api import sync_playwright
+    os.makedirs(OUT, exist_ok=True)
+    srv = ThreadingHTTPServer(('127.0.0.1', PORT), sg.H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    errs = []
+    with sync_playwright() as pw:
+        # SwiftShader, so the screenshots actually contain the stage rather than
+        # the static-gradient fallback (same reason as smoke_gui).
+        br = pw.chromium.launch(args=[
+            '--use-gl=angle', '--use-angle=swiftshader',
+            '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'])
+        pg = br.new_page(viewport={'width': 1600, 'height': 1000})
+        pg.on('pageerror', lambda e: errs.append(str(e)))
+        pg.goto(f'http://127.0.0.1:{PORT}/')
+        pg.wait_for_timeout(2500)
+        print('stage:', pg.evaluate(
+            "STAGE.ok?('live · '+STAGE.scene+(STAGE._post?' + bloom':'')):'FALLBACK'"))
+
+        print('— overflow audit (dashboard cards) —')
+        for line in pg.evaluate(OVERFLOW_JS):
+            print('  ' + line)
+        print('\ncard heights:', pg.evaluate(
+            "[...document.querySelectorAll('.dash>.card')].map(c=>"
+            "(c.className.match(/d-[\\w]+/)||['?'])[0]+':'"
+            "+Math.round(c.getBoundingClientRect().height))"))
+        print('instrument row equal height:', pg.evaluate(
+            "(()=>{const h=['d-i1','d-i2','d-i3','d-i4'].map(k=>Math.round("
+            "document.querySelector('.'+k).getBoundingClientRect().height));"
+            "return h.join('/')+(new Set(h).size===1?' ✓':' RAGGED');})()"))
+        print('skeletons still on screen:',
+              pg.evaluate("document.querySelectorAll('.shimmer').length"))
+        print('readouts:', pg.evaluate(
+            "[...document.querySelectorAll('.iread b')].map(e=>e.textContent)"))
+
+        for name, w, h in (('dash', 1600, 1000), ('dash-narrow', 820, 1000)):
+            pg.set_viewport_size({'width': w, 'height': h})
+            pg.wait_for_timeout(700)
+            pg.screenshot(path=os.path.join(OUT, f'_shot_{name}.png'))
+        pg.set_viewport_size({'width': 1600, 'height': 1000})
+        for page in ('usage', 'mcp', 'accounts', 'settings'):
+            pg.evaluate(f"go('{page}')")
+            pg.wait_for_timeout(800)
+            pg.screenshot(path=os.path.join(OUT, f'_shot_{page}.png'))
+
+        # ── per-skin pass ──
+        # A skin changes card geometry, so it can break fit in ways the default
+        # skin never would (a 3px border and a hard shadow, a clip-path, a
+        # 0-radius panel). Shoot and audit every one.
+        print('\n— per-skin audit —')
+        pg.evaluate("go('home')")
+        pg.wait_for_timeout(900)
+        skins = pg.evaluate("Object.keys(ST.skins||{})")
+        for sk in skins:
+            pg.evaluate(f"ST.skin='{sk}';applyTheme(ST.theme)")
+            pg.wait_for_timeout(500)
+            bad = [ln for ln in pg.evaluate(OVERFLOW_JS) if 'clean' not in ln]
+            heights = pg.evaluate(
+                "['d-i1','d-i2','d-i3','d-i4'].map(k=>Math.round("
+                "document.querySelector('.'+k).getBoundingClientRect().height))")
+            even = len(set(heights)) == 1
+            state = 'clean' if (not bad and even) else (
+                ('OVERFLOW ' + '; '.join(bad)) if bad else f'RAGGED {heights}')
+            print(f'  {sk:<10} {state}')
+            pg.screenshot(path=os.path.join(OUT, f'_skin_{sk}.png'))
+        pg.evaluate("ST.skin='';applyTheme(ST.theme)")
+        br.close()
+    srv.shutdown()
+    print('\nJS errors:', errs if errs else 'none')
+    print('shots →', OUT)
+
+
+if __name__ == '__main__':
+    main()

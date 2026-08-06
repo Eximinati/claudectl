@@ -79,7 +79,14 @@ def _run_cancellable(cmd, input_text=None, capture_output=True, text=True,
     t.start()
     try:
         stdout, _ = proc.communicate(input=input_text, timeout=timeout)
-        return (stdout or '').strip() if capture_output else ''
+        stdout = (stdout or '').strip() if capture_output else ''
+        # stderr is merged into stdout above, so a failed CLI run looks exactly
+        # like a successful one to every caller unless the exit code is checked.
+        if proc.returncode:
+            if job is not None:
+                job['last_subprocess_error'] = {'code': proc.returncode, 'output': stdout}
+            return ''
+        return stdout
     except subprocess.TimeoutExpired:
         try: proc.kill()
         except Exception: pass
@@ -100,6 +107,16 @@ def _run_cancellable(cmd, input_text=None, capture_output=True, text=True,
             job['procs'].remove(proc)
         if job is not None and job['cancel_event'].is_set():
             raise JobCancelled
+
+
+def _subprocess_error_detail():
+    """What the last failed subprocess on this job thread actually said, so a
+    caller can replace a generic 'no output' message with the real reason."""
+    job = getattr(_JOBCTX, 'job', None)
+    err = job and job.get('last_subprocess_error')
+    if not err:
+        return ''
+    return 'claude exited %s: %s' % (err['code'], (err['output'] or '(no output)')[:400])
 
 
 def _job(jid):
@@ -513,7 +530,10 @@ def api_usage_project(q, body):
 def api_usage_plan(q, body):
     from . import usage as usage_mod
     if q.get('refresh'):
-        usage_mod.refresh_now()
+        # one network round-trip per account, so never inline: it would hold the
+        # request thread (and the clicked button) for as long as the slowest or
+        # most-expired account takes. The client short-polls for the result.
+        threading.Thread(target=usage_mod.refresh_now, daemon=True).start()
     else:
         usage_mod._ensure_started()
     out = []
@@ -571,10 +591,9 @@ def api_dashboard(q, body):
         return _dash_cache
     from datetime import datetime
     from .stats import assemble_breakdown
-    from .sessions import load_recent_sessions, get_session_stats, load_name, format_age
+    from .sessions import load_name, format_age
     from . import mcp as mcp_mod
     from . import failover as fov
-    from .gui import _used_omni
 
     bd = assemble_breakdown(_entries(), days=_DASH_DAYS)
     week = bd['days'][-7:]                         # exactly 7, oldest→newest
@@ -595,23 +614,20 @@ def api_dashboard(q, body):
     mcp_rows = [{'name': n, 'running': s == 'ok'}
                 for n, s in mcp_mod.get_mcp_status()]
 
+    # from the breakdown's own scan of every account's transcripts, not the
+    # last-session.json launch history — that only records sessions claudectl
+    # itself started, so anything opened by `claude` directly never showed up.
     recent = []
-    for r in load_recent_sessions(5):
-        pf = os.path.join(r.get('cfgdir') or _c.config_dir, 'projects',
-                          r.get('encoded_name', ''))
-        jsonl = os.path.join(pf, f"{r['session_id']}.jsonl")
-        st = get_session_stats(jsonl)
-        mtime = int(st.get('last_ts') or r.get('timestamp') or 0)
-        recent.append({'id': r['session_id'], 'sid': r['session_id'],
-                       'path': r['project_path'],
-                       'encoded': r.get('encoded_name', ''),
-                       'cfgdir': r.get('cfgdir') or _c.config_dir,
-                       'project': os.path.basename(r['project_path']) or r['project_path'],
-                       'title': (load_name(pf, r['session_id']) or st.get('title')
-                                 or r.get('preview') or r['session_id'][:8]),
-                       'msgs': st.get('count', 0), 'mtime': mtime,
-                       'age': format_age(mtime).strip() if mtime else '',
-                       'omni': bool(_used_omni(st))})
+    for r in bd.get('recent', []):
+        pf = os.path.join(r['cfgdir'], 'projects', r['encoded'])
+        recent.append({'id': r['sid'], 'sid': r['sid'], 'path': r['path'],
+                       'encoded': r['encoded'], 'cfgdir': r['cfgdir'],
+                       'project': os.path.basename(r['path']) or r['path'],
+                       'account': r.get('account', ''),
+                       'title': load_name(pf, r['sid']) or r['title'],
+                       'msgs': r['msgs'], 'mtime': int(r['mtime']),
+                       'age': format_age(r['mtime']).strip() if r['mtime'] else '',
+                       'omni': bool(r['omni'])})
 
     f_running, f_port = False, None
     try:
@@ -629,6 +645,111 @@ def api_dashboard(q, body):
                    'generated_at': int(time.time())}
     _dash_cached_at = time.monotonic()
     return _dash_cache
+
+
+# ── ambient motion feed ──────────────────────────────────────
+
+_GLITE_TTL = 60
+_glite_cache = {}
+
+
+def api_graph_lite(q, body):
+    """Compact project shape for the ambient motion layer.
+
+    Deliberately NOT the /graph payload: the animated themes need a couple of
+    dozen numbers per frame-bind, not the full node/edge graph the standalone
+    visualiser renders. Reuses connections.build_hierarchy, which is already
+    signature-cached on disk, so a repeat call costs a directory walk at worst
+    — and this endpoint caches on top of that for _GLITE_TTL seconds because
+    the motion layer polls it while a project page is open.
+    """
+    from . import connections
+    path = q.get('path', '')
+    enc = q.get('enc', '')
+    cfgdir = q.get('cfgdir') or _c.config_dir
+    key = (path, enc, cfgdir)
+    now = time.monotonic()
+    hit = _glite_cache.get(key)
+    if hit and now - hit[0] < _GLITE_TTL:
+        return hit[1]
+
+    proj_folder = os.path.join(cfgdir, 'projects', enc) if enc else None
+    try:
+        g = connections.build_hierarchy(path, proj_folder)
+    except Exception:
+        g = {'nodes': [], 'dep_edges': [], 'meta': {}}
+
+    # top-level modules only — one animated element per module keeps the field
+    # readable; deeper nodes would just be noise at ambient opacity
+    mods = [n for n in g.get('nodes', [])
+            if n.get('depth') == 1 and n.get('type') in ('dir', 'repo')]
+    mods.sort(key=lambda n: n.get('total_files', 0), reverse=True)
+    mods = mods[:24]
+    idx = {n['id']: i for i, n in enumerate(mods)}
+
+    now_s = time.time()
+    modules = []
+    for n in mods:
+        mt = 0.0
+        try:
+            mt = os.path.getmtime(os.path.join(path, n.get('label', '')))
+        except OSError:
+            pass
+        # 0..1 recency ramp over a week, same shape as the dashboard's node heat
+        heat = max(0.0, min(1.0, 1 - (now_s - mt) / (3600 * 24 * 7))) if mt else 0.0
+        modules.append({'label': n.get('label', ''),
+                        'files': n.get('total_files', 0),
+                        'rank': n.get('rank', 0),
+                        'heat': round(heat, 3)})
+
+    # dependency edges are aggregated at whatever directory level the import
+    # crossed, so roll each endpoint up to its top-level module before pairing
+    # — otherwise every edge sits below depth 1 and the field draws nothing
+    def _rollup(nid):
+        # endpoints are file: ids far more often than dir: ids; a root-level
+        # file belongs to no module and drops out
+        rel = (nid or '').split(':', 1)[-1] if nid else ''
+        head, sep, _ = rel.partition('/')
+        return ('dir:' + head) if sep else None
+
+    agg = {}
+    for e in g.get('dep_edges', []):
+        a, b = idx.get(_rollup(e.get('source'))), idx.get(_rollup(e.get('target')))
+        if a is not None and b is not None and a != b:
+            agg[(a, b)] = agg.get((a, b), 0) + e.get('weight', 1)
+    edges = sorted(([a, b, w] for (a, b), w in agg.items()),
+                   key=lambda r: r[2], reverse=True)[:60]
+    for a, b, w in edges:                 # module weight = its edge traffic
+        modules[a]['rank'] += w
+        modules[b]['rank'] += w
+
+    mem = {}
+    try:
+        from .memhub import _state
+        from .lessons import pending_sids
+        st = _state(path, proj_folder) if proj_folder else None
+        if st:
+            m = st['mem']
+            try:
+                unscanned = len(pending_sids(proj_folder, m))
+            except Exception:
+                unscanned = 0
+            mem = {'entities': len(st['entities']), 'lessons': len(st['lessons']),
+                   'pending': len(st['pending']), 'unscanned': unscanned,
+                   'generated_at': m.get('generated_at', '')}
+    except Exception:
+        pass
+
+    counts = (g.get('meta') or {}).get('counts') or {}
+    out = {'modules': modules, 'edges': edges, 'memory': mem,
+           'files': counts.get('files', 0), 'repos': counts.get('repos', 0),
+           'languages': (g.get('meta') or {}).get('languages') or {},
+           'generated_at': int(now_s)}
+    _glite_cache[key] = (now, out)
+    if len(_glite_cache) > 24:            # bounded: one entry per project visited
+        for k in list(_glite_cache)[:-24]:
+            _glite_cache.pop(k, None)
+    return out
 
 
 # ── managers: hooks / agents / mcp / accounts ────────────────
@@ -1369,7 +1490,8 @@ def api_job_start(q, body):
         def _make():
             plan = _plan(task, model, path, effort, cfgdir)
             if not plan:
-                raise RuntimeError('Planning failed or produced no output')
+                raise RuntimeError(_subprocess_error_detail()
+                                   or 'Planning failed or produced no output')
             if council:
                 plan = optimize_plan_council(task, plan, path, omni_env=omni_env, cfgdir=cfgdir)
             plan_path = write_plan_file(path, task, plan)
@@ -1476,7 +1598,8 @@ def api_job_start(q, body):
         def _replan():
             revised = replan_from_plan(plan_text or task, feedback, model, path, effort, cfgdir)
             if not revised:
-                raise RuntimeError('Re-plan failed or produced no output')
+                raise RuntimeError(_subprocess_error_detail()
+                                   or 'Re-plan failed or produced no output')
             return {'plan': revised}
         jid = start_job('Re-planning with feedback', _replan)
     elif kind == 'skill_git_install':
@@ -1717,6 +1840,7 @@ GET_ROUTES = {
     '/api/usage/plan': api_usage_plan,
     '/api/search-index': api_search_index,
     '/api/dashboard': api_dashboard,
+    '/api/graph-lite': api_graph_lite,
     '/api/hooks': api_hooks_get,
     '/api/agents/library': api_agents_library,
     '/api/agents/read': api_agent_read,

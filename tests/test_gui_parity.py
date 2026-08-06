@@ -633,6 +633,48 @@ def test_job_plan_make_without_council_skips_optimizer(monkeypatch, tmp_path):
         srv.shutdown()
 
 
+def test_job_plan_make_surfaces_real_subprocess_error(monkeypatch, tmp_path):
+    # regression: _run_cancellable merges stderr into stdout and used to ignore
+    # the exit code, so a failed `claude` run was saved and shown AS the plan.
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, sids = _seed(sb, monkeypatch)
+    from claude_sessions import config as cfg_mod, gui_api, memory
+    monkeypatch.setattr(cfg_mod, 'get_claude_exe', lambda: r'C:\fake.exe')
+
+    class FakeProc:
+        pid = 4321
+        returncode = 1
+        def communicate(self, input=None, timeout=None):
+            return ('Error: model claude-bogus-9 not found', None)
+        def poll(self):
+            return 1
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(gui_api.subprocess, 'Popen', lambda *a, **k: FakeProc())
+    monkeypatch.setattr(memory._tls, 'silent', True, raising=False)
+    srv, base = _serve()
+    try:
+        code, d = _req(base + '/api/job',
+                       {'kind': 'plan_make', 'path': actual, 'enc': enc,
+                        'cfgdir': str(sb.cfg), 'task': 'do a thing'})
+        jid = d['job']
+        # Sandbox stubs time.sleep to a no-op, so pace this on a real timer or
+        # the loop spins out before the job thread has run at all
+        pause = threading.Event()
+        for _ in range(100):
+            code, st = _req(f'{base}/api/job/{jid}')
+            if st['status'] in ('done', 'error'):
+                break
+            pause.wait(0.05)
+        assert st['status'] == 'error'
+        assert 'exited 1' in st['error']
+        assert 'claude-bogus-9 not found' in st['error']
+        assert not os.path.exists(os.path.join(actual, '.claudectl', 'plan-latest.md'))
+    finally:
+        srv.shutdown()
+
+
 def test_job_plan_make_council_ignores_stale_omniroute_default(monkeypatch, tmp_path):
     # regression: council used to always route through the account-wide
     # omniroute_exec_model default regardless of the 'via' the user picked
@@ -947,9 +989,10 @@ def test_gui_state_exposes_frontier(monkeypatch, tmp_path):
 
 
 def test_gui_home_dashboard_zones_and_recent_age(monkeypatch, tmp_path):
-    """Home is the dense dashboard grid (accounts rail / chart+KPIs / projects /
-    continue / system / recent), not the old bento tiles or the 3D card deck --
-    and each recent row still carries a human 'age' for the continue tile."""
+    """Home is the dashboard bento: an instrument row (quota / burn / tooling /
+    activity) over continue + workspace map, then trend, accounts and recent.
+    Not the old bento tiles, not the 3D card deck -- and each recent row still
+    carries a human 'age' for the continue tile."""
     from claude_sessions.gui_html import PAGE
     # the old deck and the old bento tiles are gone entirely
     for dead in ('deckMarkup', 'renderDeck', 'bindDeckSwipe', 'deckNext',
@@ -957,13 +1000,24 @@ def test_gui_home_dashboard_zones_and_recent_age(monkeypatch, tmp_path):
                  'projectsTileHtml', 'loadHomeUsage', 'function spark('):
         assert dead not in PAGE, dead
     assert 'class="deck"' not in PAGE and 'class="bento"' not in PAGE
-    # the dashboard zones exist
+    # the dashboard zones exist. Matched on the class token rather than the whole
+    # attribute: cards also carry .spot/.lift now, and pinning the exact string
+    # made this fail on a purely presentational change.
     assert 'class="dash"' in PAGE
-    for zone in ('d-acct', 'd-chart', 'd-projects', 'd-continue', 'd-live', 'd-recent'):
-        assert f'class="card {zone}"' in PAGE, zone
-    assert 'function continueTileHtml' in PAGE and 'function projectsListHtml' in PAGE
+    for zone in ('d-i1', 'd-i2', 'd-i3', 'd-i4', 'd-acct', 'd-chart',
+                 'd-projects', 'd-continue', 'd-recent'):
+        assert f'card {zone}' in PAGE or f' {zone} ' in PAGE, zone
+        assert f'.{zone}{{grid-area:' in PAGE, f'{zone} has no grid area'
+    # d-live is gone: the "System" tile was a text dump of jobs/mcp/failover, now
+    # read off the tooling and activity gauges
+    assert 'd-live' not in PAGE
+    assert 'function continueTileHtml' in PAGE and 'function projectRowHtml' in PAGE
     assert 'function tokenChart' in PAGE and 'function acctCard' in PAGE
     assert 'function kpiHtml' in PAGE and 'function drawHomeSearchResults' in PAGE
+    # the gauges must be fed from the dashboard's own fetches, never their own
+    assert 'function feedDashboard' in PAGE
+    for key in ('quota', 'burn', 'mcp', 'jobs', 'flow'):
+        assert f"INST.set('{key}'" in PAGE, key
     # continue-tile resume reuses the one-click + inline-tune helpers, not askLaunch
     home_resume = PAGE[PAGE.index('function homeResume('):PAGE.index('function toggleHomeTune')]
     assert 'askLaunch' not in home_resume and 'doQuickLaunch' in home_resume

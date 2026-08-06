@@ -28,5 +28,16 @@ claudectl = "claude_sessions.main:run"
 [tool.setuptools]
 packages = ["claude_sessions"]
 
+[tool.setuptools.package-data]
+# The GUI is served from source files, not generated — they have to ship.
+# web/vendor/** is three.js + anime.js (both MIT, vendored so the GUI stays
+# offline); the nested globs are needed because package-data does not recurse.
+claude_sessions = [
+    "web/*.html", "web/*.css", "web/*.js",
+    "web/vendor/*.js", "web/vendor/*.txt",
+    "web/vendor/*/*.js",
+    "skills_templates/*.md",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

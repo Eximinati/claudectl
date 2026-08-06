@@ -3,6 +3,8 @@ import json
 import shutil
 import logging
 
+from . import themes as _themes
+
 _USERPROFILE = os.environ.get('USERPROFILE') or os.path.expanduser('~')
 _TEMP        = os.environ.get('TEMP') or os.environ.get('TMP') or _USERPROFILE
 
@@ -239,78 +241,18 @@ C_WARN      = '\033[38;5;215m'              # attention
 C_ERR       = '\033[91m'                    # errors
 C_NAME      = '\033[97m'                    # session names
 
-# Named palettes. Each maps the switchable C_* entries; missing keys keep
-# the default. Title/search/star also retint to the accent family.
-THEMES = {
-    'default': {'C_ACCENT': '\033[38;5;117m', 'C_SEL_BG': '\033[48;5;237m\033[97m',
-                'C_HEADER_BG': '\033[48;5;24m\033[38;5;231m', 'C_OK': '\033[38;5;114m',
-                'C_WARN': '\033[38;5;215m', 'C_TITLE': '\033[96m', 'C_SRCH': '\033[96;1m',
-                'C_STAR': '\033[93m'},
-    'ocean':   {'C_ACCENT': '\033[38;5;39m', 'C_SEL_BG': '\033[48;5;24m\033[97m',
-                'C_HEADER_BG': '\033[48;5;23m\033[38;5;231m', 'C_OK': '\033[38;5;43m',
-                'C_WARN': '\033[38;5;214m', 'C_TITLE': '\033[38;5;39m', 'C_SRCH': '\033[38;5;45;1m',
-                'C_STAR': '\033[38;5;45m'},
-    'forest':  {'C_ACCENT': '\033[38;5;78m', 'C_SEL_BG': '\033[48;5;22m\033[97m',
-                'C_HEADER_BG': '\033[48;5;22m\033[38;5;231m', 'C_OK': '\033[38;5;120m',
-                'C_WARN': '\033[38;5;179m', 'C_TITLE': '\033[38;5;78m', 'C_SRCH': '\033[38;5;120;1m',
-                'C_STAR': '\033[38;5;185m'},
-    'mono':    {'C_ACCENT': '\033[97m', 'C_SEL_BG': '\033[7m', 'C_HEADER_BG': '\033[7m',
-                'C_OK': '\033[97m', 'C_WARN': '\033[97m', 'C_TITLE': '\033[1m',
-                'C_SRCH': '\033[1m', 'C_STAR': '\033[97m'},
-    'mocha':   {'C_ACCENT': '\033[38;5;141m', 'C_SEL_BG': '\033[48;5;237m\033[38;5;231m',
-                'C_HEADER_BG': '\033[48;5;60m\033[38;5;231m', 'C_OK': '\033[38;5;150m',
-                'C_WARN': '\033[38;5;216m', 'C_TITLE': '\033[38;5;141m', 'C_SRCH': '\033[38;5;218;1m',
-                'C_STAR': '\033[38;5;223m'},
-    'tokyo':   {'C_ACCENT': '\033[38;5;111m', 'C_SEL_BG': '\033[48;5;237m\033[38;5;189m',
-                'C_HEADER_BG': '\033[48;5;24m\033[38;5;231m', 'C_OK': '\033[38;5;149m',
-                'C_WARN': '\033[38;5;215m', 'C_TITLE': '\033[38;5;111m', 'C_SRCH': '\033[38;5;117;1m',
-                'C_STAR': '\033[38;5;179m'},
-    'dracula': {'C_ACCENT': '\033[38;5;135m', 'C_SEL_BG': '\033[48;5;238m\033[38;5;231m',
-                'C_HEADER_BG': '\033[48;5;61m\033[38;5;231m', 'C_OK': '\033[38;5;84m',
-                'C_WARN': '\033[38;5;215m', 'C_TITLE': '\033[38;5;212m', 'C_SRCH': '\033[38;5;123;1m',
-                'C_STAR': '\033[38;5;228m'},
-    'nord':    {'C_ACCENT': '\033[38;5;109m', 'C_SEL_BG': '\033[48;5;239m\033[38;5;231m',
-                'C_HEADER_BG': '\033[48;5;60m\033[38;5;231m', 'C_OK': '\033[38;5;108m',
-                'C_WARN': '\033[38;5;222m', 'C_TITLE': '\033[38;5;110m', 'C_SRCH': '\033[38;5;116;1m',
-                'C_STAR': '\033[38;5;222m'},
-    'gruvbox': {'C_ACCENT': '\033[38;5;214m', 'C_SEL_BG': '\033[48;5;237m\033[38;5;223m',
-                'C_HEADER_BG': '\033[48;5;94m\033[38;5;223m', 'C_OK': '\033[38;5;142m',
-                'C_WARN': '\033[38;5;208m', 'C_TITLE': '\033[38;5;214m', 'C_SRCH': '\033[38;5;108;1m',
-                'C_STAR': '\033[38;5;214m'},
-    'rose':    {'C_ACCENT': '\033[38;5;183m', 'C_SEL_BG': '\033[48;5;237m\033[38;5;189m',
-                'C_HEADER_BG': '\033[48;5;66m\033[38;5;231m', 'C_OK': '\033[38;5;116m',
-                'C_WARN': '\033[38;5;222m', 'C_TITLE': '\033[38;5;183m', 'C_SRCH': '\033[38;5;217;1m',
-                'C_STAR': '\033[38;5;222m'},
-    'catppuccin-latte': {'C_ACCENT': '\033[38;5;98m', 'C_SEL_BG': '\033[48;5;253m\033[38;5;236m',
-                'C_HEADER_BG': '\033[48;5;62m\033[38;5;231m', 'C_OK': '\033[38;5;71m',
-                'C_WARN': '\033[38;5;208m', 'C_TITLE': '\033[38;5;33m', 'C_SRCH': '\033[38;5;33;1m',
-                'C_STAR': '\033[38;5;172m'},
-    'kanagawa': {'C_ACCENT': '\033[38;5;110m', 'C_SEL_BG': '\033[48;5;237m\033[38;5;223m',
-                'C_HEADER_BG': '\033[48;5;60m\033[38;5;231m', 'C_OK': '\033[38;5;107m',
-                'C_WARN': '\033[38;5;215m', 'C_TITLE': '\033[38;5;74m', 'C_SRCH': '\033[38;5;117;1m',
-                'C_STAR': '\033[38;5;180m'},
-    'everforest': {'C_ACCENT': '\033[38;5;108m', 'C_SEL_BG': '\033[48;5;237m\033[38;5;223m',
-                'C_HEADER_BG': '\033[48;5;65m\033[38;5;231m', 'C_OK': '\033[38;5;144m',
-                'C_WARN': '\033[38;5;179m', 'C_TITLE': '\033[38;5;108m', 'C_SRCH': '\033[38;5;116;1m',
-                'C_STAR': '\033[38;5;173m'},
-    'ayu':     {'C_ACCENT': '\033[38;5;208m', 'C_SEL_BG': '\033[48;5;238m\033[38;5;231m',
-                'C_HEADER_BG': '\033[48;5;24m\033[38;5;231m', 'C_OK': '\033[38;5;149m',
-                'C_WARN': '\033[38;5;221m', 'C_TITLE': '\033[38;5;80m', 'C_SRCH': '\033[38;5;117;1m',
-                'C_STAR': '\033[38;5;221m'},
-    'monokai-pro': {'C_ACCENT': '\033[38;5;141m', 'C_SEL_BG': '\033[48;5;238m\033[38;5;231m',
-                'C_HEADER_BG': '\033[48;5;61m\033[38;5;231m', 'C_OK': '\033[38;5;149m',
-                'C_WARN': '\033[38;5;215m', 'C_TITLE': '\033[38;5;117m', 'C_SRCH': '\033[38;5;204;1m',
-                'C_STAR': '\033[38;5;222m'},
-    'solarized': {'C_ACCENT': '\033[38;5;33m', 'C_SEL_BG': '\033[48;5;24m\033[38;5;231m',
-                'C_HEADER_BG': '\033[48;5;23m\033[38;5;231m', 'C_OK': '\033[38;5;142m',
-                'C_WARN': '\033[38;5;178m', 'C_TITLE': '\033[38;5;37m', 'C_SRCH': '\033[38;5;62;1m',
-                'C_STAR': '\033[38;5;178m'},
-    'ember':   {'C_ACCENT': '\033[38;5;203m', 'C_SEL_BG': '\033[48;5;52m\033[38;5;231m',
-                'C_HEADER_BG': '\033[48;5;88m\033[38;5;231m', 'C_OK': '\033[38;5;180m',
-                'C_WARN': '\033[38;5;214m', 'C_TITLE': '\033[38;5;196m', 'C_SRCH': '\033[38;5;209;1m',
-                'C_STAR': '\033[38;5;208m'},
-}
+# Named palettes, derived from the authored hex tables in themes.py — that
+# module is the single source of truth for both UIs. Each entry maps the
+# switchable C_* entries; missing keys keep the default.
+THEMES = {name: _themes.ansi_palette(pal)
+          for name, pal in _themes.PALETTES.items()}
 THEME_NAMES = list(THEMES)
+
+
+def theme_label(name):
+    """Human display name for a theme key ('catppuccin-latte' → 'Catppuccin Latte')."""
+    pal = _themes.PALETTES.get(name)
+    return pal['label'] if pal else name
 
 
 def apply_theme(name):

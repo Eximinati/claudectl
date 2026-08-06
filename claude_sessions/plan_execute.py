@@ -200,8 +200,9 @@ def _plan(task, plan_model, cwd, effort='', cfgdir=''):
         "plan as markdown.\n\n" + WEAK_MODEL_PLAN_INSTRUCTIONS +
         "\n\nTASK:\n" + task
     )
-    args = [exe, '-p', '--model', plan_model,
-            '--disallowedTools', 'Write,Edit,NotebookEdit,Bash']
+    args = [exe, '-p', '--disallowedTools', 'Write,Edit,NotebookEdit,Bash']
+    if plan_model:
+        args += ['--model', plan_model]
     if effort:
         args += ['--effort', effort]
 
@@ -246,7 +247,9 @@ def _headless(model, prompt, cwd, omni_env=None, cfgdir=''):
     exe = get_claude_exe()
     if not exe:
         return ''
-    args = [exe, '-p', '--model', model, '--disallowedTools', 'Write,Edit,NotebookEdit,Bash']
+    args = [exe, '-p', '--disallowedTools', 'Write,Edit,NotebookEdit,Bash']
+    if model:
+        args += ['--model', model]
     env = os.environ.copy()
     if cfgdir:
         env['CLAUDE_CONFIG_DIR'] = cfgdir
@@ -401,7 +404,9 @@ def build_exec_launch(project_path, proj_folder, task, exec_model, omni_env=None
     merged_path = os.path.join(project_path, '.claudectl', 'plan-system-prompt.txt')
     merged_system_prompt(sp_file, pointer, merged_path)
 
-    args = [exe, '--model', exec_model, '--system-prompt-file', merged_path]
+    args = [exe, '--system-prompt-file', merged_path]
+    if exec_model:
+        args += ['--model', exec_model]
     add_dirs = [d for d in load_add_dirs(proj_folder) if os.path.isdir(d)]
     if add_dirs:
         args += ['--add-dir', *add_dirs]

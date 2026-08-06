@@ -5,9 +5,54 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>claudectl</title>
 <style><!--CSS--></style>
+<!-- Vendored libraries, served from /vendor/ rather than inlined: they are
+     ~890KB of pinned MIT code, they are not ours to assert on, and the browser
+     should fetch them once instead of on every page load. The import map exists
+     because three's examples/jsm/* import the bare specifier 'three'.
+
+     This block is FAIL-OPEN by design. A module script defers, so the whole app
+     has already booted by the time this runs; if the fetch fails, the Chromium
+     is too old for import maps, or a file is corrupt, `vendor-ready` never
+     fires, STAGE falls back to the static CSS gradient, MO keeps its own WAAPI
+     path, and nothing else notices. Never move app code in here. -->
+<script type="importmap">
+{"imports":{"three":"/vendor/three.module.min.js","three/addons/":"/vendor/"}}
+</script>
+<script type="module">
+(async () => {
+  try {
+    const [T, A] = await Promise.all([
+      import('three'),
+      import('/vendor/anime.esm.min.js'),
+    ]);
+    window.THREE = T; window.ANI = A;
+    // Bloom is the difference between "a glow" and "neon". It is a separate,
+    // later import so the base stage still starts if postprocessing is missing.
+    try {
+      const [ec, rp, op, ub] = await Promise.all([
+        import('/vendor/postprocessing/EffectComposer.js'),
+        import('/vendor/postprocessing/RenderPass.js'),
+        import('/vendor/postprocessing/OutputPass.js'),
+        import('/vendor/postprocessing/UnrealBloomPass.js'),
+      ]);
+      window.THREE_POST = {EffectComposer: ec.EffectComposer, RenderPass: rp.RenderPass,
+                           OutputPass: op.OutputPass, UnrealBloomPass: ub.UnrealBloomPass};
+    } catch (e) { console.warn('[stage] postprocessing unavailable, no bloom', e); }
+    window.dispatchEvent(new Event('vendor-ready'));
+  } catch (e) {
+    console.warn('[stage] vendor unavailable — static background, WAAPI motion', e);
+    window.dispatchEvent(new Event('vendor-failed'));
+  }
+})();
+</script>
 </head>
 <body>
 <div id="loading" aria-hidden="true"></div>
+<!-- The stage: ONE canvas, behind everything, for the whole app. Opaque (the
+     scene clears to --bg), so it composites cheaper than a transparent surface
+     and replaces the static body::before/::after washes entirely. Those washes
+     remain as the `off`-tier fallback. -->
+<canvas id="stage" aria-hidden="true"></canvas>
 <div class="app">
   <aside class="side">
     <div class="brand">
@@ -41,6 +86,12 @@
     </div>
     <div class="ubar" id="ubar"></div>
     <div class="tabs" id="tabs" style="display:none"></div>
+    <!-- running-job banner. Outside #content on purpose: the SPA rewrites
+         #content wholesale, and a job outlives navigation (the work runs in a
+         server-side daemon thread), so its progress should follow you rather
+         than vanish. Pinned above the scroll area so a 4-minute job can't
+         scroll out of sight. -->
+    <div class="jban" id="jban" style="display:none"></div>
     <div class="content" id="content"></div>
   </main>
 </div>

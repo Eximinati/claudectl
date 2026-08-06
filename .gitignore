@@ -29,3 +29,8 @@ setup environment.ico
 # CLAUDE.md backups (machine-local)
 CLAUDE.md.bak
 claude-session-Fable-Claude-Script.md
+
+# Design references + GUI screenshot output. Third-party stock/portfolio images
+# we have no right to redistribute, and tools/shot_gui.py writes its captures
+# here by default.
+references/

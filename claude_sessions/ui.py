@@ -231,6 +231,8 @@ def run_with_progress(args, crumbs, label, timeout=120, cwd=None):
         time.sleep(0.1)
 
     reader.join(timeout=5)
+    if proc.returncode:
+        return None, False
     return (chunks[0] if chunks else ''), False
 
 
@@ -300,6 +302,8 @@ def run_with_progress_stdin(args, stdin_text, crumbs, label, timeout=240, cwd=No
         time.sleep(0.1)
 
     reader.join(timeout=5)
+    if proc.returncode:
+        return None, False
     return (chunks[0] if chunks else ''), False
 
 
@@ -529,7 +533,9 @@ def _theme_picker(s):
         frame = [render.header('CLAUDECTL', 'SETTINGS', 'THEME'), '']
         for i, n in enumerate(names):
             mark = f"{C_OK}●{C_RESET} " if n == s.get('theme') else '  '
-            frame.append(render.row(f"{mark}{n}", selected=(i == idx)))
+            label = _c.theme_label(n)
+            name = n if label == n else f"{n}  {C_DIM}{label}{C_RESET}"
+            frame.append(render.row(f"{mark}{name}", selected=(i == idx)))
         frame += ['', render.hline(), '',
                   render.hint_keys([('↑↓', 'preview'), ('ENTER', 'select'),
                                     ('ESC', 'back')]),

@@ -245,7 +245,7 @@ def _omni_saved(usage_by_model):
     return total
 
 
-def assemble_breakdown(entries, days=14, silent=True):
+def assemble_breakdown(entries, days=14, silent=True, recent=6):
     """Everything the home dashboard shows, from ONE transcript scan:
     per-day tokens split by account (oldest→newest, exactly `days` entries),
     per-account totals, per-project totals with the OmniRoute flag, and the
@@ -258,7 +258,7 @@ def assemble_breakdown(entries, days=14, silent=True):
     win = [(now - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(days - 1, -1, -1)]
     acct_of = {d: n for n, d in all_config_dirs()}
     day_b = {d: {'tokens': 0, 'sessions': 0, 'ubm': {}, 'accounts': {}} for d in win}
-    acct_b, proj_b = {}, {}
+    acct_b, proj_b, recent_b = {}, {}, []
 
     for item in iter_all_sessions(entries, 'DASHBOARD', silent=silent):
         if item is None:
@@ -271,7 +271,8 @@ def assemble_breakdown(entries, days=14, silent=True):
         p = proj_b.setdefault(enc, {
             'path': ppath, 'name': os.path.basename(ppath) or ppath, 'enc': enc,
             'cfgdir': cfgdir, 'accounts': [], 'sessions': 0, 'msgs': 0,
-            'tokens': 0, 'omni_tokens': 0, 'omni': False, 'mtime': mtime, 'ubm': {}})
+            'tokens': 0, 'omni_tokens': 0, 'omni': False, 'mtime': mtime, 'ubm': {},
+            'by_day': {}})
         p['sessions'] += 1
         p['msgs'] += stats.get('count', 0)
         p['tokens'] += tokens
@@ -281,6 +282,16 @@ def assemble_breakdown(entries, days=14, silent=True):
         if acct not in p['accounts']:
             p['accounts'].append(acct)
         _merge_ubm(p['ubm'], ubm)
+        # real last-activity across every account. The launch-history store
+        # (last-session.json) only knows sessions claudectl itself started.
+        # claudectl's own headless one-shots (lesson distilling, memory graph
+        # building, title extraction) land in the same transcript store and are
+        # always a couple of turns — they are not sessions the user resumes
+        if stats.get('count', 0) > 3:
+            recent_b.append({'sid': _sid, 'path': ppath, 'encoded': enc, 'cfgdir': cfgdir,
+                             'account': acct, 'mtime': mtime, 'msgs': stats.get('count', 0),
+                             'title': stats.get('title') or _sid[:8],
+                             'omni': _used_omni(stats)})
 
         day = _day_of(stats, mtime)
         if day not in day_b:
@@ -289,6 +300,7 @@ def assemble_breakdown(entries, days=14, silent=True):
         b['tokens'] += tokens
         b['sessions'] += 1
         b['accounts'][acct] = b['accounts'].get(acct, 0) + tokens
+        p['by_day'][day] = p['by_day'].get(day, 0) + tokens
         _merge_ubm(b['ubm'], ubm)
         a = acct_b.setdefault(acct, {'account': acct, 'tokens': 0, 'sessions': 0,
                                      'omni_tokens': 0, 'ubm': {}})
@@ -302,6 +314,7 @@ def assemble_breakdown(entries, days=14, silent=True):
         b = day_b[d]
         day_rows.append({'date': d, 'tokens': b['tokens'], 'sessions': b['sessions'],
                          'cost': round(estimate_cost(b['ubm'])[0], 2),
+                         'omni_tokens': _omni_tokens(b['ubm']),
                          'accounts': b['accounts']})
     acct_rows = sorted(
         ({'account': a['account'], 'tokens': a['tokens'], 'sessions': a['sessions'],
@@ -313,13 +326,17 @@ def assemble_breakdown(entries, days=14, silent=True):
         cost, exact = estimate_cost(p['ubm'])
         p.pop('ubm')
         p.update(cost=round(cost, 2), exact=exact,
-                 age=format_age(p['mtime']).strip())
+                 age=format_age(p['mtime']).strip(),
+                 sparkline=[p['by_day'].get(d, 0) for d in win])
+        p.pop('by_day')
         proj_rows.append(p)
     proj_rows.sort(key=lambda r: r['mtime'], reverse=True)
     all_ubm = {}
     for a in acct_b.values():
         _merge_ubm(all_ubm, a['ubm'])
+    recent_b.sort(key=lambda r: r['mtime'], reverse=True)
     return {'days': day_rows, 'accounts': acct_rows, 'projects': proj_rows,
+            'recent': recent_b[:recent],
             'totals': {'tokens': sum(r['tokens'] for r in day_rows),
                        'cost': round(estimate_cost(all_ubm)[0], 2),
                        'sessions': sum(r['sessions'] for r in acct_rows),

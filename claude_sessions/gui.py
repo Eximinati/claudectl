@@ -22,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 from . import config as _c
+from . import themes as _themes
 from .config import (load_settings, save_settings,
                      EFFORTS, MODELS, MODEL_LABELS, PERMS, PERM_LABELS,
                      THINKING_CAPS, THINKING_LABELS)
@@ -106,72 +107,14 @@ def list_sessions(encoded):
     return out
 
 
-def _x256_hex(sgr):
-    """First xterm-256 foreground index in an SGR string → '#rrggbb'."""
-    import re
-    m = re.search(r'38;5;(\d+)', sgr)
-    if not m:
-        # 16-color codes (e.g. mono/default fallbacks) → sensible fixed map
-        m16 = {'\033[97m': '#f0f6ff', '\033[96m': '#7dcfff', '\033[96;1m': '#7dcfff',
-               '\033[93m': '#f7e05a', '\033[1m': '#f0f6ff', '\033[7m': '#8aa0c0'}
-        return m16.get(sgr, '#7dcfff')
-    n = int(m.group(1))
-    if n < 16:
-        base = [(0, 0, 0), (205, 49, 49), (13, 188, 121), (229, 229, 16),
-                (36, 114, 200), (188, 63, 188), (17, 168, 205), (229, 229, 229),
-                (102, 102, 102), (241, 76, 76), (35, 209, 139), (245, 245, 67),
-                (59, 142, 234), (214, 112, 214), (41, 184, 219), (255, 255, 255)]
-        r, g, b = base[n]
-    elif n < 232:
-        n -= 16
-        steps = [0, 95, 135, 175, 215, 255]
-        r, g, b = steps[n // 36], steps[(n // 6) % 6], steps[n % 6]
-    else:
-        v = 8 + (n - 232) * 10
-        r = g = b = v
-    return f'#{r:02x}{g:02x}{b:02x}'
-
-
-def _hex_hue(hexc):
-    import colorsys
-    r, g, b = (int(hexc[i:i + 2], 16) / 255 for i in (1, 3, 5))
-    return colorsys.rgb_to_hls(r, g, b)[0]
-
-
-def _hsl(h, s, l):
-    import colorsys
-    r, g, b = colorsys.hls_to_rgb(h, l, s)
-    return f'#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}'
-
-
 def theme_palettes():
-    """Full GUI palette per TUI theme. Accents come straight from the TUI
-    colors; every surface (bg, panels, borders, text) is re-derived from the
-    accent hue so switching theme restyles the whole app, not just buttons."""
-    out = {}
-    for name, pal in _c.THEMES.items():
-        accent = _x256_hex(pal.get('C_ACCENT', ''))
-        h = _hex_hue(accent)
-        s = 0.0 if name == 'mono' else 0.30
-        light = name == 'catppuccin-latte'
-        if light:
-            surf = {'bg': _hsl(h, .25, .94), 'bg2': _hsl(h, .25, .90),
-                    'panel': _hsl(h, .30, .97), 'panel2': _hsl(h, .25, .92),
-                    'line': _hsl(h, .20, .80), 'txt': _hsl(h, .35, .15),
-                    'dim': _hsl(h, .15, .40), 'dim2': _hsl(h, .12, .55),
-                    'code': _hsl(h, .20, .88)}
-        else:
-            surf = {'bg': _hsl(h, s, .055), 'bg2': _hsl(h, s, .075),
-                    'panel': _hsl(h, s, .10), 'panel2': _hsl(h, s, .13),
-                    'line': _hsl(h, s * .8, .19), 'txt': _hsl(h, .30, .90),
-                    'dim': _hsl(h, .14, .60), 'dim2': _hsl(h, .12, .42),
-                    'code': _hsl(h, s, .04)}
-        out[name] = {'accent': accent,
-                     'accent2': _x256_hex(pal.get('C_TITLE', '')),
-                     'ok': _x256_hex(pal.get('C_OK', '')),
-                     'warn': _x256_hex(pal.get('C_WARN', '')),
-                     **surf}
-    return out
+    """Full GUI palette per theme, straight from the authored hex tables.
+
+    Nothing is derived here any more: themes.PALETTES holds every surface as
+    real hex, so a named scheme actually looks like itself. The metadata keys
+    (label/family/mode/motion) ride along for the settings gallery and the
+    ambient motion layer."""
+    return {name: dict(pal) for name, pal in _themes.PALETTES.items()}
 
 
 def state_payload():
@@ -223,8 +166,49 @@ def state_payload():
         'failover_port': s.get('failover_port', 20129),
         'failover_quiet': bool(s.get('failover_quiet')),
         'theme': s.get('theme', 'default'),
+        'motion': _motion_level(s),
+        # '' = wear whatever skin the selected palette names as its default
+        'skin': s.get('skin', ''),
+        'stage': _stage_tier(s),
         'themes': theme_palettes(),
+        'skins': {n: dict(v) for n, v in _themes.SKINS.items()},
     }
+
+
+def _motion_level(s):
+    """How much motion the GUI runs: 'full' | 'subtle' | 'off'.
+
+    One knob replacing four (theme_motion = which of 26 background renderers,
+    theme_motion_scope, theme_motion_bg, theme_motion_intensity). Those keys are
+    still *read* so a settings.json written before the overhaul resolves to
+    something sensible instead of silently switching a user who had turned the
+    old animation off back on. Only 'motion' is written from here on."""
+    if s.get('motion') in ('full', 'subtle', 'off'):
+        return s['motion']
+    # legacy: either off-switch meant "I don't want this moving"
+    if s.get('theme_motion') == 'off' or s.get('theme_motion_scope') == 'off':
+        return 'off'
+    # legacy 'panels' scope = the band only, no gauges in the chrome — the
+    # nearest equivalent now is informational motion without the flourishes
+    if s.get('theme_motion_scope') == 'panels':
+        return 'subtle'
+    return 'full'
+
+
+def _stage_tier(s):
+    """How much of the animated background runs: 'cinematic' | 'lite' | 'off'.
+
+    Separate from `motion` on purpose. `motion` governs the UI's own
+    transitions, which everyone wants some of; the stage is a second GPU surface
+    in a shell with a documented surface-tearing history, so it needs its own
+    switch that can be turned down without also flattening the interface.
+
+    motion:off still forces it off — someone who has asked for no animation has
+    not asked for a 3D background."""
+    if _motion_level(s) == 'off':
+        return 'off'
+    t = s.get('stage')
+    return t if t in _themes.STAGE_TIERS else 'cinematic'
 
 
 def launch_session(path, encoded, choice, opts):
@@ -277,12 +261,12 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):   # silence per-request stderr noise
         pass
 
-    def _send(self, code, body, ctype='application/json'):
+    def _send(self, code, body, ctype='application/json', cache=None):
         data = body if isinstance(body, bytes) else json.dumps(body).encode('utf-8')
         self.send_response(code)
         self.send_header('Content-Type', f'{ctype}; charset=utf-8')
         self.send_header('Content-Length', str(len(data)))
-        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Cache-Control', cache or 'no-store')
         self.end_headers()
         self.wfile.write(data)
 
@@ -302,6 +286,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if u.path == '/graph':
             self._serve_graph(q)
+            return
+        if u.path.startswith('/vendor/'):
+            self._serve_vendor(u.path[len('/vendor/'):])
             return
         if not self._guard():
             return
@@ -330,6 +317,26 @@ class _Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 _c.log.exception('gui api GET %s failed', u.path)
                 self._send(500, {'error': str(e)})
+
+    def _serve_vendor(self, rel):
+        """Vendored browser libraries (three.js, anime.js) — see gui_html.
+
+        Deliberately BEFORE _guard(): a <script src> cannot attach the
+        X-Claudectl header, so a guarded route would 403 every module fetch.
+        Nothing is exposed by that — these are public MIT libraries, byte-identical
+        to their npm originals, and the allowlist is a dict built by walking
+        web/vendor at import, so a traversal attempt is simply a miss.
+
+        Cached hard: ~890KB of pinned, immutable library code should be fetched
+        once, not on every reload."""
+        from .gui_html import vendor_asset
+        got = vendor_asset(rel)
+        if got is None:
+            self._send(404, {'error': 'not found'})
+            return
+        data, ctype = got
+        self._send(200, data, ctype=ctype,
+                   cache='public, max-age=604800, immutable')
 
     def _serve_graph(self, q):
         try:
@@ -376,7 +383,11 @@ class _Handler(BaseHTTPRequestHandler):
             for k in ('default_effort', 'default_model', 'default_permission',
                       'default_max_thinking', 'default_subagent_model',
                       'extract_model', 'review_model', 'review_min_confidence',
-                      'gui_shell', 'theme', 'editor', 'claude_exe',
+                      # 'motion' replaced theme_motion/_scope/_bg/_intensity;
+                      # the old keys are read for back-compat (_motion_level)
+                      # but never written again, so they age out of settings.json
+                      'gui_shell', 'theme', 'motion', 'skin', 'stage',
+                      'editor', 'claude_exe',
                       'plan_model', 'exec_model', 'omniroute_base_url',
                       'omniroute_exec_model', 'failover_port', 'failover_quiet'):
                 if k in body:

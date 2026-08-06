@@ -6,6 +6,7 @@ const api=(p,opt={})=>fetch(p,{...opt,headers:{'X-Claudectl':'1',
 const post=(p,body)=>api(p,{method:'POST',body:JSON.stringify(body||{})});
 
 let ST=null, CUR=null, TAB='sessions', PAGE_='home', PENDING=null, SESS=[];
+let NAV_ID=0;               // bumped on every navigation; stale draws check it
 let ACTIVE_MEM=new Set();   // project paths whose memory is refreshing right now
 let _VIS=true;              // QtWebEngine stays 'visible' when minimized — blur toggles this
 
@@ -21,7 +22,10 @@ function setLoading(on){
   const el=document.getElementById('loading');
   if(el)el.classList.toggle('on',__loadingCount>0);
 }
-function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+/* also escapes quotes, which the old textContent round-trip did NOT — every
+   attribute-value call site (data-v="${esc(v)}", title="${esc(v)}") was open */
+const _ESC_MAP={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
+function esc(s){return s==null?'':String(s).replace(/[&<>"']/g,c=>_ESC_MAP[c]);}
 function C(){return {path:CUR.path,enc:CUR.encoded,cfgdir:CUR.primary_cfgdir};}
 /* stable per-account color: default = the theme's green, others take a FIXED
    (hue, lightness) ramp — not a generated hue wheel. Each slot's lightness is
@@ -80,18 +84,95 @@ palette:'M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.
 const ic=n=>`<svg class="ic" viewBox="0 0 24 24"><path d="${ICONS[n]||ICONS.doc}"/></svg>`;
 
 /* ── theme → CSS variables (palette mirrors the TUI themes) ── */
+function hexRgb(h){const n=parseInt(h.slice(1),16);return `${(n>>16)&255},${(n>>8)&255},${n&255}`;}
 function applyTheme(name){
   const t=(ST.themes||{})[name];if(!t)return;
   const r=document.documentElement.style;
   const map={'--cyan':t.accent,'--violet':t.accent2,'--ok':t.ok,'--warn':t.warn,
-    '--bg':t.bg,'--bg2':t.bg2,'--panel':t.panel,'--panel2':t.panel2,
+    '--err':t.err,'--bg':t.bg,'--bg2':t.bg2,'--panel':t.panel,'--panel2':t.panel2,
     '--line':t.line,'--txt':t.txt,'--dim':t.dim,'--dim2':t.dim2,'--code':t.code};
   for(const[k,v]of Object.entries(map))if(v)r.setProperty(k,v);
-  // text on gradient: dark bg themes use the bg color, light themes white
-  const lum=parseInt(t.bg.slice(1,3),16);
-  r.setProperty('--onacc',lum>128?'#ffffff':t.bg);
+  // HUD hairlines/glows need the channels split for rgba(). The surface
+  // channels are here for the same reason plus one more: a skin's `op` token
+  // makes panels translucent so the stage shows through, and that needs
+  // rgba(var(--panel-rgb),var(--sk-op)) — NOT opacity (which would fade the
+  // text with it) and emphatically NOT backdrop-filter.
+  for(const[k,v]of[['--cyan-rgb',t.accent],['--violet-rgb',t.accent2],
+                   ['--ok-rgb',t.ok],['--warn-rgb',t.warn],
+                   ['--panel-rgb',t.panel],['--panel2-rgb',t.panel2],
+                   ['--bg2-rgb',t.bg2],['--bg-rgb',t.bg],
+                   ['--line-rgb',t.line]])if(v)r.setProperty(k,hexRgb(v));
+  // text on gradient: dark themes use their own bg, light themes white.
+  // mode is authored per palette — a warm light bg like #fffcf0 and a dark
+  // navy both start with 'f'/'0' in a way a luminance sniff gets wrong.
+  const light=t.mode==='light';
+  r.setProperty('--onacc',light?'#ffffff':t.bg);
   r.setProperty('--grad',`linear-gradient(135deg,${t.accent},${t.accent2})`);
+  document.documentElement.classList.toggle('theme-light',light);
+  // motion personality: how far things travel and how much they glow, per
+  // palette. A single set of curves made Mono feel like Dracula.
+  const mp=MOTION_PERSONA[t.motion]||MOTION_PERSONA.smooth;
+  r.setProperty('--mo-lift',mp.lift);
+  r.setProperty('--mo-glow',light?String(+mp.glow*.55):mp.glow);
+  r.setProperty('--mo-beam',mp.beam);
+  r.setProperty('--t-spring',mp.spring);
+  applySkin(skinFor(name));
+  if(window.INST)INST.setTheme(t);   // canvas can't parse var() — hand it hex
+  if(window.STAGE)STAGE.setTheme(t); // ditto: GL wants hex, not a custom prop
 }
+/* lift = hover travel, glow = accent bleed, beam = how fast a running border
+   circles, spring = the response curve. Named in themes.py per palette. */
+const MOTION_PERSONA={
+  crisp: {lift:'-1px',glow:'.14',beam:'2s',  spring:'.18s cubic-bezier(.3,1.3,.6,1)'},
+  smooth:{lift:'-2px',glow:'.22',beam:'2.6s',spring:'.26s cubic-bezier(.34,1.56,.64,1)'},
+  lush:  {lift:'-3px',glow:'.34',beam:'3.4s',spring:'.34s cubic-bezier(.34,1.62,.58,1)'},
+};
+
+/* ── skins ─────────────────────────────────────────────────────────────────
+   A palette says what colours; a skin says what the app IS — corner treatment,
+   border weight, surface fill, heading type, how cards arrive, how a gauge is
+   stroked. See themes.py SKINS for the data and the reasoning.
+
+   Two halves, because neither alone is enough: the numeric/type tokens go out as
+   --sk-* custom properties (so any rule can read them), and a `skin-<name>` class
+   goes on <html> for the structural work a variable cannot express — corner
+   brackets, warning stripes, scanlines, a block caret. */
+function skinFor(themeName){
+  // an explicit user choice wins; otherwise wear what the palette asks for
+  if(ST.skin&&(ST.skins||{})[ST.skin])return ST.skin;
+  const t=(ST.themes||{})[themeName]||{};
+  return ((ST.skins||{})[t.skin]?t.skin:'hud');
+}
+function applySkin(name){
+  const sk=(ST.skins||{})[name];if(!sk)return;
+  const r=document.documentElement;
+  const st=r.style;
+  st.setProperty('--sk-r',sk.radius+'px');
+  st.setProperty('--sk-bw',sk.border+'px');
+  st.setProperty('--sk-font',sk.font);
+  st.setProperty('--sk-track',sk.track);
+  st.setProperty('--sk-caps',sk.caps);
+  st.setProperty('--sk-ease',sk.ease);
+  // ── chassis. These four are why switching skin now reads as switching app
+  // rather than restyling one: the type scale, the row density, how translucent
+  // every surface is, and the frame the whole viewport sits in. Geometry rules
+  // read the tokens, so a new skin still needs no new geometry CSS.
+  st.setProperty('--sk-scale',sk.scale!=null?sk.scale:1);
+  st.setProperty('--sk-dens',sk.density!=null?sk.density:1);
+  st.setProperty('--sk-op',sk.op!=null?sk.op:1);
+  for(const n of Object.keys(ST.skins||{}))r.classList.toggle('skin-'+n,n===name);
+  for(const c of ['brackets','console','bezel','float','none'])
+    r.classList.toggle('ch-'+c,(sk.chassis||'none')===c);
+  for(const b of ['flat','notch','rail'])
+    r.classList.toggle('tb-'+b,(sk.topbar||'flat')===b);
+  SKIN=name;
+  MO.skin=name;                      // picks the card-entrance choreography
+  MO.arrive_=sk.arrive||'boot';      // …and the whole-page arrival sequence
+  if(window.INST)INST.setSkin(sk);
+  if(window.STAGE)STAGE.setSkin(name,sk);
+}
+let SKIN='hud';
+function curSkin(){return (ST.skins||{})[SKIN]||{};}
 
 /* ── prompt/confirm helpers ── */
 function ask(title,fields,sub){return new Promise(res=>{
@@ -118,94 +199,264 @@ function confirmBox(title,sub){return ask(title,[],sub).then(v=>v!==null);}
 
 function fld(id,label){return `<div class="fld"><label>${label}</label><div class="chips" id="${id}"></div></div>`;}
 
-/* ── job runner ── */
-async function runJob(kind,params,onDone){
+/* ── job runner ────────────────────────────────────────────────────────────
+   ONE poll loop, two presentations:
+
+     inline  a banner in the page that started the job, with a travelling
+             border while it runs. The rest of the UI stays usable, and the job
+             survives navigation because the server's daemon thread does
+             (gui_api._JOBS) — walk away and you still get the toast.
+     modal   the blocking dialog, for when a job genuinely needs a decision
+             from you before it can continue.
+
+   Which one you get is NOT a per-kind allowlist. Every job starts inline and
+   ESCALATES to the modal the moment it parks at an approval gate. An allowlist
+   would go stale the first time some code path started calling
+   diffview.confirm; this can't, because it reacts to what the job actually did.
+   The practical win: an AI scaffold spends minutes in the Claude call before it
+   has a diff to show, and that whole time the UI used to be hostage to a
+   spinner over a dimmed page.
+
+   The __pl* / __j* caches are load-bearing, not micro-optimisation: this polls
+   every 600ms, and writing textContent/innerHTML unconditionally destroys and
+   recreates nodes on every tick — the original flicker source (see CLAUDE.md). */
+const JOBS={};
+let __plMsgs='',__plSub='',__plLabel='';      // modal DOM caches
+
+/* modal-first: for callers with nowhere sensible to put a banner */
+function runJob(kind,params,onDone){
+  return jobStart(kind,params,{onDone,modal:true});
+}
+/* inline: host is the element (or selector) that owns the banner */
+function inlineJob(host,kind,params,o){
+  o=o||{};
+  const sel=typeof host==='string'?host:'';
+  return jobStart(kind,params,{...o,sel,host:sel?$(sel):host});
+}
+/* Re-resolve by selector every render: a job's onDone often redraws the whole
+   page, and a host captured once would be a detached node from then on. */
+function jobHost(J){
+  if(J.sel){const el=$(J.sel);if(el)J.host=el;}
+  return (J.host&&J.host.isConnected)?J.host:null;
+}
+/* How busy the workspace looks, 0..1, for the background stage.
+   Running work dominates — one job already means "something is happening" — and
+   today's burn only sets a floor, so an active-but-idle workspace drifts instead
+   of crawling. Deliberately NOT driven by burn alone: feeding a throughput
+   number straight into a liveness test is the exact one-word bug that made the
+   activity equalizer animate forever after a single token had been spent. */
+function stageEnergy(jobs,burn){
+  if(!window.STAGE)return;
+  const j=Math.min(1,(jobs||0)/2);
+  const b=Math.min(1,Math.max(0,burn||0));
+  STAGE.energy(Math.max(j,b*0.45));
+}
+/* jobs the UI knows are in flight right now, including plan-execute */
+function liveJobs(){
+  return Object.keys(JOBS).filter(k=>JOBS[k].status==='running').length
+    +(PE&&PE.jid?1:0);
+}
+async function jobStart(kind,params,o){
+  o=o||{};
   const r=await post('/api/job',{kind,...params});
-  if(!r.ok){toast(r.error||'Could not start','err');return;}
-  const jid=r.job;
-  const memPath=kind==='memory_build'?params.path:null;
-  let __plMsgs='',__plSub='',__plLabel='';
+  if(!r.ok){toast(r.error||'Could not start','err');return null;}
+  const J={jid:r.job,kind,label:o.label||'Working…',status:'running',msgs:[],
+    elapsed:0,sub:'',err:'',host:o.host||null,sel:o.sel||'',onDone:o.onDone||null,
+    modal:!!o.modal||!(o.host||o.sel),
+    // memory_build reports sub-step progress through its own endpoint
+    memPath:kind==='memory_build'?params.path:null};
+  JOBS[J.jid]=J;
+  if(J.modal)modalOpen(J);else inlineRender(J);
+  stageEnergy(liveJobs(),0);
+  jobPoll(J);
+  return J;
+}
+async function jobPoll(J){
+  if(!JOBS[J.jid])return;                       // finished or superseded
+  if(document.hidden||!_VIS){setTimeout(()=>jobPoll(J),800);return;}
+  let st=null;
+  try{st=await api(`/api/job/${J.jid}`);}catch(e){st=null;}
+  if(!JOBS[J.jid])return;
+  // a transient backend hiccup must not kill the chain — a dead chain leaves a
+  // spinner up forever with no way to learn the job already finished
+  if(!st){setTimeout(()=>jobPoll(J),1500);return;}
+  J.status=st.status;J.label=st.label||J.label;
+  J.msgs=st.messages||[];J.elapsed=st.elapsed||0;
+  J.sub=`${J.elapsed}s elapsed`;
+  if(J.memPath&&st.status==='running'){
+    try{const mp=await api('/api/memory/progress?path='+encodeURIComponent(J.memPath));
+      if(mp.progress)J.sub+=` — ${mp.progress}`;}catch(e){}
+  }
+  if(!J.modal)J.sub+=" — keep working; you'll be notified when it's done";
+  if(st.status==='awaiting'&&st.gate){
+    if(!J.modal){J.modal=true;inlineClear(J);}   // escalate: a decision blocks
+    modalGate(J,st.gate);
+    return;                                      // parked until decided
+  }
+  if(J.modal)modalUpdate(J);else inlineRender(J);
+  if(st.status==='running'){
+    setTimeout(()=>jobPoll(J),J.elapsed>60?4000:J.elapsed>15?1500:600);return;}
+  jobFinish(J,st);
+}
+function jobFinish(J,st){
+  delete JOBS[J.jid];
+  stageEnergy(liveJobs(),0);      // the background settles as the work stops
+  if(J.modal)$('#jovl').classList.remove('show');
+  if(st.status==='done'){
+    inlineClear(J);toast(J.label+' — done','ok');
+    if(J.onDone)J.onDone(st);
+  }else if(st.status==='cancelled'){
+    inlineClear(J);toast('Cancelled','');
+  }else{
+    // a job can run for minutes; a 3.5s toast is not enough to report why it
+    // died, so an inline failure stays on the page until dismissed
+    J.err=st.error||'Failed';
+    if(!J.modal&&jobHost(J))inlineRender(J);else toast(J.err,'err');
+    if(st.error&&J.onDone)J.onDone(st);
+  }
+}
+/* ── inline presentation ── */
+function inlineRender(J){
+  const host=jobHost(J);
+  if(!host)return;                      // navigated away; the job runs on
+  if(J.err){
+    host.__jshown=0;host.style.display='';
+    host.innerHTML=`<div class="perun err">${ic('close')}
+      <div style="flex:1"><b>${esc(J.label)} failed</b>
+        <div class="sub">${esc(J.err)}</div></div>
+      <button class="btn sm" data-jd="1">Dismiss</button></div>`;
+    host.querySelector('[data-jd]').onclick=()=>{J.err='';inlineClear(J);};
+    return;
+  }
+  if(!host.__jshown){
+    host.__jshown=1;host.__jsub='';host.__jmsgs='';host.style.display='';
+    host.innerHTML=`<div class="perun beam"><span class="spin"></span>
+      <div style="flex:1;min-width:0"><b class="jlbl"></b>
+        <div class="sub"></div><div class="msgs"></div></div>
+      <button class="btn sm danger" data-jc="1">Cancel</button></div>`;
+    host.querySelector('.jlbl').textContent=J.label;
+    host.querySelector('[data-jc]').onclick=async ev=>{
+      const b=ev.currentTarget;b.disabled=true;b.textContent='Cancelling…';
+      await post(`/api/job/${J.jid}/cancel`);};
+  }
+  const sub=host.querySelector('.sub');
+  if(J.sub!==host.__jsub&&sub){host.__jsub=J.sub;sub.textContent=J.sub;}
+  const html=(J.msgs||[]).slice(-3).map(m=>
+    `<div class="${m.ok?'':'bad'}">${esc(m.text)}</div>`).join('');
+  const mb=host.querySelector('.msgs');
+  if(html!==host.__jmsgs&&mb){host.__jmsgs=html;mb.innerHTML=html;}
+}
+function inlineClear(J){
+  const host=jobHost(J);if(!host)return;
+  host.__jshown=0;host.__jsub='';host.__jmsgs='';
+  host.style.display='none';host.innerHTML='';
+}
+/* ── modal presentation ── */
+function modalOpen(J){
+  __plMsgs='';__plSub='';__plLabel='';
   $('#jovl').classList.add('show');$('#jGate').style.display='none';
   $('#jCancelRow').style.display='';
+  $('#jTitle').innerHTML='<span class="spin"></span> <span id="jLabel">Working…</span>';
+  $('#jSub').textContent='';$('#jMsgs').innerHTML='';
+  $('#jCancel').disabled=false;$('#jCancel').textContent='Cancel';
   $('#jCancel').onclick=async()=>{
     const btn=$('#jCancel');btn.disabled=true;btn.textContent='Cancelling…';
-    await post(`/api/job/${jid}/cancel`);
+    await post(`/api/job/${J.jid}/cancel`);
   };
-  const poll=async()=>{
-    if(document.hidden||!_VIS){setTimeout(poll,600);return;}   // keep chain alive
-    const st=await api(`/api/job/${jid}`);
-    if(!st){$('#jovl').classList.remove('show');return;}
-    if(st.label!==__plLabel){__plLabel=st.label;$('#jLabel').textContent=st.label;}
-    let sub=`${st.elapsed||0}s elapsed`;
-    if(memPath&&st.status==='running'){
-      const mp=await api('/api/memory/progress?path='+encodeURIComponent(memPath));
-      if(mp.progress)sub+=` — ${mp.progress}`;
-    }
-    if(sub!==__plSub){__plSub=sub;$('#jSub').textContent=sub;}
-    // skip innerHTML rebuild when content unchanged -- avoids destroying/recreating
-    // text nodes every 600ms poll tick, which was the actual flicker source
-    const msgsHtml=(st.messages||[]).map(m=>
-      `<div class="${m.ok?'':'bad'}">${esc(m.text)}</div>`).join('');
-    if(msgsHtml!==__plMsgs){__plMsgs=msgsHtml;$('#jMsgs').innerHTML=msgsHtml;}
-    if(st.status==='awaiting'&&st.gate){
-      $('#jGate').style.display='';$('#jCancelRow').style.display='none';
-      $('#jTitle').innerHTML=esc(st.gate.title);
-      $('#jDiff').innerHTML=(st.gate.diff||[]).map(l=>{
-        const c=l.startsWith('+++')||l.startsWith('---')||l.startsWith('@@')?'h'
-              :l.startsWith('+')?'a':l.startsWith('-')?'d':'';
-        return `<div class="${c}">${esc(l)}</div>`;}).join('')||'<div>(no diff)</div>';
-      $('#jApply').onclick=async()=>{__plMsgs='';__plLabel='';await post(`/api/job/${jid}/decide`,{apply:true});
-        $('#jGate').style.display='none';$('#jCancelRow').style.display='';
-        $('#jTitle').innerHTML='<span class="spin"></span> <span id="jLabel">Working…</span>';
-        setTimeout(poll,300);};
-      $('#jReject').onclick=async()=>{__plMsgs='';await post(`/api/job/${jid}/decide`,{apply:false});
-        $('#jGate').style.display='none';setTimeout(poll,300);};
-      return;   // paused at gate — no auto-poll
-    }
-    if(st.status==='running'){setTimeout(poll,600);return;}
-    $('#jovl').classList.remove('show');
-    if(st.status==='done'){toast(st.label+' — done','ok');if(onDone)onDone(st);}
-    else if(st.status==='cancelled')toast('Cancelled','');
-    else if(st.error){toast(st.error,'err');if(onDone)onDone(st);}
-    else toast('Failed','err');
+}
+function modalUpdate(J){
+  if(!$('#jovl').classList.contains('show'))modalOpen(J);
+  const lab=$('#jLabel');       // absent while the gate owns #jTitle
+  if(J.label!==__plLabel&&lab){__plLabel=J.label;lab.textContent=J.label;}
+  const sub=J.sub;
+  if(sub!==__plSub){__plSub=sub;$('#jSub').textContent=sub;}
+  const msgsHtml=(J.msgs||[]).map(m=>
+    `<div class="${m.ok?'':'bad'}">${esc(m.text)}</div>`).join('');
+  if(msgsHtml!==__plMsgs){__plMsgs=msgsHtml;$('#jMsgs').innerHTML=msgsHtml;}
+}
+function modalGate(J,gate){
+  modalUpdate(J);
+  $('#jGate').style.display='';$('#jCancelRow').style.display='none';
+  $('#jTitle').innerHTML=esc(gate.title);
+  $('#jDiff').innerHTML=(gate.diff||[]).map(l=>{
+    const c=l.startsWith('+++')||l.startsWith('---')||l.startsWith('@@')?'h'
+          :l.startsWith('+')?'a':l.startsWith('-')?'d':'';
+    return `<div class="${c}">${esc(l)}</div>`;}).join('')||'<div>(no diff)</div>';
+  const decide=async apply=>{
+    __plMsgs='';__plLabel='';
+    await post(`/api/job/${J.jid}/decide`,{apply});
+    $('#jGate').style.display='none';$('#jCancelRow').style.display='';
+    $('#jTitle').innerHTML='<span class="spin"></span> <span id="jLabel">Working…</span>';
+    setTimeout(()=>jobPoll(J),300);
   };
-  $('#jTitle').innerHTML='<span class="spin"></span> <span id="jLabel">Working…</span>';
-  poll();
+  $('#jApply').onclick=()=>decide(true);
+  $('#jReject').onclick=()=>decide(false);
 }
 
 /* ── sidebar ── */
 const NAV=[['usage','chart','Usage'],['searchp','search','Search'],['mcp','plug','MCP servers'],
   ['agents','robot','Agents'],['skills','ai','Skills'],['hooks','link','Hooks'],['accounts','group','Accounts'],
   ['settings','settings','Settings'],['helpp','help','Help']];
+/* Nav rows carry no gauge. They used to each own an animated canvas, which put
+   ~10 looping surfaces in the chrome to encode numbers about pages you weren't
+   looking at — the clearest case of motion that cost frames and said nothing. */
 function drawNav(){
   $('#nav').innerHTML=NAV.map(([id,i,l])=>
     `<div class="it${PAGE_===id?' sel':''}" onclick="go('${id}')">${ic(i)} ${l}</div>`).join('');
 }
+/* 14-day activity trace per project. Static inline SVG, never animated — this
+   renders once per sidebar row and there can be dozens, so it is deliberately
+   the cheapest possible thing: no canvas, no scheduler, no per-frame cost. The
+   gradient area fill is what lets a 13px-tall trace read at all. */
+let PROJ_SPARK={};
+function miniSpark(vals){
+  if(!vals||vals.length<2||!vals.some(v=>v>0))return '';
+  const w=44,h=13,mx=Math.max(...vals),n=vals.length;
+  const pt=(v,i)=>`${(i*(w-1)/(n-1)).toFixed(1)},${(h-1-(v/mx)*(h-2)).toFixed(1)}`;
+  const pts=vals.map(pt).join(' ');
+  return `<svg class="mspark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true">
+    <polygon points="0,${h} ${pts} ${w-1},${h}"/><polyline points="${pts}"/></svg>`;
+}
+/* Sidebar rows are reconciled by key, not rebuilt. The old innerHTML='' + append
+   loop threw away every row on any change — losing hover state and making a
+   single project's timestamp tick look like the whole list flashing. */
 function drawProjects(){
   const q=($('#q').value||'').toLowerCase();
-  const box=$('#plist');box.innerHTML='';
-  ST.projects.filter(p=>!q||p.name.toLowerCase().includes(q)||p.path.toLowerCase().includes(q))
-    .forEach(p=>{
-      const el=document.createElement('div');
-      el.className='proj'+(CUR&&PAGE_==='project'&&CUR.encoded===p.encoded?' sel':'');
-      const tags=p.accounts.length>1?' '+p.accounts.slice(1).map(a=>
-        `<span class="tag" style="color:${acctColor(a)};border-color:currentColor;background:transparent">${esc(a)}</span>`).join(' '):'';
-      const active=ACTIVE_MEM.has(p.path);
-      const amk=(p.auto_memory||active)
-        ?`<span class="amk${active?' spin-on':''}" title="${active?'memory updating now':'auto-memory on'}">${ic('refresh')}</span>`:'';
-      const last=p.last_active?` <span style="opacity:.7">· ${esc(p.last_active)} ago</span>`:'';
-      el.innerHTML=`<div class="nm">${esc(p.name)}${tags}${amk}</div><div class="pt">${esc(p.path)}${last}</div>`;
-      el.onclick=()=>openProject(p);
-      box.appendChild(el);
-    });
+  const box=$('#plist');if(!box)return;
+  const list=ST.projects.filter(p=>!q
+    ||p.name.toLowerCase().includes(q)||p.path.toLowerCase().includes(q));
+  MO.patch(box,list,p=>p.encoded,p=>{
+    const tags=p.accounts.length>1?' '+p.accounts.slice(1).map(a=>
+      `<span class="tag acct" style="color:${acctColor(a)}">${esc(a)}</span>`).join(' '):'';
+    const active=ACTIVE_MEM.has(p.path);
+    // a scanning project gets a live pip, not a spinning icon: the ring reads as
+    // "this is happening" without dragging the eye across the sidebar
+    const amk=(p.auto_memory||active)
+      ?`<span class="amk${active?' pip':''}" title="${active?'memory updating now':'auto-memory on'}">${ic('refresh')}</span>`:'';
+    const last=p.last_active?` <span style="opacity:.7">· ${esc(p.last_active)} ago</span>`:'';
+    return `<div class="nm"><span class="pn">${esc(p.name)}</span>${tags}${amk}</div>`
+      +`<div class="pt"><span class="pp">${esc(p.path)}${last}</span>`
+      +`${miniSpark(PROJ_SPARK[p.encoded])}</div>`;
+  },p=>'proj lift'+(CUR&&PAGE_==='project'&&CUR.encoded===p.encoded?' sel':''));
+  if(!box.__bound){box.__bound=1;
+    box.addEventListener('click',ev=>{
+      const row=ev.target.closest('.proj');if(!row)return;
+      const p=ST.projects.find(x=>x.encoded===row.__mokey);
+      if(p)openProject(p);
+    });}
 }
 
 /* ── router ── */
 function go(page){PAGE_=page;CUR=page==='project'?CUR:null;
   stopDashboard();   // a detached home view never keeps fetching/writing
   applyTheme(ST.theme);   // drop any unsaved theme preview
+  // the stage is global and never restarts across navigation — that is what
+  // makes it ONE background rather than seven wallpapers — but each page tilts
+  // it (density, camera) and the move itself sends a ripple through it
+  if(window.STAGE){STAGE.page(page);STAGE.impulse();}
   render();}
 function render(){
+  NAV_ID++;
   drawNav();drawProjects();
   $('#tabs').style.display=PAGE_==='project'?'flex':'none';
   $('#pactions').style.display=PAGE_==='project'?'':'none';
@@ -213,6 +464,58 @@ function render(){
   if(PAGE_==='home')drawHome();
   else if(PAGE_==='project')drawProject();
   else drawPage(PAGE_);
+  // navigation should read as a move, not a substitution. Fires here rather
+  // than inside each renderer so async pages animate their shell immediately
+  // instead of after the fetch lands.
+  MO.page($('#content'));
+}
+/* Post-render: adopt any instruments the page emitted, tween any [data-num]
+   readouts, stagger the cards in. `mounted` is the single place that knows the
+   order these have to happen in — mount before count, or a readout tweens
+   against a gauge that has not sized itself yet.
+
+   ~20 renderers write #content, several of them async, so rather than requiring
+   each to remember this call an observer on #content's DIRECT children runs it
+   (see watchContent). Direct children only: MO.patch appending rows into a list
+   host is a subtree change and must not retrigger a whole-page remount. */
+function mounted(root){
+  const el=root||$('#content');
+  // the fade-out at the bottom of a scroll list only makes sense while there IS
+  // something below the fold
+  el.querySelectorAll('.dlist').forEach(d=>
+    d.classList.toggle('full',d.scrollHeight<=d.clientHeight+1));
+  tblStack(el);
+  INST.mount(el);
+  MO.counts(el);
+  // the skin's arrival sequence, not a linear delay ramp in DOM order — see
+  // SKIN_ARRIVE. Falls back to the old per-card reveal without the vendor bundle.
+  MO.arrive(el,'.card,.mo-in');
+}
+/* Copy each table's header text onto its cells so the narrow-window stacked
+   layout can label them (see the .tbl @media rule). Done in JS because the
+   header text lives in <th> and CSS can't reach across to it — and done once at
+   mount rather than in 20 renderers' markup. */
+function tblStack(root){
+  (root||document).querySelectorAll('table.tbl').forEach(t=>{
+    if(t.__stk)return;t.__stk=1;
+    const hs=[...t.querySelectorAll('tr')].shift();
+    if(!hs)return;
+    const labels=[...hs.children].map(c=>c.textContent.trim());
+    if(!labels.length)return;
+    t.querySelectorAll('tr').forEach(tr=>{
+      if(tr===hs)return;
+      [...tr.children].forEach((td,i)=>{
+        if(labels[i]&&!td.dataset.th)td.dataset.th=labels[i];});
+    });
+  });
+}
+let __mntQ=null;
+function watchContent(){
+  const el=$('#content');if(!el||!window.MutationObserver)return;
+  new MutationObserver(()=>{
+    if(__mntQ)return;                      // coalesce a burst into one pass
+    __mntQ=Promise.resolve().then(()=>{__mntQ=null;mounted();});
+  }).observe(el,{childList:true});
 }
 
 /* ── command palette (Ctrl+K) — navigates the real NAV/TABS route list ── */
@@ -273,49 +576,78 @@ function fmtTok(n){
   if(n>=1e3)return (n/1e3).toFixed(1)+'k';
   return String(n);
 }
+/* ── the dashboard ──
+   Instrument row first, because the four questions it answers ("how much plan
+   have I burned / how hard am I working / is my tooling up / is anything
+   running") are the ones you open this page to ask. Then what to resume and the
+   shape of the workspace, then the trend, then the browse list.
+
+   Every gauge here is fed from the same two fetches the page already made; the
+   instruments never issue a request of their own. */
 function drawHome(){
   $('#ttl').textContent='Dashboard';$('#tpath').textContent='';
+  const inst=(kind,key,o)=>INST.html(kind,key,o);
   $('#content').innerHTML=`
   <div class="dash">
+    <section class="card icard d-i1 spot lift">
+      <div class="ihd">${ic('bolt')}<span>plan quota</span><span class="sp"></span>
+        <span id="iQuotaN" class="itag"></span></div>
+      ${inst('ring','quota',{fmt:'pct',sub:'of window',label:'highest window'})}
+      <div class="ifoot" id="iQuotaFoot">—</div></section>
+    <section class="card icard d-i2 spot lift">
+      <div class="ihd">${ic('chart')}<span>burn rate</span></div>
+      ${inst('dial','burn',{fmt:'tok',unit:'tok/h',label:'rate vs your peak day'})}
+      <div class="ifoot" id="iBurnFoot">—</div></section>
+    <section class="card icard d-i3 spot lift">
+      <div class="ihd">${ic('plug')}<span>tooling</span></div>
+      ${inst('ring','mcp',{fmt:'ratio',unit:'/–',sub:'servers up',label:'mcp + failover'})}
+      <div class="ifoot" id="iMcpFoot">—</div></section>
+    <section class="card icard d-i4 spot lift">
+      <div class="ihd">${ic('history')}<span>activity</span></div>
+      ${inst('eq','jobs',{fmt:'int',sub:'running'})}
+      <div class="joblist" id="dashJobs"></div>
+      <div class="ifoot" id="iJobsFoot">—</div></section>
+
+    <section class="card d-continue spot lift" id="dashContinue">${continueTileHtml(ST.recent||[])}</section>
+    <section class="card d-projects spot">
+      <div class="lbl">Workspace <span id="dashProjN" style="color:var(--dim2)"></span></div>
+      ${inst('flow','flow',{noread:1,title:'Projects — size by tokens, colour by account, dashed links share an account'})}
+      <div class="dlist" id="dashProjects">${MO.skel(4)}</div></section>
+    <section class="card d-chart spot"><div class="lbl">Token trend</div>
+      <div class="kpi" id="dashKpi"></div>
+      <div class="tchart" id="dashChart">${MO.skel(2,40)}</div></section>
     <section class="card d-acct"><div class="lbl">Plan usage by account</div>
       <div class="acct-rail" id="dashAcct"></div></section>
-    <section class="card d-chart">
-      <div class="kpi" id="dashKpi"></div>
-      <div class="tchart" id="dashChart"></div></section>
-    <section class="card d-projects">
-      <div class="lbl">Projects <span id="dashProjN" style="color:var(--dim2)"></span></div>
-      <div class="dlist" id="dashProjects"></div></section>
-    <section class="card d-continue" id="dashContinue">${continueTileHtml(ST.recent||[])}</section>
-    <section class="card d-live"><div class="lbl">System</div>
-      <div id="dashLive"></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px">
-        <button class="btn sm" onclick="openProjectByPath()">${ic('folder')} Open project</button>
-        <button class="btn sm" onclick="go('usage')">${ic('chart')} Usage</button>
-        <button class="btn sm" onclick="go('settings')">${ic('settings')} Settings</button>
-        <button class="btn sm" onclick="go('accounts')">${ic('group')} Accounts</button>
-      </div></section>
-    <section class="card d-recent"><div class="lbl">Recent sessions</div>
+    <section class="card d-recent spot"><div class="lbl">Recent sessions</div>
       <div class="fld"><input id="hqSearch" placeholder="Search every session…"></div>
       <div id="hqRes"></div>
-      <div class="dlist" id="dashRecent"></div></section>
+      <div class="dlist" id="dashRecent">${MO.skel(4)}</div></section>
   </div>`;
   bindHomeSearch();
+  mounted();
   startDashboard();
 }
 /* ── dashboard tiles: account usage, 7-day sparkline, jobs/MCP/recent ── */
-let DASH_TIMER=null;
+let DASH_TIMER=null,DASH_ABORT=null;
 function startDashboard(){
   stopDashboard();
   refreshDashboard();
-  DASH_TIMER=setInterval(refreshDashboard,5000);
+  // /api/dashboard is server-cached for _DASH_TTL=10s — polling faster only
+  // burns round-trips on a payload that provably cannot have changed
+  DASH_TIMER=setInterval(refreshDashboard,10000);
 }
 function stopDashboard(){
   if(DASH_TIMER){clearInterval(DASH_TIMER);DASH_TIMER=null;}
+  if(DASH_ABORT){DASH_ABORT.abort();DASH_ABORT=null;}
 }
-/* QtWebEngine keeps the page 'visible' while minimized — guard on blur too */
-document.addEventListener('visibilitychange',()=>{_VIS=!document.hidden;if(_VIS&&PAGE_==='home')refreshDashboard();});
-window.addEventListener('blur',()=>{_VIS=false;stopDashboard();});
-window.addEventListener('focus',()=>{_VIS=true;if(PAGE_==='home')startDashboard();});
+/* QtWebEngine keeps the page 'visible' while minimized — guard on blur too.
+   MO.vis mirrors _VIS because motion.js is concatenated ahead of this file and
+   cannot reach forward into a `let` that has not initialised yet. */
+function setVis(v){_VIS=v;MO.vis=v;if(v)MO.kick();else MO.stop();}
+document.addEventListener('visibilitychange',()=>{setVis(!document.hidden);
+  if(_VIS&&PAGE_==='home')refreshDashboard();});
+window.addEventListener('blur',()=>{setVis(false);stopDashboard();});
+window.addEventListener('focus',()=>{setVis(true);if(PAGE_==='home')startDashboard();});
 function setV(el,v){if(!el)return;if(el.__v!==v){el.__v=v;el.innerHTML=v;}}
 /* ── daily token chart: stacked columns by account, inline SVG, no deps ── */
 let CHART_DAYS=14;
@@ -337,17 +669,27 @@ function tokenChart(days,accounts){
   const bars=rows.map((r,i)=>{
     const x=PL+slot*i+(slot-bw)/2;
     let acc=0,segs='';
+    const stack=names.filter(n=>((r.accounts||{})[n]||0)>0);
     names.forEach((n,ai)=>{
       const v=(r.accounts||{})[n]||0;if(!v)return;
       const top=y(acc+v),bot=y(acc),h=Math.max(1,bot-top-2);   // 2px surface gap
       acc+=v;
+      // only the topmost segment gets a full pill cap; rounding every seam would
+      // read as gaps between segments rather than one column
+      const cap=n===stack[stack.length-1]?Math.min(bw/2,h/2):2;
       segs+=`<rect class="seg" x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}"
-        height="${h.toFixed(1)}" rx="2" fill="${acctColor(n)}"><title>${esc(r.date)} · ${esc(n)}: ${fmtTok(v)} tok</title></rect>`;
+        height="${h.toFixed(1)}" rx="${cap.toFixed(1)}" fill="${acctColor(n)}"><title>${esc(r.date)} · ${esc(n)}: ${fmtTok(v)} tok</title></rect>`;
     });
     const other=(r.tokens||0)-acc;
     if(other>0){const top=y(acc+other),bot=y(acc);
       segs+=`<rect class="seg" x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}"
-        height="${Math.max(1,bot-top-2).toFixed(1)}" rx="2" fill="var(--dim2)"><title>${esc(r.date)} · other: ${fmtTok(other)} tok</title></rect>`;}
+        height="${Math.max(1,bot-top-2).toFixed(1)}" rx="${Math.min(bw/2,3).toFixed(1)}" fill="var(--dim2)"><title>${esc(r.date)} · other: ${fmtTok(other)} tok</title></rect>`;}
+    // omni tokens cut across accounts, so they can't be another stack segment —
+    // hatch the free share up from the baseline over whatever it was spent on
+    const om=Math.min(r.omni_tokens||0,r.tokens||0);
+    if(om>0){const top=y(om),hh=Math.max(1,y(0)-top);
+      const box=`x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${hh.toFixed(1)}" rx="2"`;
+      segs+=`<rect class="omnibg" ${box}/><rect class="omni" ${box}><title>${esc(r.date)} · omni (free): ${fmtTok(om)} of ${fmtTok(r.tokens||0)} tok</title></rect>`;}
     const today=i===rows.length-1;
     const tick=(i%step===0||today||i===0)
       ?`<text class="${today?'now':''}" x="${(x+bw/2).toFixed(1)}" y="${H-6}" text-anchor="middle">${today?'today':esc(r.date.slice(5))}</text>`:'';
@@ -355,11 +697,15 @@ function tokenChart(days,accounts){
       ?`<text class="big" x="${(x+bw/2).toFixed(1)}" y="${(y(r.tokens)-5).toFixed(1)}" text-anchor="middle">${fmtTok(r.tokens)}</text>`:'';
     return segs+tick+lab;
   }).join('');
+  const anyOmni=rows.some(r=>(r.omni_tokens||0)>0);
   const legend=names.map(n=>`<span><i class="dot" style="background:${acctColor(n)}"></i>${esc(n)}</span>`).join('')
+    +(anyOmni?`<span title="Ran on OmniRoute — free tier, not billed"><i class="dot omnikey"></i>omni · free</span>`:'')
     +`<span class="sp"></span>`
     +[7,14,30].map(n=>`<span class="chip${CHART_DAYS===n?' on':''}" onclick="setChartDays(${n})">${n}d</span>`).join('');
   return `<div class="lg">${legend}</div>
-    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Tokens per day, stacked by account">
+    <svg class="tcsvg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Tokens per day, stacked by account, free-tier omni share hatched">
+      <defs><pattern id="omnihatch" width="5" height="5" patternUnits="userSpaceOnUse"
+        patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="5"/></pattern></defs>
       <line class="gl" x1="${PL}" y1="${PT}" x2="${W}" y2="${PT}"/>
       <text x="${PL-6}" y="${PT+3}" text-anchor="end">${max?fmtTok(max):''}</text>
       <line class="gl" x1="${PL}" y1="${H-PB}" x2="${W}" y2="${H-PB}"/>
@@ -370,69 +716,196 @@ function tokenChart(days,accounts){
 }
 async function refreshDashboard(){
   if(document.hidden||!_VIS)return;       // hidden (incl. Qt minimized via blur)
+  if(DASH_ABORT)DASH_ABORT.abort();
+  const ac=DASH_ABORT=new AbortController();
   let d=null,plan=null;
-  try{[d,plan]=await Promise.all([api('/api/dashboard'),api('/api/usage/plan')]);}
-  catch(e){d=null;}
+  try{[d,plan]=await Promise.all([api('/api/dashboard',{signal:ac.signal}),
+                                 api('/api/usage/plan',{signal:ac.signal})]);}
+  catch(e){if(e.name==='AbortError')return;d=null;}
   if(d){
     const bd=d.breakdown||{days:[],accounts:[],projects:[],totals:{}};
     setV($('#dashChart'),tokenChart(bd.days||[],bd.accounts||[]));
     setV($('#dashKpi'),kpiHtml(d,bd));
-    setV($('#dashProjects'),projectsListHtml(bd.projects||[]));
     setV($('#dashProjN'),`· ${(bd.projects||[]).length}`);
-    setV($('#dashLive'),liveHtml(d));
-    setV($('#dashRecent'),(d.recent||[]).map((r,i)=>`
-      <div class="hrow"><div class="info"><b>${esc(r.project)}</b>
-        <span style="color:var(--dim)">${esc(r.title)} · ${r.msgs} msgs</span></div>
-        ${r.omni?OMNI_TAG:''}
-        <span class="num">${esc(r.age||'')}</span>
-        <button class="btn sm" onclick="dashResume(${i})">Resume</button></div>`).join(''));
-    const hc=$('#hdrChips');
-    if(hc){                                  // header chips: failover + mcp
-      const fov=d.failover&&d.failover.running
-        ? `<span class="hchip ok" title="Failover proxy">failover${d.failover.port?':'+d.failover.port:''}</span>`
-        : `<span class="hchip" title="Failover proxy stopped">failover</span>`;
-      const all=(d.mcp||[]),up=all.filter(m=>m.running).length;
-      setV(hc, fov+`<span class="hchip${up?' ok':''}" title="MCP servers">mcp ${up}/${all.length}</span>`);
-    }
+    // both lists reconcile by key: a session finishing must not re-create the
+    // nineteen rows that did not change
+    MO.patch($('#dashProjects'),(bd.projects||[]),p=>p.enc,projectRowHtml,'hrow lift');
+    if(!$('#dashProjects').__bound){$('#dashProjects').__bound=1;
+      $('#dashProjects').addEventListener('click',ev=>{
+        const row=ev.target.closest('.hrow');if(row)openProjectByEnc(row.__mokey);});}
+    const spark={};
+    for(const pr of (bd.projects||[]))if(pr.sparkline)spark[pr.enc]=pr.sparkline;
+    if(JSON.stringify(spark)!==JSON.stringify(PROJ_SPARK)){PROJ_SPARK=spark;drawProjects();}
+    MO.patch($('#dashRecent'),(d.recent||[]),r=>r.sid,recentRowHtml,'hrow');
+    if(!$('#dashRecent').__bound){$('#dashRecent').__bound=1;
+      $('#dashRecent').addEventListener('click',ev=>{
+        const b=ev.target.closest('button[data-sid]');
+        if(b)dashResumeSid(b.dataset.sid);});}
+    renderHdrChips(d);
+    // the continue tile used to render once from the boot payload and never
+    // refresh, so it could disagree with the recent list about the same session.
+    // /api/dashboard names the title 'title'; ST.recent (and homeResume) use 'name'.
+    ST.recent=(d.recent||[]).map(r=>({project:r.project,path:r.path,encoded:r.encoded,
+      sid:r.sid,name:r.title,age:r.age,cfgdir:r.cfgdir}));
+    const tune=$('#hometune');
+    if(!tune||tune.style.display==='none')   // don't yank the panel out from under an open tune
+      setV($('#dashContinue'),continueTileHtml(ST.recent));
     DASH_RECENT=d.recent||[];
-  }else{
-    setV($('#dashLive'),'<div style="color:var(--dim2)">offline</div>');
   }
   if(plan)setV($('#dashAcct'),(plan.accounts||[]).map(acctCard).join('')
     ||'<div style="color:var(--dim2)">no accounts configured</div>');
-  else setV($('#dashAcct'),'<div style="color:var(--dim2)">offline</div>');
+  else if(!d)setV($('#dashAcct'),'<div style="color:var(--dim2)">offline</div>');
+  feedDashboard(d,plan);
+  mounted();
 }
-const OMNI_TAG='<span class="tag" style="color:var(--violet);border-color:currentColor;background:transparent" title="Ran on OmniRoute (free-tier model)">omni</span>';
+/* ── the instrument feed ───────────────────────────────────────────────────
+   One place where the two dashboard fetches become gauge values, so the mapping
+   from "what the API said" to "what the needle shows" is auditable in one read
+   instead of scattered across six renderers. Nothing here fetches.
+
+   Every gauge is normalised against the user's OWN history, not an absolute
+   scale: a burn dial pinned at 100% because someone else's workspace is busier
+   would be worse than no dial. */
+function feedDashboard(d,plan){
+  const accs=((plan||{}).accounts)||[];
+  const wins=accs.flatMap(a=>(a.windows||[]).map(w=>(w.pct||0)/100));
+  const peakWin=wins.length?Math.max(...wins):0;
+  const hot=accs.find(a=>(a.windows||[]).some(w=>(w.pct||0)>=80));
+  INST.set('quota',{v:peakWin,
+    tone:peakWin>=.8?'err':peakWin>=.6?'warn':null});
+  setRead('quota',peakWin*100);
+  setV($('#iQuotaFoot'),accs.length
+    ?(hot?`<b>${esc(hot.email||hot.account)}</b> is the constraint`
+        :`${accs.length} account${accs.length>1?'s':''} · all healthy`)
+    :'no accounts configured');
+  setV($('#iQuotaN'),accs.length>1?accs.length+' accts':'');
+
+  if(!d)return;
+  const bd=d.breakdown||{};
+  const days=(bd.days||[]).slice(-30);
+  const today=(d.today||{}).tokens||0;
+  // hours elapsed today, floored at 1 so the first minute after midnight does
+  // not report an hourly rate extrapolated from 40 seconds of work
+  const hrs=Math.max(1,(Date.now()-new Date().setHours(0,0,0,0))/3.6e6);
+  const burn=Math.round(today/hrs);
+  const peakDay=Math.max(...days.map(r=>r.tokens||0),1);
+  const peakHr=peakDay/12||1;                 // a heavy day ≈ 12 working hours
+  INST.set('burn',{v:Math.min(1,burn/peakHr)});
+  setRead('burn',burn);
+  setV($('#iBurnFoot'),`today <b>${fmtTok(today)}</b> · peak day <b>${fmtTok(peakDay)}</b>`);
+
+  const mcp=d.mcp||[],up=mcp.filter(m=>m.running).length;
+  const fo=!!((d.failover||{}).running);
+  const nodes=mcp.length+1,liveN=up+(fo?1:0);   // +1: the failover proxy counts
+  INST.set('mcp',{v:nodes?liveN/nodes:0,
+    tone:liveN===nodes?'ok':liveN?'warn':'err'});
+  // the ring counts the reachable servers and the unit carries the total, so
+  // the readout says "1 /2" without needing a formatter that knows both
+  setRead('mcp',up);
+  setUnit('mcp','/'+mcp.length);
+  setV($('#iMcpFoot'),`mcp <b>${up}/${mcp.length}</b> · failover `
+    +(fo?`<b style="color:var(--ok)">on</b>`:'off'));
+
+  const jobs=(d.jobs||[]).length;
+  INST.set('jobs',{v:Math.min(1,burn/peakHr),beats:jobs,
+    series:days.slice(-24).map(x=>x.tokens||0)});
+  // Feed the background. Running work dominates; today's burn is a floor, so an
+  // active-but-unbusy workspace drifts rather than crawling. Same discipline as
+  // INST.set — the stage never fetches anything of its own, it is handed the
+  // numbers this renderer already had.
+  stageEnergy(jobs,burn/peakHr);
+  setRead('jobs',jobs);
+  setV($('#dashJobs'),jobsHtml(d));
+  const sess=(d.today||{}).sessions||0;
+  setV($('#iJobsFoot'),jobs
+    ?`<b>${jobs}</b> job${jobs>1?'s':''} running · ${sess} session${sess===1?'':'s'} today`
+    :`idle · <b>${sess}</b> session${sess===1?'':'s'} today`);
+
+  // flow map: one node per project, dashed links where two share a non-default
+  // account. Positions are solved from the index, so the same set always lands
+  // the same way and the map is stable to look at across refreshes.
+  const projects=(bd.projects||[]).slice(0,24);
+  const now=Date.now()/1000;
+  const pmax=Math.max(...projects.map(p=>p.tokens||0),1);
+  const links=[];
+  for(let i=0;i<projects.length;i++)for(let j=i+1;j<projects.length;j++){
+    const a=projects[i].accounts||[],b=projects[j].accounts||[];
+    const shared=a.filter(x=>x!=='default'&&b.includes(x)).length;
+    if(shared)links.push([i,j,shared]);
+  }
+  INST.set('flow',{
+    items:projects.map(p=>({v:(p.tokens||0)/pmax,
+      heat:Math.max(.2,1-(now-(p.mtime||now))/(3600*24*7)),
+      col:resolveColor(acctColor((p.accounts||[]).find(x=>x!=='default')||'default')),
+      label:p.name||p.enc||''})),
+    links:links.sort((a,b)=>b[2]-a[2]).slice(0,48)});
+}
+/* The readout inside an instrument — tweened, never assigned. Deliberately the
+   imperative counterpart to the declarative [data-num] sweep: a gauge's value
+   arrives from a feed, not from markup, so re-rendering the page must not reset
+   the number to whatever the template happened to say. */
+function setRead(key,v){
+  const el=document.querySelector(`.iwrap[data-k="${key}"] .iread b`);
+  if(!el)return;
+  MO.count(el,v,MO_FMT[el.dataset.fmt]||MO_FMT.int);
+}
+function setUnit(key,txt){
+  const el=document.querySelector(`.iwrap[data-k="${key}"] .iread i`);
+  if(el)el.textContent=txt;
+}
+function projectRowHtml(p){
+  return `<div class="info"><b>${esc(p.name)}</b>
+      ${(p.accounts||[]).map(a=>`<span class="dot" title="${esc(a)}" style="width:7px;height:7px;background:${acctColor(a)}"></span>`).join('')}
+      ${p.omni?OMNI_TAG:''}</div>
+    <span class="num">${fmtTok(p.tokens||0)} · $${(p.cost||0).toFixed(2)}</span>
+    <span class="num">${esc(p.age||'')}</span>`;
+}
+function recentRowHtml(r){
+  return `<div class="info"><b>${esc(r.project)}</b>
+      <span style="color:var(--dim)">${esc(r.title)} · ${r.msgs} msgs</span></div>
+    ${r.account&&r.account!=='default'?`<span class="tag acct" style="color:${acctColor(r.account)}">${esc(r.account)}</span>`:''}
+    ${r.omni?OMNI_TAG:''}
+    <span class="num">${esc(r.age||'')}</span>
+    <button class="btn sm" data-sid="${esc(r.sid)}">Resume</button>`;
+}
+const OMNI_TAG='<span class="tag acct" style="color:var(--violet)" title="Ran on OmniRoute (free-tier model)">omni</span>';
 let DASH_RECENT=[];
-function dashResume(i){
-  const r=DASH_RECENT[i];if(!r)return;
+/* keyed by session id, not row index: the recent list reorders between polls, so
+   an index captured at render time could resume a different session than the one
+   under the cursor */
+function dashResumeSid(sid){
+  const r=DASH_RECENT.find(x=>x.sid===sid);if(!r)return;
   const [model,effort]=defaultModelEffort();
   doQuickLaunch({path:r.path,enc:r.encoded,choice:'resume:'+r.sid,cfgdir:r.cfgdir},model,effort);
 }
+/* data-num + data-fmt instead of a baked string: MO.counts() picks these up and
+   tweens them, so a poll that moves the 7-day total is visible as movement */
 function kpiHtml(d,bd){
   const t=d.today||{},tot=bd.totals||{};
   const wk=(bd.days||[]).slice(-7);
   const wtok=wk.reduce((a,r)=>a+(r.tokens||0),0),wcost=wk.reduce((a,r)=>a+(r.cost||0),0);
-  const stat=(v,l,title)=>`<div class="k" title="${esc(title||l)}"><div class="kv2">${v}</div><div class="kl">${esc(l)}</div></div>`;
+  const stat=(v,f,l,title)=>`<div class="k" title="${esc(title||l)}">`
+    +`<div class="kv2" data-num="${v}" data-fmt="${f}">–</div>`
+    +`<div class="kl">${esc(l)}</div></div>`;
   const age=d.generated_at?Math.max(0,Math.round(Date.now()/1000-d.generated_at)):null;
-  return stat(fmtTok(t.tokens||0),'today tok')
-    +stat(fmtTok(wtok),'7d tok')
-    +stat('$'+wcost.toFixed(2),'7d est. cost','API-rate estimate, cache-aware; OmniRoute models count as free')
-    +stat(String(t.sessions||0),'sessions today')
-    +stat(fmtTok(tot.omni_tokens||0),'omni tok',`free-tier tokens over ${d.days||30}d — about $${(tot.omni_saved||0).toFixed(2)} of Opus-rate work`)
+  return stat(t.tokens||0,'tok','today tok')
+    +stat(wtok,'tok','7d tok')
+    +stat(wcost,'usd','7d est. cost','API-rate estimate, cache-aware; OmniRoute models count as free')
+    +stat(t.sessions||0,'int','sessions today')
+    +stat(tot.omni_tokens||0,'tok','omni tok',`free-tier tokens over ${d.days||30}d — about $${(tot.omni_saved||0).toFixed(2)} of Opus-rate work`)
     +`<span class="sp"></span>`
     +`<span class="fresh">${age==null?'':'updated '+age+'s ago'}</span>`;
 }
-function liveHtml(d){
-  const jobs=(d.jobs||[]).map(j=>`<div class="drow"><span class="pulse"></span> ${esc(j.kind)} · ${esc(j.status)} · ${j.elapsed}s</div>`).join('');
-  const all=d.mcp||[],up=all.filter(m=>m.running).length;
-  const mcp=all.map(m=>`<span class="chip" style="${m.running?'color:var(--ok)':'color:var(--dim2)'}">${esc(m.name)}</span>`).join('');
-  const fov=d.failover&&d.failover.running
-    ?`<span style="color:var(--ok)">failover proxy on${d.failover.port?' :'+d.failover.port:''}</span>`
-    :'<span style="color:var(--dim2)">failover proxy off</span>';
-  return (jobs||`<div class="drow">no jobs running</div>`)
-    +`<div class="drow" style="margin-top:6px">${fov} · <span style="color:${up===all.length?'var(--ok)':'var(--warn)'}">mcp ${up}/${all.length}</span></div>`
-    +(mcp?`<div class="drow" style="margin-top:4px">${mcp}</div>`:'');
+/* running jobs, each with a live pip. This is the "is anything happening"
+   answer in words; the equalizer above it is the same answer at a glance. */
+function jobsHtml(d){
+  const jobs=d.jobs||[];
+  if(!jobs.length)return '';
+  return jobs.slice(0,4).map(j=>`<div class="jrow"><span class="pulse"></span>`
+    +`<span class="jk">${esc(j.kind)}</span>`
+    +`<span class="js">${esc(j.status)}</span>`
+    +`<span class="je">${j.elapsed}s</span></div>`).join('')
+    +(jobs.length>4?`<div class="jrow more">+${jobs.length-4} more</div>`:'');
 }
 function continueTileHtml(rec){
   if(!rec.length)return `<b>Welcome</b><p style="color:var(--dim);margin-top:8px">
@@ -517,16 +990,20 @@ async function acctReconnect(name,dir){
   const r=await post('/api/accounts/terminal',{name:name,dir:dir});
   toast(r.ok?'Terminal opened — run /login there':'Failed: '+(r.error||''),r.ok?'ok':'err');
 }
-/* recency-sorted project list that fills the card (scrolls past ~8 rows) */
-function projectsListHtml(projs){
-  if(!projs.length)return '<div style="color:var(--dim2)">no projects yet</div>';
-  return projs.map(p=>`<div class="hrow" style="cursor:pointer" onclick="openProjectByEnc('${esc(p.enc)}')">
-    <div class="info"><b>${esc(p.name)}</b>
-      ${(p.accounts||[]).map(a=>`<span class="dot" title="${esc(a)}" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${acctColor(a)}"></span>`).join('')}
-      ${p.omni?OMNI_TAG:''}</div>
-    <span class="num">${fmtTok(p.tokens||0)} · $${(p.cost||0).toFixed(2)}</span>
-    <span class="num">${esc(p.age||'')}</span></div>`).join('');
+/* Canvas gradients cannot parse var(), and acctColor() hands back var(--ok) /
+   var(--dim) for the default and overflow accounts — so anything feeding a
+   canvas resolves the computed value first. */
+function cssVar(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
+function resolveColor(c){
+  const m=/^var\((--[\w-]+)\)$/.exec(c||'');
+  return m?(cssVar(m[1])||'#7dcfff'):c;
 }
+/* The dashboard "activity constellation" that used to live here — a second,
+   independent rAF chain drawing glow blobs on a golden-angle spiral — is now
+   the "flow" instrument (instruments.js). Same deterministic layout, rendered
+   as ring-outline nodes with dashed links so the structure is legible, and on
+   the app's ONE shared scheduler instead of a loop of its own. */
+
 function openProjectByEnc(enc){
   const p=(ST.projects||[]).find(x=>x.encoded===enc);
   if(p)openProject(p);else toast('Project not found','err');
@@ -564,7 +1041,8 @@ function goToFullSearch(){PENDING_SEARCH_Q=($('#hqSearch').value||'');go('search
 /* ── project view + tabs ── */
 const TABS=[['sessions','Sessions'],['memory','Memory'],['claudemd','CLAUDE.md'],
   ['review','Review'],['audit','Audit'],['pusage','Usage'],['planexec','Plan → Execute'],['tools','Tools']];
-async function openProject(p){CUR=p;PAGE_='project';TAB='sessions';REVIEW=null;render();
+async function openProject(p){CUR=p;PAGE_='project';TAB='sessions';REVIEW=null;
+  render();
   // kick off the same background memory update the TUI does on open, then
   // watch the scan-lock so the badge shows live progress
   post('/api/memory/autoscan',C()).then(r=>{if(r.running)startMemBadge();else pollMemOnce();});
@@ -601,6 +1079,7 @@ function startMemBadge(){
   tick();
 }
 function drawProject(){
+  NAV_ID++;
   $('#ttl').textContent=CUR.name;$('#tpath').textContent=CUR.path;
   $('#tabs').innerHTML=TABS.map(([id,l])=>
     `<div class="tab${TAB===id?' sel':''}" onclick="TAB='${id}';drawProject()">${l}</div>`).join('')
@@ -611,9 +1090,12 @@ function drawProject(){
 
 /* review tab — confidence-scored review of the working diff */
 let REVIEW=null;
-const SEVCLR={critical:'#ff5c5c',high:'#ff8a5c',medium:'#ffd166',low:'var(--dim)'};
+const SEVCLR={critical:'var(--sev-critical)',high:'var(--sev-high)',medium:'var(--sev-medium)',low:'var(--dim)'};
 function drawReview(){
   const r=REVIEW;
+  const fnd=(r&&r.findings)||[];
+  const sev=['critical','high','medium','low'].map(k=>
+    fnd.filter(f=>(f.severity||'').toLowerCase()===k).length);
   let out;
   if(!r){
     out=`<div style="color:var(--dim)">Review your uncommitted changes against this project's CLAUDE.md rules and learned lessons. Runs one Claude call; only findings at or above the confidence threshold are shown.</div>`;
@@ -631,7 +1113,7 @@ function drawReview(){
           <b style="color:${c};text-transform:uppercase;font-size:12px">${esc(f.severity||'?')}</b>
           <span class="tag">${esc(f.category||'')}</span>
           <span class="tag">${esc(String(f.confidence))}%</span>
-          <code style="color:var(--accent)">${esc(f.file||'?')}:${esc(String(f.line||'?'))}</code>
+          <code style="color:var(--cyan)">${esc(f.file||'?')}:${esc(String(f.line||'?'))}</code>
         </div>
         <div style="margin:6px 0 2px;font-weight:600">${esc(f.summary||'')}</div>
         <div style="color:var(--dim);font-size:13px">${esc(f.detail||'')}</div></div>`;
@@ -644,7 +1126,8 @@ function drawReview(){
       ${out}</div>`;
 }
 function runReview(staged){
-  runJob('review',{...C(),staged},st=>{REVIEW=st.result||{findings:[]};if(TAB==='review')drawReview();});
+  inlineJob('#jban','review',{...C(),staged},{label:'Reviewing changes',
+    onDone:st=>{REVIEW=st.result||{findings:[]};if(TAB==='review')drawReview();}});
 }
 
 /* sessions tab */
@@ -672,8 +1155,8 @@ async function drawSessions(archived){
         <div class="t" id="st${i}">${esc(s.title||s.preview||s.sid.slice(0,8))} ${tg}</div>
         <div class="meta"><span>${esc(s.age)} ago</span><span>${s.count} msgs</span>
           ${s.tokens?`<span>${esc(s.tokens)} tok</span>`:''}
-          ${s.account&&s.account!=='default'?`<span class="tag" style="color:${acctColor(s.account)};border-color:currentColor;background:transparent">${esc(s.account)}</span>`:''}
-          ${s.omni?`<span class="tag" style="color:var(--violet);border-color:currentColor;background:transparent" title="Executed via OmniRoute (free-tier model)">omni</span>`:''}</div>
+          ${s.account&&s.account!=='default'?`<span class="tag acct" style="color:${acctColor(s.account)}">${esc(s.account)}</span>`:''}
+          ${s.omni?`<span class="tag acct" style="color:var(--violet)" title="Executed via OmniRoute (free-tier model)">omni</span>`:''}</div>
       </div>
       <div class="acts">${archived?`
         <button class="btn sm danger" onclick="deleteS(${i},true)" title="Delete">${ic('del')}</button>`:`
@@ -713,6 +1196,10 @@ async function doQuickLaunch(cfg,model,effort){
   const r=await post('/api/launch',{path:cfg.path,enc:cfg.enc,choice:cfg.choice,opts});
   toast(r.ok?'Launched in a new terminal window':'Launch failed: '+(r.error||'unknown'),
     r.ok?'ok':'err');
+  // the launch moment: the session opens in a separate console window, so
+  // without this the GUI gives no sign anything happened beyond a toast. Each
+  // skin marks it its own way, once (MO.burst never loops).
+  if(r.ok)MO.launched($('#content'));
   return r.ok;
 }
 let TUNE_OPEN=-1;
@@ -816,11 +1303,13 @@ async function tagS(i){const s=SESS[i];
 
 /* memory tab */
 async function drawMemory(){
+  const myNav=NAV_ID;
   $('#content').innerHTML='<div class="empty"><span class="spin"></span> Loading…</div>';
   const c=C();
   const [st,les,ws,wl]=await Promise.all([
     api('/api/memory/state?'+qs(c)),api('/api/lessons?'+qs(c)),
     api('/api/workspace-status?'+qs(c)),api('/api/worklog?'+qs(c))]);
+  if(myNav!==NAV_ID)return;   // navigated away mid-fetch — don't clobber the new page
   const lesRows=(les.lessons||[]).map(l=>`
     <tr><td>${l.status==='pending'?'…':l.status==='pinned'?ic('pin'):ic('check')} ${esc(l.status)}</td>
     <td><b>${esc(l.name)}</b><div style="color:var(--dim);font-size:12px">${esc(l.summary)}</div></td>
@@ -829,26 +1318,32 @@ async function drawMemory(){
       <button class="btn sm" onclick="lessonAct('${l.id}','approve')" title="Approve">${ic('check')}</button>
       <button class="btn sm" onclick="lessonAct('${l.id}','pin')" title="Pin">${ic('pin')}</button>
       <button class="btn sm danger" onclick="lessonAct('${l.id}','evict')" title="Evict">${ic('close')}</button></td></tr>`).join('');
+  const modules=(ws.modules||ws.module_list||[]).length||0;
+  // freshness: entities the graph holds against a rough expectation of ~4 per
+  // module. Deliberately its own project's scale, not an absolute target.
+  const cover=st.n_entities?Math.min(1,st.n_entities/Math.max(8,modules*4)):0;
   $('#content').innerHTML=`
     <div class="card"><h3>Project memory <span class="sp"></span>
       <button class="btn sm" onclick="askMem()">${ic('chat')} Ask</button>
       <button class="btn sm" onclick="recallPrev()">${ic('eye')} Recall preview</button>
       <button class="btn sm pri" onclick="buildMemory()">${ic('bolt')} Build with Claude</button></h3>
-      <div class="kv">
+      <div class="memhd">
+        ${INST.html('ring','memory',{fmt:'pct',sub:'mapped',label:'coverage'})}
+        <div class="kv" style="flex:1">
         <span class="k">Entities</span><span>${st.n_entities||0}</span>
         <span class="k">Lessons</span><span>${st.n_lessons||0} (${st.n_pending||0} pending review)</span>
         <span class="k">Unscanned sessions</span><span>${st.n_unscanned||0}</span>
         <span class="k">Generated</span><span>${esc(st.generated_at||'never')}</span>
         <span class="k">Prompt hook</span><span>${st.hook_on?'on':'off'}</span>
         <span class="k">Path-scoped rules</span><span>${st.rules_on?'on':'off'}</span>
-      </div>
+      </div></div>
       <label class="autoline" title="Refresh this project's memory in the background — on GUI start and periodically — whenever its files change, without needing this tab open.">
         <input type="checkbox" id="autoMem" ${CUR.auto_memory?'checked':''} onchange="toggleAutoMem(this.checked)">
         <span>${ic('refresh')} Keep this project's memory updated automatically</span>
         ${st.n_entities?'':'<span class="tag warn">build memory once first</span>'}</label>
       <div id="memProg"></div></div>
     <div class="card"><h3>Lessons <span class="sp"></span>
-      <button class="btn sm" onclick="runJob('lessons_scan',C(),()=>drawMemory())">${ic('school')} Learn from sessions${st.n_unscanned?` <span class="tag warn">${st.n_unscanned} new</span>`:''}</button>
+      <button class="btn sm" onclick="inlineJob('#jban','lessons_scan',C(),{label:'Learning from sessions',onDone:()=>drawMemory()})">${ic('school')} Learn from sessions${st.n_unscanned?` <span class="tag warn">${st.n_unscanned} new</span>`:''}</button>
       <button class="btn sm" onclick="lessonAct('','approve_all')">${ic('check')} Approve all pending</button></h3>
       ${lesRows?`<table class="tbl"><tr><th>status</th><th>lesson</th><th>conf</th><th></th></tr>${lesRows}</table>`
         :'<div style="color:var(--dim)">No lessons yet.</div>'}</div>
@@ -864,6 +1359,8 @@ async function drawMemory(){
         +`</table>`:'<div style="color:var(--dim);margin-top:8px">No sessions recorded yet.</div>'}</div>
     <div class="card"><h3>Workspace status — score ${ws.score??'?'} ${ws.safe?'<span class="tag ok">safe</span>':'<span class="tag warn">attention</span>'}</h3>
       <div style="font:12px Consolas,monospace;white-space:pre-wrap">${esc((ws.lines||[]).join('\n'))}</div></div>`;
+  INST.set('memory',{v:cover,tone:cover>=.6?'ok':cover>=.25?null:'warn'});
+  setRead('memory',cover*100);
 }
 async function toggleWorklog(on){
   await post('/api/worklog',{enc:CUR.encoded,on});
@@ -871,7 +1368,6 @@ async function toggleWorklog(on){
 }
 /* live progress of a running memory scan (fg job or bg worker) */
 async function pollMemProg(){
-  if(document.hidden||!_VIS){setTimeout(pollMemProg,2500);return;}
   const el=$('#memProg');
   if(el&&PAGE_==='project'&&TAB==='memory'){
     try{
@@ -881,7 +1377,6 @@ async function pollMemProg(){
            <span class="spin"></span> Memory scan running… ${esc(d.progress||'')}</div>`;
     }catch(e){}
   }
-  setTimeout(pollMemProg,2500);
 }
 async function lessonAct(id,action){
   await post('/api/lessons',{...C(),id,action});drawMemory();}
@@ -898,16 +1393,16 @@ async function buildMemory(){
   // badge instead of starting a second, colliding run
   try{const r=await api('/api/memory/progress?'+qs({path:CUR.path}));
     if(r.progress!=null){startMemBadge();toast('Memory update already running','ok');return;}}catch(e){}
-  runJob('memory_build',C(),()=>drawMemory());
+  inlineJob('#jban','memory_build',C(),{label:'Building memory',onDone:()=>drawMemory()});
 }
 async function askMem(){
   const v=await ask('Ask project memory',[{label:'Question'}]);
   if(v===null||!v[0].trim())return;
-  runJob('memory_ask',{...C(),question:v[0]},st=>{
+  inlineJob('#jban','memory_ask',{...C(),question:v[0]},{label:'Asking memory',onDone:st=>{
     $('#dTitle').textContent='Memory answer';
     $('#dBody').innerHTML=`<div class="msg"><div class="who">Answer</div>
       <div class="body">${esc(st.result||'')}</div></div>`;
-    $('#drawer').classList.add('show');});
+    $('#drawer').classList.add('show');}});
 }
 async function recallPrev(){
   const v=await ask('Recall preview',[{label:'Simulated prompt',ph:'e.g. fix the launch bug'}]);
@@ -925,11 +1420,12 @@ async function drawClaudeMd(){
   const c=C();
   const [md,mm]=await Promise.all([api('/api/claude-md?'+qs(c)),
                                    api('/api/memory-map?'+qs(c))]);
+  const mf=mm.files||[],have=mf.filter(f=>f.exists).length;
   $('#content').innerHTML=`
     <div class="card"><h3>CLAUDE.md <span class="sp"></span>
       <button class="btn sm" onclick="cmScaffold()">${ic('doc')} Scaffold</button>
-      <button class="btn sm" onclick="runJob('ai_scaffold',C(),()=>drawClaudeMd())">${ic('ai')} AI analyze</button>
-      <button class="btn sm" onclick="runJob('ai_compress',C(),()=>drawClaudeMd())">${ic('shrink')} AI compress</button>
+      <button class="btn sm" onclick="inlineJob('#jban','ai_scaffold',C(),{label:'AI-analyzing project',onDone:()=>drawClaudeMd()})">${ic('ai')} AI analyze</button>
+      <button class="btn sm" onclick="inlineJob('#jban','ai_compress',C(),{label:'Compressing CLAUDE.md',onDone:()=>drawClaudeMd()})">${ic('shrink')} AI compress</button>
       <button class="btn sm" onclick="cmPrune()">${ic('cut')} Prune</button>
       <button class="btn sm" onclick="post('/api/open-editor',{file:CUR.path+'\\\\CLAUDE.md'})">${ic('edit')} Edit</button></h3>
       ${md.exists?`<div style="font:12px Consolas,monospace;white-space:pre-wrap;max-height:46vh;overflow-y:auto;background:var(--code);border-radius:8px;padding:12px">${esc(md.text)}</div>`
@@ -960,6 +1456,7 @@ async function drawAudit(){
   $('#content').innerHTML='<div class="empty"><span class="spin"></span></div>';
   const c=C();
   const [d,deny]=await Promise.all([api('/api/ctxaudit?'+qs(c)),api('/api/deny?'+qs(c))]);
+  const it=d.items||[];
   const rows=(d.items||[]).map(it=>`
     <tr><td>${esc(it.label)} ${it.lazy?'<span class="tag">lazy</span>':''}</td>
     <td class="num">${it.tokens}</td>
@@ -982,6 +1479,7 @@ async function drawAudit(){
 async function drawProjUsage(){
   $('#content').innerHTML='<div class="empty"><span class="spin"></span> Crunching…</div>';
   const d=await api('/api/usage/project?'+qs(C()));
+  const ss=d.sessions||[],spend=ss.reduce((a,r)=>a+(r.cost||0),0);
   const rows=(d.sessions||[]).map(r=>`
     <tr><td>${esc(r.age)}</td><td>${esc(r.name)} ${r.account&&r.account!=='default'?`<span class="tag">${esc(r.account)}</span>`:''}</td>
     <td class="num">${r.msgs}</td><td class="num">${r.usage.in}</td>
@@ -1054,7 +1552,7 @@ async function injectFlow(){
    the plan_* kinds use an approval gate. So we just poll module state, render
    an inline banner into the plan-exec page while it's mounted, and toast on
    completion no matter which page the user wandered to. */
-let PE={jid:null,kind:'',label:'',status:'',msgs:[],elapsed:0,plan:null};
+let PE={jid:null,kind:'',label:'',status:'',msgs:[],elapsed:0,plan:null,lastError:''};
 let __peShown=false,__peSub='',__peMsgs='';
 let peLastChange=0,peLastSig='';    // stall watchdog: last poll where anything changed
 function peBusy(){return !!PE.jid&&PE.status==='running';}
@@ -1063,7 +1561,7 @@ async function peJobStart(kind,params,label){
   if(peBusy()){toast('A plan job is already running — cancel it first','err');return;}
   const r=await post('/api/job',{kind,...params});
   if(!r.ok){toast(r.error||'Could not start','err');return;}
-  PE={jid:r.job,kind,label,status:'running',msgs:[],elapsed:0,plan:PE.plan};
+  PE={jid:r.job,kind,label,status:'running',msgs:[],elapsed:0,plan:PE.plan,lastError:''};
   __peShown=false;   // force a fresh banner build
   peLastChange=0;peLastSig='';      // fresh baseline — don't inherit the last job's stall
   peRenderStatus();
@@ -1091,7 +1589,7 @@ async function pePoll(){
     if(st.status==='done')peJobDone(st.result||{});
     else{
       if(st.status==='cancelled')toast('Plan job cancelled','');
-      else toast(st.error||'Plan job failed','err');
+      else{PE.lastError=st.error||'Plan job failed';toast(PE.lastError,'err');}
       // A failed/cancelled LAUNCH (e.g. a stale/unavailable OmniRoute model)
       // shouldn't force replanning -- the plan is already safely on disk
       // (write_plan_file runs before the exec-model check) and still held in
@@ -1106,7 +1604,10 @@ async function pePoll(){
   }finally{
     // Reschedule on BOTH the success and the error path — a dead chain is the
     // bug. Stop only on a terminal status or when a newer job supersedes us.
-    if(!terminal&&PE.jid===jid)setTimeout(pePoll,700);
+    // a plan job can run for minutes; polling it at 700ms the whole way is
+    // pure waste once it's clearly long-running
+    if(!terminal&&PE.jid===jid)
+      setTimeout(pePoll,PE.elapsed>60?4000:PE.elapsed>15?1500:700);
   }
 }
 function peJobDone(result){
@@ -1126,16 +1627,28 @@ async function peCancel(){
   await post(`/api/job/${PE.jid}/cancel`);
   toast('Cancelling…','');
 }
+/* the plan-exec gauge: alive while a plan job runs, flat when idle. `beats`
+   carries the step count once a plan exists, so a long execute reads as "there
+   is a real amount of work here" rather than just "busy". */
+function peFeed(){
+  const steps=((PE.plan||{}).steps)||[];
+  const run=peBusy();
+  INST.set('planexec',{v:run?1:0,beats:run?Math.min(6,steps.length||1):0,
+    series:steps.map((x,i)=>i+1)});
+  setRead('planexec',steps.length);
+}
+function peDismissError(){PE.status='';PE.lastError='';peRenderStatus();}
 /* Renders the inline running-banner. No-op when off the plan-exec page (the
    poll chain keeps ticking regardless). Caches sub-text/messages so a poll
    tick only rewrites what changed — never recreates the animated spinner. */
 function peRenderStatus(){
+  peFeed();
   const el=$('#peStatus');if(!el)return;
   if(peBusy()){
     if(!__peShown){
       __peShown=true;__peSub='';__peMsgs='';el.style.display='';
-      el.innerHTML=`<div class="perun"><span class="spin"></span>
-        <div style="flex:1"><b id="peLbl"></b>
+      el.innerHTML=`<div class="perun beam"><span class="spin"></span>
+        <div style="flex:1;min-width:0"><b id="peLbl"></b>
           <div class="sub" id="peSub"></div><div class="msgs" id="peMsgs"></div></div>
         <button class="btn sm danger" onclick="peCancel()">Cancel</button></div>`;
       $('#peLbl').textContent=PE.label||'Working…';
@@ -1148,6 +1661,14 @@ function peRenderStatus(){
     if(sub!==__peSub){__peSub=sub;const s=$('#peSub');if(s)s.textContent=sub;}
     const msgs=(PE.msgs||[]).slice(-3).map(m=>`<div class="${m.ok?'':'bad'}">${esc(m.text)}</div>`).join('');
     if(msgs!==__peMsgs){__peMsgs=msgs;const m=$('#peMsgs');if(m)m.innerHTML=msgs;}
+  }else if(PE.status==='error'&&PE.lastError){
+    // a plan job can run for minutes; a 3.5s toast is not enough to report why
+    // it died, so the failure stays on the page until dismissed
+    __peShown=false;el.style.display='';
+    el.innerHTML=`<div class="perun err">${ic('close')}
+      <div style="flex:1"><b>Plan job failed</b>
+        <div class="sub">${esc(PE.lastError)}</div></div>
+      <button class="btn sm" onclick="peDismissError()">Dismiss</button></div>`;
   }else if(__peShown){
     __peShown=false;el.style.display='none';el.innerHTML='';
   }
@@ -1156,7 +1677,8 @@ function drawPlanExec(){
   const o=ST.options;
   $('#content').innerHTML=`
     <div id="peStatus" style="display:none;margin-bottom:14px"></div>
-    <div class="card"><h3>${ic('map')} Plan → Execute</h3>
+    <div class="card"><h3>${ic('map')} Plan → Execute <span class="sp"></span>
+      ${INST.html('eq','planexec',{fmt:'int',sub:'steps'})}</h3>
       <p style="color:var(--dim);font-size:13px;margin-bottom:10px">
         Cuts cost on multi-step work: a strong model writes a numbered plan (no file writes, no tool
         calls — it can't go off script), you review it, then execution runs as a normal full
@@ -1408,9 +1930,14 @@ async function pgUsage(){
   const total=(projects.projects||[]).reduce((a,p)=>a+p.cost,0);
   $('#content').innerHTML=`
     <div class="card"><h3>Plan usage by account</h3>${planRows||'<div style="color:var(--dim)">checking…</div>'}</div>
-    <div class="card"><h3>Daily tokens (14 days)</h3>${dRows}</div>
+    <div class="card"><h3>Daily tokens (14 days)</h3>
+      ${INST.html('spark','daily',{fmt:'tok',unit:'peak day'})}
+      ${dRows}</div>
     <div class="card"><h3>Per-project — total est. $${total.toFixed(2)}</h3>
       <table class="tbl"><tr><th>project</th><th>sess</th><th>msgs</th><th>in</th><th>out</th><th>est.$</th></tr>${pRows}</table></div>`;
+  const days=(daily.days||[]).map(d=>d.tokens||0);
+  INST.set('daily',{series:days});
+  setRead('daily',Math.max(0,...days));
 }
 
 let SIDX=null;
@@ -1432,6 +1959,7 @@ async function pgSearch(){
   };
   if(PENDING_SEARCH_Q){$('#gq').value=PENDING_SEARCH_Q;PENDING_SEARCH_Q='';}
   $('#gq').oninput=draw;draw();$('#gq').focus();
+  const byProj={};for(const r of SIDX)byProj[r.project]=(byProj[r.project]||0)+1;
 }
 function gResume(i){const r=window._gmatch[i];
   askLaunch({title:'Resume — '+r.display,sub:r.project,isNew:false,
@@ -1439,13 +1967,26 @@ function gResume(i){const r=window._gmatch[i];
 
 async function pgMcp(){
   const d=await api('/api/mcp');
+  const srv=d.servers||[],up=srv.filter(x=>x.status==='ok').length;
   $('#content').innerHTML=`<div class="card"><h3>MCP servers <span class="sp"></span>
     <button class="btn sm" onclick="mcpAdd()">${ic('add')} Add server</button></h3>
+    ${srv.length?`<div class="pghd">
+      ${INST.html('ring','mcp',{fmt:'ratio',unit:'/–',sub:'up',label:'reachable'})}
+      <div class="pghdt"><b>${up} of ${srv.length}</b> server${srv.length===1?'':'s'} responding
+        ${up===srv.length?'<span class="tag ok">all healthy</span>'
+          :`<span class="tag warn">${srv.length-up} unreachable</span>`}
+        <div class="sub">A server that isn't responding still appears in your session's tool list — the calls just fail.</div></div>
+    </div>`:''}
     ${(d.servers||[]).map(s=>`<div style="display:flex;align-items:center;gap:10px;padding:5px 0">
       <span style="color:${s.status==='ok'?'var(--ok)':'var(--warn)'}">${ic(s.status==='ok'?'check':'help')}</span><b style="flex:1">${esc(s.name)}</b>
-      <button class="btn sm" onclick="runJob('mcp_analyze',{name:'${esc(s.name)}'},()=>toast('Tool docs written to global CLAUDE.md','ok'))">${ic('search')} Analyze tools</button>
+      <button class="btn sm" onclick="inlineJob('#jban','mcp_analyze',{name:'${esc(s.name)}'},{label:'Analyzing MCP ${esc(s.name)}',onDone:()=>toast('Tool docs written to global CLAUDE.md','ok')})">${ic('search')} Analyze tools</button>
       <button class="btn sm danger" onclick="mcpRemove('${esc(s.name)}')">Remove</button>
     </div>`).join('')||'<div style="color:var(--dim)">No MCP servers configured.</div>'}</div>`;
+  if(srv.length){
+    INST.set('mcp',{v:up/srv.length,tone:up===srv.length?'ok':up?'warn':'err'});
+    setRead('mcp',up);
+    setUnit('mcp','/'+srv.length);
+  }
 }
 async function mcpAdd(){
   const v=await ask('Add MCP server',[
@@ -1488,6 +2029,7 @@ async function pgAgents(){
       <button class="btn sm" onclick="agAI()">${ic('ai')} AI-generate</button></h3>
       ${own||'<div style="color:var(--dim)">No user/project agents yet.</div>'}</div>
     <div class="card"><h3>Agent library</h3>${lib||'<div style="color:var(--dim)">Library is empty.</div>'}</div>`;
+  const cats=d.categories||[],libN=cats.reduce((a,c)=>a+(c.agents||[]).length,0);
 }
 async function agView(path){
   const d=await api('/api/agents/read?file='+encodeURIComponent(path));
@@ -1510,7 +2052,8 @@ async function agNew(){
 async function agAI(){
   const v=await ask('AI-generate agent',[{label:'Describe what the agent should do',type:'textarea'}]);
   if(v===null||!v[0].trim())return;
-  runJob('agent_ai',{path:CUR?CUR.path:'',description:v[0]},()=>drawPage('agents'));
+  inlineJob('#jban','agent_ai',{path:CUR?CUR.path:'',description:v[0]},
+    {label:'Generating agent',onDone:()=>drawPage('agents')});
 }
 async function agDel(path){
   if(!await confirmBox('Delete this agent?'))return;
@@ -1553,13 +2096,14 @@ async function pgSkills(){
         <code>model:</code> pin is rewritten to that model automatically.</p>
       <div class="fld"><input id="skGitUrl" value="https://github.com/olsenbrands/fable-foreman"></div>
       <div class="mrow"><button class="btn pri sm" onclick="skGitInstall()">${ic('download')} Clone &amp; install</button></div></div>`;
+  const pr=d.project||[],tp=d.templates||[];
 }
 function skGitInstall(){
   const url=($('#skGitUrl').value||'').trim();
   if(!url){toast('Enter a git URL','err');return;}
-  runJob('skill_git_install',{path:CUR?CUR.path:'',url},st=>{
+  inlineJob('#jban','skill_git_install',{path:CUR?CUR.path:'',url},{label:'Installing skill',onDone:st=>{
     toast((st.result&&st.result.message)||'Installed','ok');drawPage('skills');
-  });
+  }});
 }
 async function skView(dir){
   const d=await api('/api/skills/read?dir='+encodeURIComponent(dir));
@@ -1591,7 +2135,8 @@ async function skAI(){
   const v=await ask('AI-generate skill',[{label:'Name'},
     {label:'Describe what the skill should do',type:'textarea'}]);
   if(v===null||!v[0].trim())return;
-  runJob('skill_ai',{path:CUR?CUR.path:'',name:v[0],description:v[1]},()=>drawPage('skills'));
+  inlineJob('#jban','skill_ai',{path:CUR?CUR.path:'',name:v[0],description:v[1]},
+    {label:'Generating skill',onDone:()=>drawPage('skills')});
 }
 
 async function pgHooks(){
@@ -1614,6 +2159,8 @@ async function pgHooks(){
       <button class="btn sm" onclick="hookAI()">${ic('ai')} AI-generate</button></h3>
       ${active||'<div style="color:var(--dim)">No hooks installed.</div>'}</div>
     <div class="card"><h3>Templates</h3>${tmpl}</div>`;
+  const ev={};for(const h of (d.hooks||[]))ev[h.event]=(ev[h.event]||0)+1;
+  const tp=d.templates||[],ins=tp.filter(t=>t.installed).length;
 }
 async function hookAdd(key){const r=await post('/api/hooks/template',{key});
   toast(r.ok?'Hook installed':'Failed','ok');drawPage('hooks');}
@@ -1625,25 +2172,50 @@ async function hookPurge(){const r=await post('/api/hooks/purge',{});
 async function hookAI(){
   const v=await ask('AI-generate hook',[{label:'What should the hook do?',type:'textarea'}]);
   if(v===null||!v[0].trim())return;
-  runJob('hook_ai',{description:v[0]},()=>drawPage('hooks'));
+  inlineJob('#jban','hook_ai',{description:v[0]},
+    {label:'Generating hook',onDone:()=>drawPage('hooks')});
 }
 
 async function pgAccounts(){
-  const d=await api('/api/accounts');
+  // /api/usage/plan is server-cached, so pairing it with the account list costs
+  // nothing and lets every row carry its own quota ring instead of sending you
+  // to the dashboard to find out which account is the one that's nearly full
+  const [d,plan]=await Promise.all([api('/api/accounts'),
+    api('/api/usage/plan').catch(()=>({}))]);
+  const pw=(plan.accounts||[]);
+  const quotaOf=name=>{
+    const a=pw.find(x=>x.account===name);
+    if(!a)return null;
+    const wins=(a.windows||[]).map(w=>(w.pct||0)/100);
+    return wins.length?Math.max(...wins):null;
+  };
   $('#content').innerHTML=`<div class="card"><h3>Claude accounts <span class="sp"></span>
     <button class="btn sm" onclick="acctAdd()">${ic('add')} Add account</button></h3>
-    ${(d.accounts||[]).map(a=>`
-      <div style="display:flex;align-items:center;gap:10px;padding:6px 0">
-        <span style="color:${a.active?'var(--ok)':'var(--dim2)'}">●</span>
-        <b style="min-width:110px">${esc(a.name)}</b>
+    ${(d.accounts||[]).map(a=>{
+      const q=quotaOf(a.name);
+      return `<div class="arow2 mo-in">
+        <span class="dot${a.active?' pip':''}" style="background:${a.active?'var(--ok)':'var(--dim2)'};color:var(--ok)"></span>
+        <b>${esc(a.name)}</b>
         ${a.active?'<span class="tag ok">active</span>':''}
-        <span style="flex:1;color:var(--dim2);font-size:12px">${esc(a.resolved)}</span>
+        <span class="apath">${esc(a.resolved)}</span>
+        ${q==null?'<span class="aq dim2">no usage data</span>'
+          :INST.html('ring','acct:'+a.name,{fmt:'pct'})}
         <button class="btn sm" onclick='acctAct("switch",${JSON.stringify(a.name)})'>Switch</button>
         <button class="btn sm" onclick='acctTerm(${JSON.stringify(a.name)},${JSON.stringify(a.dir)})'>Open terminal</button>
         ${a.name!=='default'?`
           <button class="btn sm" onclick='acctRename(${JSON.stringify(a.name)})'>Rename</button>
           <button class="btn sm danger" onclick='acctAct("remove",${JSON.stringify(a.name)})'>${ic('del')}</button>`:''}
-      </div>`).join('')}</div>`;
+      </div>`;}).join('')}</div>`;
+  for(const a of (d.accounts||[])){
+    const q=quotaOf(a.name);
+    if(q==null)continue;
+    INST.set('acct:'+a.name,{v:q,tone:q>=.8?'err':q>=.6?'warn':null});
+  }
+  mounted();
+  for(const a of (d.accounts||[])){
+    const q=quotaOf(a.name);
+    if(q!=null)setRead('acct:'+a.name,q*100);
+  }
 }
 async function acctAdd(){
   const v=await ask('Add account',[{label:'Name (e.g. work, personal)'},
@@ -1692,8 +2264,18 @@ async function pgHelp(){
     ${row('Search page','Search every session across all projects and accounts')}
     ${row('MCP / Agents / Hooks','Managers: add/remove servers + AI tool analysis, create/AI-generate agents, install/AI-generate hooks')}
     ${row('Accounts page','Add/rename/remove/switch accounts, open terminal under an account')}
-    ${row('Settings','Launch defaults, GUI window shell, theme')}
-    </table></div>`;
+    ${row('Settings','Launch defaults, GUI window shell, theme, motion level')}
+    </table></div>
+    <div class="card"><h3>${ic('palette')} Instruments &amp; motion</h3>
+    <p style="color:var(--dim);font-size:13px;margin-bottom:10px">Gauges sit next to the numbers they describe and are fed from the fetches the page already made — they never poll on their own. Each one tweens to a new value and then <b>stops</b>: on a settled page nothing is animating, so anything you see moving is something actually happening.</p>
+    <table class="tbl"><tr><th>instrument</th><th>what it reads</th></tr>
+    ${row('Ring','A share of a whole — plan quota (highest window across your accounts), MCP servers up. Ticks light as the value passes them.')}
+    ${row('Dial','A rate against your own history — tokens per hour now, scaled to your heaviest day. Zones mark where it starts costing.')}
+    ${row('Sparkline','A trend — daily tokens, with the most recent point lit so you can tell which end is now.')}
+    ${row('Equalizer','Live activity. The only gauge that keeps moving with a steady input, because "work is happening" is itself continuous. Flat means idle.')}
+    ${row('Flow map','The workspace: one node per project, size by tokens, colour by account, dashed links where two projects share an account.')}
+    </table>
+    <p style="color:var(--dim2);font-size:12px;margin-top:10px">Motion elsewhere is transitional: numbers count to their new value, rows slide when they reorder, and a travelling border marks a job that is still running. <b>Settings → Appearance → Motion</b> sets how much of that you get; your OS "reduce motion" preference always wins.</p></div>`;
 }
 
 async function pgSettings(){
@@ -1701,8 +2283,28 @@ async function pgSettings(){
   $('#content').innerHTML=`<div class="card"><h3>Defaults</h3>
     ${fld('sEff','Effort')}${fld('sMod','Model')}${fld('sPerm','Permission mode')}
     ${fld('sThink','Thinking cap')}${fld('sSub','Subagent model')}
-    ${fld('sShell','GUI window')}${fld('sTheme','Theme')}
+    ${fld('sShell','GUI window')}
+    <div class="chips" id="sTheme" style="display:none"></div>
     <div class="mrow"><button class="btn pri" onclick="setSave()">Save</button></div></div>
+  <div class="card"><h3>${ic('palette')} Appearance</h3>
+    <p style="color:var(--dim);font-size:13px;margin-bottom:10px">Themes apply and save the moment you pick one — hover to preview, click to keep. Each palette also carries a motion <i>personality</i> (how far things travel, how much they glow), so Mono stays terse and Dracula does not.</p>
+    <div class="thgal" id="thGallery"></div>
+    <div class="fld" style="margin-top:16px"><label>Skin — the shape of the app, independent of its colours</label>
+      <div class="skgal" id="thSkin"></div>
+      <div class="monote" id="skNote"></div></div>
+    <div class="fld" style="margin-top:14px"><label>Motion</label>
+      <div class="chips" id="sMotion"></div>
+      <div style="color:var(--dim2);font-size:12px;margin-top:6px">
+        <b>full</b>: everything — gauges tween, rows slide when they reorder, running jobs get a travelling border, cards catch the pointer ·
+        <b>subtle</b>: only the motion that carries information — value tweens, meter fills, page changes ·
+        <b>off</b>: nothing moves.<br>
+        Gauges stop once they reach their value either way, so an idle page renders no frames at all. Your OS <i>reduce motion</i> setting overrides this.</div></div>
+    <div class="fld" style="margin-top:14px"><label>Background</label>
+      <div class="chips" id="sStage"></div>
+      <div class="monote" id="stgNote"></div>
+      <div style="color:var(--dim2);font-size:12px;margin-top:6px">
+        One animated scene behind the whole app, chosen by the skin and driven by what the workspace is actually doing — idle crawls, a running job speeds it up, launching a session sends a shockwave through it.
+        It stops entirely when the window is hidden, minimised or blurred, and <b>motion: off<\b> turns it off with everything else.</div></div></div>
   <div class="card"><h3>Economy model</h3>
     <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Model used for claudectl's <b>own</b> internal Claude calls — memory extraction, lessons, CLAUDE.md / agent / hook / skill generation. Defaults to Haiku to cut cost. Your actual coding sessions are unaffected. <i>default</i> = your account's model.</p>
     ${fld('sExtract','Economy model')}
@@ -1782,24 +2384,7 @@ async function pgSettings(){
   chipsFill($('#sShell'),['auto','qt','edge','browser'],
     ['auto (Qt → Edge → browser)','Qt native window','Edge app window','browser tab'],
     ST.gui_shell||'auto');
-  // theme swatches with live preview
-  const themeNames=Object.keys(ST.themes||{});
-  const curTheme=ST.theme||'default';
-  $('#sTheme').innerHTML=themeNames.map(n=>{
-    const t=ST.themes[n];
-    const bg=t?t.panel||t.bg||'#1a1b26':'#1a1b26';
-    const accent=t?t.accent||'#7dcfff':'#7dcfff';
-    return `<span class="chip${n===curTheme?' on':''}" data-v="${esc(n)}"
-      style="display:inline-flex;align-items:center;gap:6px">
-      <span style="display:inline-block;width:14px;height:14px;border-radius:50%;
-        background:${accent};border:1.5px solid var(--line);flex:none"></span>
-      ${esc(n)}</span>`;
-  }).join('');
-  $('#sTheme').querySelectorAll('.chip').forEach(c=>
-    c.addEventListener('click',()=>{
-      $('#sTheme').querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));
-      c.classList.add('on');applyTheme(c.dataset.v);
-    }));
+  drawThemeGallery();
   chipsFill($('#sPlanMod'),o.models,o.model_labels,ST.plan_model||'');
   chipsFill($('#sExecMod'),o.models,o.model_labels,ST.exec_model||'');
   $('#orUrl').value=ST.omniroute_base_url||'';
@@ -1810,6 +2395,146 @@ async function pgSettings(){
   drawAutoMemList();
   orRefresh();
 }
+/* ── theme gallery ──
+   A dot swatch can't distinguish 26 palettes, so every card paints a real mock
+   of the app in that palette's own colours — surface, panel, gradient button,
+   body/secondary text, and the three state tints. Hover previews live, leaving
+   reverts to the saved theme, clicking saves immediately (a theme is a setting
+   you judge by looking at it, not one you stage behind a Save button). */
+const FAM_ORDER=['cyan','blue','azure','teal','green','sage','amber','yellow',
+  'orange','red','magenta','purple','violet','rose','neutral','light'];
+function themeCardHtml(n,t,cur){
+  const sel=n===cur;
+  const grad=`linear-gradient(135deg,${t.accent},${t.accent2})`;
+  // the mock wears the skin that is actually selected, so the card shows the
+  // combination you would get — a palette preview in the wrong shape is a lie
+  const sk=(ST.skins||{})[skinFor(n)]||{};
+  const mockSt=`background:${t.bg};border-color:${t.line};`
+    +`border-radius:${Math.min(sk.radius||6,12)}px;border-width:${Math.min(sk.border||1,3)}px`;
+  return `<div class="thcard${sel?' on':''}" data-v="${esc(n)}">
+    <div class="thmock" style="${mockSt}">
+      <div class="thbar" style="background:${t.panel};border-bottom-color:${t.line}">
+        <i style="background:${grad}"></i><u style="background:${t.dim2}"></u></div>
+      <div class="thbody">
+        <div class="thl" style="background:${t.txt};width:70%"></div>
+        <div class="thl" style="background:${t.dim};width:52%"></div>
+        <div class="thl" style="background:${t.dim2};width:38%"></div>
+        <div class="thfoot">
+          <s style="background:${t.ok}"></s><s style="background:${t.warn}"></s>
+          <s style="background:${t.err||t.accent2}"></s>
+          <b style="background:${grad}"></b></div>
+      </div></div>
+    <div class="thname">${esc(t.label||n)}</div>
+    <div class="thopts"><span class="thopt on">${esc((sk.label||'').toLowerCase()||t.motion)}</span></div></div>`;
+}
+/* ── skin picker ──
+   A skin is a bigger change than a palette, so each tile previews the actual
+   geometry: corner treatment, border weight, radius and heading type, drawn in
+   the currently-selected palette. Hover previews live and leaving reverts, the
+   same contract the palette gallery already uses. */
+function drawSkinPicker(){
+  const box=$('#thSkin');if(!box)return;
+  const skins=ST.skins||{};
+  const cur=skinFor(ST.theme);
+  const t=(ST.themes||{})[ST.theme]||{};
+  box.innerHTML=Object.keys(skins).map(n=>{
+    const sk=skins[n];
+    const on=n===cur;
+    const st=`border-radius:${Math.min(sk.radius,14)}px;border-width:${Math.min(sk.border,3)}px;`
+      +`background:${t.panel||'var(--panel)'};border-color:${t.line||'var(--line)'}`;
+    return `<div class="skcard${on?' on':''}" data-v="${esc(n)}" title="${esc(sk.blurb)}">
+      <div class="skmock skm-${esc(n)}" style="${st}">
+        <u style="background:${t.accent}"></u>
+        <s style="background:${t.dim2}"></s><s style="background:${t.dim2};width:52%"></s>
+      </div>
+      <div class="skname">${esc(sk.label)}</div></div>`;}).join('')
+    // "auto" hands the choice back to the palette, which is the default state
+    +`<div class="skcard${ST.skin?'':' on'}" data-v="" title="Wear whatever skin the selected palette names as its default">
+        <div class="skmock skm-auto"><u></u><s></s><s style="width:52%"></s></div>
+        <div class="skname">auto</div></div>`;
+  const note=$('#skNote');
+  if(note)note.textContent=(skins[cur]||{}).blurb||'';
+  box.querySelectorAll('.skcard').forEach(card=>{
+    const n=card.dataset.v;
+    card.addEventListener('mouseenter',()=>{
+      applySkin(n||skinFor(ST.theme));
+      if(note)note.textContent=(skins[n||skinFor(ST.theme)]||{}).blurb||'';});
+    card.addEventListener('mouseleave',()=>{
+      applySkin(skinFor(ST.theme));
+      if(note)note.textContent=(skins[skinFor(ST.theme)]||{}).blurb||'';});
+    card.addEventListener('click',async()=>{
+      ST.skin=n;
+      localStorage.setItem('ctl_skin',n);
+      applyTheme(ST.theme);
+      drawThemeGallery();
+      MO.burst($('#content'));      // show the new skin's signature immediately
+      await post('/api/settings',{skin:n});
+    });
+  });
+}
+function drawThemeGallery(){
+  const cur=ST.theme||'default';
+  // hidden chips keep chipVal($('#sTheme')) working for setSave(). Filled
+  // FIRST: an empty #sTheme would make Save post theme:'' and silently reset
+  // the user to the default palette.
+  const h=$('#sTheme');
+  if(h)h.innerHTML=`<span class="chip on" data-v="${esc(cur)}"></span>`;
+  const box=$('#thGallery');if(!box)return;
+  const names=Object.keys(ST.themes||{});
+  names.sort((a,b)=>{
+    const fa=FAM_ORDER.indexOf(ST.themes[a].family),fb=FAM_ORDER.indexOf(ST.themes[b].family);
+    return fa-fb||a.localeCompare(b);
+  });
+  box.innerHTML=names.map(n=>themeCardHtml(n,ST.themes[n],cur)).join('');
+  box.querySelectorAll('.thcard').forEach(card=>{
+    const n=card.dataset.v;
+    card.addEventListener('mouseenter',()=>applyTheme(n));
+    card.addEventListener('mouseleave',()=>applyTheme(ST.theme));
+    card.addEventListener('click',()=>themePick(n));
+  });
+  drawSkinPicker();
+  chipsFill($('#sMotion'),['full','subtle','off'],null,ST.motion||'full');
+  const mb=$('#sMotion');
+  if(mb)mb.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
+    ST.motion=c.dataset.v;
+    MO.set(ST.motion);
+    localStorage.setItem('ctl_motion',ST.motion);
+    post('/api/settings',{motion:ST.motion});
+    // gauges hold their last frame when motion goes off, so nudge them to
+    // redraw once under the new rules rather than freezing mid-tween
+    INST.refit();
+  }));
+  // The background gets its own switch rather than riding on `motion`. It is a
+  // second GPU surface in a shell with a documented tearing history, so it has
+  // to be turnable down without also flattening every transition in the app.
+  chipsFill($('#sStage'),['cinematic','lite','off'],
+    {cinematic:'cinematic',lite:'lite (no bloom)',off:'off'},ST.stage||'cinematic');
+  const sb=$('#sStage');
+  if(sb)sb.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
+    ST.stage=c.dataset.v;
+    localStorage.setItem('ctl_stage',ST.stage);
+    if(window.STAGE)STAGE.setTier(ST.stage);
+    post('/api/settings',{stage:ST.stage});
+    const n=$('#stgNote');if(n)n.textContent=STAGE_NOTE[ST.stage]||'';
+  }));
+  const sn=$('#stgNote');if(sn)sn.textContent=STAGE_NOTE[ST.stage||'cinematic']||'';
+}
+const STAGE_NOTE={
+  cinematic:'Full scene with bloom. Each skin brings its own — a wireframe horizon, a petal field, a neon flythrough.',
+  lite:'The same scene without bloom. Two fewer render targets — try this first if the Qt window ever tears.',
+  off:'No 3D background at all. Falls back to the static gradient wash.',
+};
+/* Applies and saves immediately. A theme is a setting you judge by looking at
+   it, not one you stage behind a Save button — and the gallery previews on
+   hover, so a Save step would only add a way to lose the choice. */
+async function themePick(name){
+  ST.theme=name;
+  applyTheme(name);
+  localStorage.setItem('ctl_theme',name);
+  drawThemeGallery();
+  await post('/api/settings',{theme:name});
+}
+
 async function setPlanExecSave(){
   await post('/api/settings',{plan_model:chipVal($('#sPlanMod')),exec_model:chipVal($('#sExecMod'))});
   ST.plan_model=chipVal($('#sPlanMod'));ST.exec_model=chipVal($('#sExecMod'));
@@ -2035,7 +2760,12 @@ async function drawAutoMemList(){
       <input type="checkbox" ${p.auto?'checked':''} onchange="amToggle('${esc(p.enc)}',this.checked)">
       <span class="nm">${esc(p.name)}${p.running?' <span class="tag ok">updating…</span>':''}</span>
       <span class="pt">${esc(p.path)}</span></label>`).join('');
-  $('#amList').innerHTML=rows||'<div style="color:var(--dim)">No projects found.</div>';
+  // re-resolve AND guard: this lands after an await, so navigating away between
+  // the fetch and here leaves the node detached. #amInt above was already
+  // guarded; this one was not, and threw an uncatchable pageerror on a fast
+  // settings→home hop.
+  const list=$('#amList');
+  if(list)list.innerHTML=rows||'<div style="color:var(--dim)">No projects found.</div>';
 }
 async function amToggle(enc,on){
   await post('/api/memory/auto',{enc,auto:on});
@@ -2061,18 +2791,27 @@ async function setExtractSave(){
 
 /* ── launch modal (chips, not <select> — native dropdowns flicker under
       QtWebEngine) ── */
+/* Null-guarded because these are called from ASYNC renderers: a settings page
+   that awaits a fetch and then fills its chips will finish into a #content the
+   SPA has already replaced if you navigated away in the meantime. Every one of
+   these took an element that existed when the render started and may not by the
+   time it lands. setV() and the gallery renderers have always guarded; the chip
+   helpers did not, and threw an uncatchable pageerror on a fast settings→home
+   hop. Cheaper here than at ~20 call sites. */
 function chipsFill(el,vals,labels,cur){
+  if(!el)return;
   el.innerHTML=vals.map((v,i)=>
     `<span class="chip${v===cur?' on':''}" data-v="${esc(v)}">${esc(labels?labels[i]:(v||'default'))}</span>`).join('');
   el.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{
     el.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));
     c.classList.add('on');});
 }
-function chipVal(el){const c=el.querySelector('.chip.on');return c?c.dataset.v:'';}
-function chipSet(el,v){el.querySelectorAll('.chip').forEach(c=>
+function chipVal(el){if(!el)return '';const c=el.querySelector('.chip.on');return c?c.dataset.v:'';}
+function chipSet(el,v){if(!el)return;el.querySelectorAll('.chip').forEach(c=>
   c.classList.toggle('on',c.dataset.v===v));}
 // model cards: grid-aligned rows with SWE% / cost / capability / best-for
 function modelCardsFill(el,cur){
+  if(!el)return;
   const rows=[['','default','','','account model','—']].concat(ST.options.model_cards||[]);
   el.innerHTML=rows.map(([mid,lbl,cost,cap,bf,swe])=>
     `<div class="mcard${mid===cur?' on':''}" data-v="${esc(mid)}">`
@@ -2326,7 +3065,7 @@ function usageRow(a){
     <span class="ulbl">${esc(w.label)}</span>
     <span class="ubarm"><i style="width:${Math.min(100,w.pct)}%"></i></span>
     <span class="upct">${Math.round(w.pct)}%</span>
-    ${w.resets?`<span class="urst">→ ${esc(w.resets)}</span>`:''}
+    <span class="urst">${w.resets?'→ '+esc(w.resets):''}</span>
   </span>`).join('');
   return `<div class="urow">
     <span class="uacct" title="${esc(a.email||a.account)}">${esc(a.email||a.account)}</span>
@@ -2336,7 +3075,7 @@ function usageRow(a){
 async function drawUsageBar(force){
   clearTimeout(_uTimer);
   if(document.hidden||!_VIS){_uTimer=setTimeout(drawUsageBar,60000);return;}
-  if(force)$('#uRefresh').innerHTML='<span class="spin"></span>';
+  if(force){const b=$('#uRefresh');if(b){b.classList.add('busy');b.innerHTML='<span class="spin"></span>';}}
   try{
     const d=await api('/api/usage/plan'+(force?'?refresh=1':''));
     $('#ubar').innerHTML=`<div class="urow">
@@ -2345,14 +3084,17 @@ async function drawUsageBar(force){
       <div style="flex:1;display:flex;flex-direction:column;gap:2px">
         ${(d.accounts||[]).map(usageRow).join('')}
       </div></div>`;
+    // a forced refresh only kicks the background poller — come back for it
+    _uTimer=setTimeout(drawUsageBar,force?2500:60000);
+  }catch(e){
+    if(force){const b=$('#uRefresh');if(b){b.classList.remove('busy');b.innerHTML=ic('refresh');}}
     _uTimer=setTimeout(drawUsageBar,60000);
-  }catch(e){_uTimer=setTimeout(drawUsageBar,60000);}
+  }
 }
 
 /* global poll: which projects' memory is updating right now (scheduler or
    on-open), so the sidebar markers stay live regardless of the open page */
 async function pollActiveMem(){
-  if(document.hidden||!_VIS){setTimeout(pollActiveMem,4000);return;}
   try{
     const d=await api('/api/memory/active');
     const next=new Set(d.active||[]);
@@ -2360,8 +3102,38 @@ async function pollActiveMem(){
     ACTIVE_MEM=next;
     if(changed)drawProjects();
   }catch(e){}
-  setTimeout(pollActiveMem,4000);
 }
+/* One ticker for the always-on chrome polls instead of two independent
+   setTimeout chains each re-checking visibility on its own. */
+/* the chips live in the top bar on every page, but only the dashboard poll
+   knows failover/mcp state — off the dashboard, refresh them slowly */
+function renderHdrChips(d){
+  const hc=$('#hdrChips');if(!hc)return;
+  const on=d.failover&&d.failover.running;
+  const all=(d.mcp||[]),up=all.filter(m=>m.running).length;
+  setV(hc,`<span class="hchip act${on?' ok':''}" onclick="go('settings')"
+      title="Failover proxy — click to configure">failover${on&&d.failover.port?':'+d.failover.port:''}</span>`
+    +`<span class="hchip act${up?' ok':''}" onclick="go('mcp')"
+      title="MCP servers">mcp ${up}/${all.length}</span>`);
+}
+async function tickHdrChips(){
+  if(PAGE_==='home')return;              // the dashboard poll already does it
+  try{const d=await api('/api/dashboard');renderHdrChips(d);}catch(e){}
+}
+/* The ambient-motion layer that used to live here (26 generative canvas
+   renderers mounted into ~30 places, looping forever) is gone. Readable
+   gauges live in instruments.js and are placed next to the numbers they
+   describe; the micro-interaction vocabulary lives in motion.js. Page
+   renderers push data with INST.set() — nothing here fetches. */
+
+const HB_MS=2500,HB_TASKS=[[1,pollMemProg],[2,pollActiveMem],[12,tickHdrChips]];
+let HB_TIMER=null,HB_N=0;
+function heartbeat(){
+  HB_N++;
+  if(document.hidden||!_VIS)return;
+  for(const[every,fn]of HB_TASKS)if(HB_N%every===0)fn();
+}
+function startHeartbeat(){if(!HB_TIMER){heartbeat();HB_TIMER=setInterval(heartbeat,HB_MS);}}
 
 (async()=>{
   ST=await api('/api/state');
@@ -2370,9 +3142,29 @@ async function pollActiveMem(){
   const lsAcct=localStorage.getItem('ctl_account');
   if(lsTheme&&ST.themes&&ST.themes[lsTheme])ST.theme=lsTheme;
   if(lsAcct)ST.active_cfgdir=lsAcct;
+  const lsMo=localStorage.getItem('ctl_motion');
+  if(lsMo)ST.motion=lsMo;
+  const lsSk=localStorage.getItem('ctl_skin');
+  if(lsSk!==null)ST.skin=lsSk;
+  const lsStg=localStorage.getItem('ctl_stage');
+  if(lsStg)ST.stage=lsStg;
+  MO.set(ST.motion||'full');
+  // Tell the stage its tier BEFORE applyTheme, which hands it the palette and
+  // skin. The vendor bundle is deferred, so boot() may not have happened yet —
+  // STAGE holds the settings and mounts when `vendor-ready` fires.
+  if(window.STAGE){
+    STAGE.tier=ST.stage||'cinematic';
+    if(STAGE.tier==='off'||!MO.on)STAGE._static();
+  }
   applyTheme(ST.theme);segDraw();
+  if(window.STAGE)STAGE.page(PAGE_);
+  MO.spot($('#content'));
+  watchContent();
+  // the Qt shell and the 720px drawer both change #content's width WITHOUT
+  // firing a window resize, so instruments re-fit from an observer instead
+  if(window.ResizeObserver)new ResizeObserver(()=>INST.refit()).observe($('#content'));
   $('#bTerm').innerHTML=ic('terminal')+' Terminal';
   $('#bCont').innerHTML=ic('history')+' Continue';
   $('#bNew').innerHTML=ic('add')+' New session';
-  render();drawUsageBar();pollMemProg();pollActiveMem();
+  render();drawUsageBar();startHeartbeat();
 })();

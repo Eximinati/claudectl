@@ -7,7 +7,7 @@
   --code:#0a0e16; --onacc:#0d1117; --amber:#e0a640;
   --grad:linear-gradient(135deg,#7dcfff,#8a5cf6);
   /* legacy tokens (used in CSS below, keep for compat) */
-  --r-sm:8px; --r:10px; --r-md:10px; --r-lg:14px; --r-pill:20px;
+  --r-sm:4px; --r:6px; --r-md:6px; --r-lg:8px; --r-pill:999px;
   --sp1:6px; --sp2:10px; --sp3:14px; --sp4:20px;
   --mono:ui-monospace,Consolas,"Cascadia Code",monospace;
   --shadow:0 8px 28px rgba(0,0,0,.45);
@@ -18,11 +18,78 @@
   --shadow-md:0 4px 12px rgba(0,0,0,.3),0 1px 4px rgba(0,0,0,.15);
   --shadow-lg:0 8px 28px rgba(0,0,0,.4),0 2px 8px rgba(0,0,0,.2);
   --shadow-xl:0 12px 40px rgba(0,0,0,.5),0 3px 12px rgba(0,0,0,.25);
-  /* ── motion ── */
+  /* ── motion ──
+     Two curves carry everything. --t-ease decelerates into place (things
+     arriving: enters, page fades, meter fills). --t-spring overshoots slightly
+     (things responding to you: hovers, presses). --mo-lift/--mo-glow are the
+     per-theme motion personality, rewritten by applyTheme(); see themes.py. */
   --t-f:.12s ease; --t-n:.2s ease; --t-s:.3s cubic-bezier(.4,0,.2,1);
+  --t-ease:.22s cubic-bezier(.22,1,.36,1);
+  --t-spring:.26s cubic-bezier(.34,1.56,.64,1);
+  --mo-lift:-2px; --mo-glow:.22; --mo-beam:2.6s;
+  /* ── HUD layer ──
+     rgb triples are (re)written by applyTheme alongside the hex vars: rgba()
+     needs the channels split, and color-mix() would tie the whole skin to a
+     QtWebEngine Chromium version we don't pin. Same compute-in-JS idiom the
+     --onacc/--grad derivation already uses. */
+  --cyan-rgb:125,207,255; --violet-rgb:138,92,246; --ok-rgb:63,221,157; --warn-rgb:247,185,85;
+  --hud-line:rgba(var(--cyan-rgb),.55);
+  --hud-line-dim:rgba(var(--cyan-rgb),.22);
+  --hud-glow-1:0 0 0 1px rgba(var(--cyan-rgb),.35);
+  --hud-glow-2:0 0 0 1px rgba(var(--cyan-rgb),.35),0 0 10px rgba(var(--cyan-rgb),.22);
+  --seg-w:6px; --seg-gap:3px;                 /* segmented-meter cell */
+  --hud-corner:11px; --hud-corner-w:2px;      /* corner-bracket arm/thickness */
+  --fs-micro:10.5px; --fs-cap:11px; --fs-sm:12.5px;
+  --sev-critical:#ff5c5c; --sev-high:#ff8a5c; --sev-medium:#ffd166;
+}
+/* the one light theme (catppuccin-latte): neon hairlines read as scratches on a
+   pale surface, so the HUD layer is damped rather than dropped */
+html.theme-light{
+  --hud-line:rgba(var(--cyan-rgb),.35); --hud-line-dim:rgba(var(--cyan-rgb),.14);
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
+/* HUD corner brackets moved to the HUD skin (end of this file). They were on
+   every card unconditionally, which made them chrome rather than a choice — and
+   meant every palette wore the same instrument-panel shape no matter how soft
+   its colours were. */
+/* ── the stage ────────────────────────────────────────────────────────────
+   ONE canvas, behind the whole app, for every page. See stage.js for why this
+   is not the ambient layer that was deleted (one surface vs thirty; driven by
+   real state vs free-running; stops on hidden/blur/off).
+
+   z-index:-2 puts it under the static washes below, which paint from first byte
+   and are removed only once GL has actually rendered a frame (html.stage-on).
+   Deliberately NO filter/backdrop-filter/mix-blend-mode on or near it — every
+   glow happens inside GL, which is the whole reason bloom is affordable here
+   and a CSS blur never was. */
+#stage{position:fixed;inset:0;width:100%;height:100%;z-index:-2;
+  pointer-events:none;display:block;opacity:0;transition:opacity .5s ease}
+html.stage-on #stage{opacity:1}
+html.stage-off #stage{display:none}
+
+/* ambient depth: two very faint corner washes and a hairline grid, the way the
+   reference dashboards ground their panels. STATIC — it used to drift on a
+   140s keyframe, which bought nothing (nobody perceives a 4.6s composite as
+   motion) while keeping a full-screen layer permanently animated.
+
+   This is now the stage's fallback tier as well as the pre-boot paint: no
+   vendor bundle, no WebGL, a lost context or stage:off all land here. */
+body::before{content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;
+  opacity:.12;transition:opacity .5s ease;
+  background:
+    radial-gradient(55% 45% at 22% 6%, var(--cyan), transparent 70%),
+    radial-gradient(50% 42% at 92% 96%, var(--violet), transparent 70%)}
+body::after{content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;
+  opacity:.35;transition:opacity .5s ease;
+  background:
+    linear-gradient(rgba(var(--cyan-rgb),.045) 1px,transparent 1px) 0 0/100% 44px,
+    linear-gradient(90deg,rgba(var(--cyan-rgb),.045) 1px,transparent 1px) 0 0/44px 100%;
+  mask-image:radial-gradient(120% 90% at 50% 0%,#000 20%,transparent 75%);
+  -webkit-mask-image:radial-gradient(120% 90% at 50% 0%,#000 20%,transparent 75%)}
+html.theme-light body::before{opacity:.06}
+html.theme-light body::after{opacity:.5}
+html.stage-on body::before,html.stage-on body::after{opacity:0}
 body{background:var(--bg);color:var(--txt);
   font:14px/1.5 "Segoe UI",system-ui,-apple-system,sans-serif;overflow:hidden;
   -webkit-font-smoothing:antialiased;font-synthesis:none}
@@ -32,8 +99,16 @@ body{background:var(--bg);color:var(--txt);
 ::-webkit-scrollbar-thumb:hover{background:var(--dim2)}
 ::-webkit-scrollbar-track{background:transparent}
 
-/* ── app shell ── */
+/* ── app shell ──
+   The sidebar collapses to an icon rail on a narrow window rather than
+   disappearing: the nav is how you move around, and the Qt window gets dragged
+   narrow often enough that losing it would be worse than losing the labels.
+   Names move to title attributes at that width. */
 .app{display:grid;grid-template-columns:280px 1fr;height:100vh}
+/* the icon-rail override lives at the END of this file — see "narrow window".
+   A @media block adds no specificity, so placed here it lost every equal-weight
+   rule declared below it: the column shrank to 64px but the labels inside kept
+   their size and spilled out of it. */
 
 /* ── sidebar ── */
 .side{background:var(--bg2);border-right:1px solid var(--line);
@@ -58,13 +133,30 @@ body{background:var(--bg);color:var(--txt);
   transition:background var(--t-f),border-color var(--t-f)}
 .proj:hover{background:var(--panel)}
 .proj.sel{background:var(--panel2);border-color:var(--line)}
-.proj .nm{font-weight:600;font-size:13px;display:flex;align-items:center;gap:7px}
-.proj .pt{color:var(--dim2);font-size:11px;white-space:nowrap;overflow:hidden;
-  text-overflow:ellipsis}
+.proj .nm{font-weight:600;font-size:13px;display:flex;align-items:center;gap:7px;
+  flex-wrap:nowrap;overflow:hidden}
+.proj .nm .pn{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.proj .nm .tag{flex:none}
+.proj .pt{color:var(--dim2);font-size:11px;display:flex;align-items:center;gap:6px}
+.proj .pt .pp{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .tag{font-size:10px;padding:1px 8px;border-radius:var(--r-pill);background:rgba(138,92,246,.12);
   color:#b39bf7;border:1px solid rgba(138,92,246,.3);font-weight:500}
 .tag.warn{background:rgba(247,185,85,.12);color:var(--warn);border-color:rgba(247,185,85,.3)}
 .tag.ok{background:rgba(63,221,157,.12);color:var(--ok);border-color:rgba(63,221,157,.3)}
+.tag.acct{background:transparent;border-color:currentColor}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none}
+/* header status chips (failover / mcp) */
+.hdrchips{display:inline-flex;align-items:center;gap:6px}
+.hchip{display:inline-flex;align-items:center;gap:5px;
+  font:var(--fs-cap)/1 var(--mono);text-transform:uppercase;letter-spacing:.06em;
+  color:var(--dim2);background:var(--panel2);border:1px solid var(--line);
+  border-radius:3px;padding:4px 8px 4px 7px;white-space:nowrap}
+.hchip::before{content:'';width:6px;height:6px;border-radius:50%;
+  background:currentColor;opacity:.35;flex:none}
+.hchip.ok{color:var(--ok);border-color:currentColor}
+.hchip.ok::before{opacity:1;box-shadow:0 0 4px currentColor}
+.hchip.act{cursor:pointer;transition:border-color var(--t-f),color var(--t-f)}
+.hchip.act:hover{color:var(--cyan);border-color:currentColor}
 .nav{border-top:1px solid var(--line);padding:var(--sp-2)}
 .nav .it{display:flex;align-items:center;gap:var(--sp-2);padding:7px 12px;
   border-radius:var(--r-sm);cursor:pointer;color:var(--dim);font-size:13px;
@@ -83,8 +175,21 @@ body{background:var(--bg);color:var(--txt);
 .top{display:flex;align-items:center;gap:var(--sp-3);padding:13px 26px;
   border-bottom:1px solid var(--line);background:var(--bg2);flex-wrap:wrap;
   position:sticky;top:0;z-index:5}
-.top h1{font-size:16px;font-weight:700;letter-spacing:.2px}
-.top .path{color:var(--dim2);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.top h1{font-size:16px;font-weight:700;letter-spacing:.2px;white-space:nowrap}
+.top .path{color:var(--dim2);font-size:12px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;min-width:0;flex:0 1 auto}
+/* the three project actions must stay reachable, so they wrap as a unit rather
+   than letting the path push them off the row */
+#pactions{display:inline-flex;gap:var(--sp-2);flex-wrap:wrap;justify-content:flex-end}
+@media(max-width:899px){
+  .top{padding:10px 14px;gap:var(--sp-2)}
+  .top .path{flex-basis:100%;order:9}
+  .tabs{overflow-x:auto;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tab{padding:9px 11px}
+  .kpi{gap:var(--sp-3) var(--sp-4)}
+  .kpi .kv2{font-size:17px}
+}
 .top .sp{flex:1}
 .amrow{display:flex;align-items:center;gap:var(--sp-2);padding:6px 0;
   border-bottom:1px solid var(--panel2);cursor:pointer;font-size:13px;
@@ -100,65 +205,123 @@ body{background:var(--bg);color:var(--txt);
 .autoline:hover{opacity:.8}
 .autoline input{width:16px;height:16px;accent-color:var(--cyan);cursor:pointer}
 .autoline .ic{width:15px;height:15px;fill:var(--dim)}
-.proj .amk{margin-left:auto;display:inline-flex;flex:none}
+.proj .mspark{margin-left:auto;flex:none;opacity:.6;overflow:visible;
+  transition:opacity var(--t-f)}
+.proj .mspark polyline{fill:none;stroke:var(--cyan);stroke-width:1.2;
+  stroke-linejoin:round;stroke-linecap:round}
+.proj .mspark polygon{fill:rgba(var(--cyan-rgb),.16);stroke:none}
+.proj:hover .mspark,.proj.sel .mspark{opacity:1}
+.proj .amk{margin-left:auto;display:inline-flex;flex:none;position:relative}
+.proj .mspark+.amk{margin-left:6px}
 .proj .amk .ic{width:13px;height:13px;fill:var(--violet);opacity:.85}
-.proj .amk.spin-on .ic{fill:var(--cyan);animation:sp 1s steps(8) infinite}
+.proj .amk.pip{color:var(--cyan)}
+.proj .amk.pip .ic{fill:var(--cyan)}
 .membadge{display:inline-flex;align-items:center;gap:7px;font-size:12px;
   color:var(--ok);background:rgba(63,221,157,.08);border:1px solid rgba(63,221,157,.3);
   border-radius:var(--r-pill);padding:3px 12px;white-space:nowrap}
-.membadge .pulse{width:8px;height:8px;border-radius:50%;background:var(--ok);
-  animation:pulse 1.3s steps(8) infinite}
-@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+/* live dot — an expanding ring, not an opacity blink. See .pip below. */
+.membadge .pulse,.drow .pulse{width:8px;height:8px;border-radius:50%;
+  background:var(--ok);flex:none;position:relative;display:inline-block}
+.membadge .pulse::after,.drow .pulse::after{content:'';position:absolute;
+  inset:0;border-radius:50%;border:1px solid var(--ok);
+  animation:pipring 1.8s cubic-bezier(.22,1,.36,1) infinite}
 .btn{background:var(--panel);color:var(--txt);border:1px solid var(--line);
   border-radius:var(--r-sm);padding:7px 14px;cursor:pointer;font-size:13px;font-weight:600;
-  transition:border-color var(--t-f),background var(--t-f),transform .06s,box-shadow var(--t-f);
+  transition:border-color var(--t-f),background var(--t-f),
+    transform var(--t-spring),box-shadow var(--t-f);
   white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
-.btn:hover{border-color:var(--cyan)}
-.btn:active{transform:scale(.97)}
+.btn:hover{border-color:var(--cyan);transform:translateY(var(--mo-lift))}
+.btn:active{transform:translateY(0) scale(.98);transition:transform .06s}
+html.mo-off .btn:hover,html.mo-off .btn:active{transform:none}
 .btn.pri{background:var(--grad);color:var(--onacc);border:0}
 .btn.pri:hover{filter:brightness(1.1);box-shadow:0 2px 8px rgba(125,207,255,.25)}
 .btn.danger:hover{border-color:var(--err);box-shadow:0 0 0 1px var(--err) inset}
 .btn.sm{padding:3px 10px;font-size:12px;border-radius:6px}
 .ubar{display:flex;flex-direction:column;gap:2px;padding:6px 26px;min-height:80px;
   background:var(--bg2);border-bottom:1px solid var(--line);font-size:11.5px}
-.urow{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-.urow .uacct{color:var(--dim);min-width:180px;white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
-.uwin{display:flex;align-items:center;gap:6px;white-space:nowrap}
-.uwin .ulbl{color:var(--dim2);text-transform:capitalize}
-.uwin .ubarm{width:64px;height:6px;background:var(--line);border-radius:var(--r-pill);overflow:hidden}
-.uwin .ubarm i{display:block;height:100%;background:var(--grad);border-radius:var(--r-pill);
-  transition:width var(--t-s)}
-.uwin.hot .ubarm i{background:linear-gradient(90deg,var(--warn),var(--err))}
-.uwin .upct{font-variant-numeric:tabular-nums;min-width:34px;text-align:right}
+/* fixed column widths, not free-flowing flex: a window with no reset time used
+   to collapse its cell and shove every later column out of line across rows */
+.urow{display:flex;align-items:center;gap:0 18px;flex-wrap:wrap;padding:1px 0}
+.urow .uacct{color:var(--dim);width:190px;flex:none;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;font-family:var(--mono);
+  font-variant-numeric:tabular-nums}
+.uwin{display:grid;grid-template-columns:56px 74px 34px 78px;align-items:center;
+  column-gap:8px;width:260px;flex:none;white-space:nowrap}
+.uwin .ulbl{color:var(--dim2);text-transform:uppercase;letter-spacing:.06em;
+  font-family:var(--mono);font-size:var(--fs-micro)}
+.uwin .ubarm{width:100%;height:7px;border-radius:2px;overflow:hidden}
+.uwin .ubarm i{display:block;height:100%;transition:width var(--t-s)}
+.uwin .upct{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
 .uwin.hot .upct{color:var(--err)}
-.uwin .urst{color:var(--dim2)}
+.uwin .urst{color:var(--dim2);font-family:var(--mono);font-size:var(--fs-micro);
+  overflow:hidden;text-overflow:ellipsis}
 .tabs{display:flex;gap:2px;padding:0 26px;background:var(--bg2);
   border-bottom:1px solid var(--line);position:sticky;top:0;z-index:4}
-.tab{padding:9px 16px;cursor:pointer;color:var(--dim);font-size:13px;
+.tab{padding:9px 16px;cursor:pointer;color:var(--dim);font-size:12.5px;
   border-bottom:2px solid transparent;font-weight:600;
+  text-transform:uppercase;letter-spacing:.06em;
   transition:color var(--t-f),border-color var(--t-f)}
 .tab:hover{color:var(--txt)}
 .tab.sel{color:var(--cyan);border-bottom-color:var(--cyan)}
+.tab.sel::before{content:'▸ ';color:var(--cyan)}
+.nav .it.sel::before{content:'▸';color:var(--cyan);margin-right:-2px}
+.brand b::before{content:'[ ';color:var(--dim2)}
+.brand b::after{content:' ]';color:var(--dim2)}
+/* metrics read as instrument output, not prose */
+.kpi .kv2,.upct,.arow .ap,.tbl .num,.tstat,.hn,.dlist .num,.sess .meta{
+  font-family:var(--mono)}
 .content{flex:1;overflow-y:auto;padding:20px 26px;min-height:0}
 
-/* home: dashboard grid — F-pattern, full-bleed, importance decays down-right */
-.dash{display:grid;gap:var(--sp-3);grid-template-columns:1.7fr 1fr 1fr;
+/* home: the dashboard bento — instruments first (how much plan is left, how
+   hard am I working, is my tooling up, is anything running), then what to
+   resume and the shape of the workspace, then trend, then browse.
+   The instrument row auto-fits 4→2→1 on its own, so the two explicit
+   breakpoints below only have to re-flow the bigger cards. */
+.dash{display:grid;gap:var(--sp-3);grid-template-columns:repeat(4,1fr);
+  align-items:start;      /* cards keep their natural height, no dead space */
   grid-template-areas:
-    "acct     acct  acct"
-    "chart    chart projects"
-    "continue live  recent"}
+    "i1       i2       i3       i4"
+    "continue continue projects projects"
+    "recent   recent   projects projects"
+    "chart    chart    chart    chart"
+    "acct     acct     acct     acct"}
 .dash>.card{margin-bottom:0;max-width:none;min-width:0}
+.d-i1{grid-area:i1}.d-i2{grid-area:i2}.d-i3{grid-area:i3}.d-i4{grid-area:i4}
 .d-acct{grid-area:acct}
 .d-chart{grid-area:chart}
 .d-projects{grid-area:projects}
 .d-continue{grid-area:continue}
-.d-live{grid-area:live}
 .d-recent{grid-area:recent}
-@media(max-width:1279px){.dash{grid-template-columns:1fr 1fr;
-  grid-template-areas:"acct acct""chart chart""projects projects""continue live""recent recent"}}
-@media(max-width:899px){.dash{grid-template-columns:1fr;
-  grid-template-areas:"acct""chart""projects""continue""live""recent"}}
+@media(max-width:1279px){.dash{grid-template-columns:repeat(2,1fr);
+  grid-template-areas:"i1 i2""i3 i4""continue continue""projects projects"
+    "recent recent""chart chart""acct acct"}}
+@media(max-width:719px){.dash{grid-template-columns:1fr;
+  grid-template-areas:"i1""i2""i3""i4""continue""projects""chart""acct""recent"}}
+
+/* running-job list under the activity gauge. :empty matters — an idle workspace
+   renders no rows, and the container's own margin was enough to make the activity
+   tile 6px taller than the other three. */
+.joblist{margin-top:6px;display:flex;flex-direction:column;gap:3px}
+.joblist:empty{display:none;margin:0}
+.jrow{display:flex;align-items:center;gap:7px;font:11.5px/1.4 var(--mono);
+  color:var(--dim);white-space:nowrap;min-width:0}
+.jrow .jk{color:var(--txt);overflow:hidden;text-overflow:ellipsis;min-width:0}
+.jrow .js{color:var(--dim2)}
+.jrow .je{margin-left:auto;color:var(--dim2);font-variant-numeric:tabular-nums}
+.jrow.more{color:var(--dim2);padding-left:15px}
+
+/* accounts page rows */
+.arow2{display:flex;align-items:center;gap:10px;padding:8px 0;
+  border-top:1px solid var(--panel2);flex-wrap:wrap}
+.arow2:first-of-type{border-top:0}
+.arow2 b{min-width:110px}
+.arow2 .apath{flex:1;min-width:120px;color:var(--dim2);font-size:12px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.arow2 .aq{color:var(--dim2);font-size:11px}
+.arow2 .iwrap{flex:none}
+.arow2 .i-ring .inst{width:42px;height:42px}
+.arow2 .iread b{font-size:10.5px;letter-spacing:-.3px}
+.arow2 .iread i,.arow2 .iread u{display:none}
 
 /* KPI strip */
 .kpi{display:flex;flex-wrap:wrap;gap:var(--sp-4) var(--sp-6);align-items:flex-end}
@@ -201,12 +364,39 @@ body{background:var(--bg);color:var(--txt);
 .tchart text{fill:var(--dim2);font-size:9.5px;font-family:var(--mono)}
 .tchart text.big{fill:var(--txt);font-size:10.5px;font-weight:700}
 .tchart text.now{fill:var(--cyan)}
+/* columns grow from the baseline, staggered left→right — one gesture that says
+   "this data just arrived". transform on an SVG rect is compositor-only, and
+   nth-child delays avoid a per-rect inline style or a JS animation per bar. */
+.tchart .seg,.tchart .omni,.tchart .omnibg{transform-origin:center bottom;
+  animation:tcgrow .42s cubic-bezier(.22,1,.36,1) both}
+.tchart .seg:nth-child(4n+2){animation-delay:.04s}
+.tchart .seg:nth-child(4n+3){animation-delay:.08s}
+.tchart .seg:nth-child(4n){animation-delay:.12s}
+@keyframes tcgrow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+html.mo-off .tchart .seg,html.mo-off .tchart .omni,
+html.mo-off .tchart .omnibg{animation:none}
+/* hovering a column dims its neighbours instead of the column itself: reading
+   one day means suppressing the other thirteen, not fading the thing you want */
 .tchart .seg{transition:opacity var(--t-f)}
-.tchart .seg:hover{opacity:.75}
+.tcsvg:hover .seg{opacity:.45}
+.tcsvg .seg:hover{opacity:1}
+/* free-tier share: hatched over whatever account paid-stack it sits on. The
+   backing rect knocks the account colour down first, otherwise the hatch reads
+   as a blend of the two instead of its own state. */
+.tchart #omnihatch line{stroke:var(--violet);stroke-width:2.4}
+.tchart .omnibg{fill:var(--code)}
+.tchart .omni{fill:url(#omnihatch);stroke:var(--violet);stroke-width:1.2}
+.tchart .lg .omnikey{border-radius:2px;background:var(--code);
+  background-image:repeating-linear-gradient(45deg,
+    var(--violet) 0 2px,transparent 2px 4px);border:1px solid var(--violet)}
 .tchart .none{fill:var(--dim2);font-size:11px;font-family:inherit}
 
 /* fill-to-fit lists inside dashboard cards */
-.dlist{max-height:230px;overflow-y:auto;margin-top:2px}
+.dlist{max-height:230px;overflow-y:auto;margin-top:2px;
+  mask-image:linear-gradient(#000 calc(100% - 22px),transparent);
+  -webkit-mask-image:linear-gradient(#000 calc(100% - 22px),transparent)}
+/* no fade once everything fits — a mask on a short list just dims the last row */
+.dlist.full{mask-image:none;-webkit-mask-image:none}
 .dlist .hrow:first-child{border-top:0}
 .dlist .num{color:var(--dim);font-size:11.5px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .hn{font-size:20px;font-weight:700;margin-top:8px;letter-spacing:-.3px}
@@ -238,7 +428,8 @@ body{background:var(--bg);color:var(--txt);
 .sess{display:flex;align-items:center;gap:13px;background:var(--panel);
   border:1px solid var(--line);border-radius:var(--r);padding:11px 16px;
   transition:border-color var(--t-f),background var(--t-f),box-shadow var(--t-f)}
-.sess:hover{border-color:var(--cyan);background:var(--panel2);box-shadow:var(--shadow-sm)}
+.sess:hover{border-color:var(--cyan);background:var(--panel2);
+  box-shadow:var(--shadow-sm),inset 2px 0 0 var(--cyan)}
 .sess .dot{width:9px;height:9px;border-radius:50%;background:var(--ok);flex:none}
 .sess .info{flex:1;min-width:0}
 .sess .t{font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;
@@ -268,10 +459,30 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .tbl tr{transition:background var(--t-f)}
 .tbl tr:hover td{background:var(--panel2)}
 .tbl .num{text-align:right;font-variant-numeric:tabular-nums}
-.bar{height:8px;background:var(--line);border-radius:var(--r-pill);overflow:hidden;min-width:80px}
-.bar i{display:block;height:100%;background:var(--grad);border-radius:var(--r-pill);
-  transition:width var(--t-s)}
-.bar.hot i{background:linear-gradient(90deg,var(--warn),var(--err))}
+/* narrow window: a 6-column table either scrolls sideways or shrinks to
+   unreadable. Stack each row into label/value pairs instead, using the header
+   text captured into data-th by tblStack() (app.js). */
+@media(max-width:719px){
+  table.tbl,.tbl tbody,.tbl tr,.tbl td{display:block;width:100%}
+  .tbl thead{display:none}
+  .tbl tr{border:1px solid var(--line);border-radius:var(--r);
+    padding:6px 10px;margin-bottom:8px}
+  .tbl td{border:0;padding:3px 0;display:flex;gap:10px;align-items:baseline}
+  .tbl td::before{content:attr(data-th);color:var(--dim2);
+    font:var(--fs-micro)/1.4 var(--mono);text-transform:uppercase;
+    letter-spacing:.06em;flex:none;min-width:80px}
+  .tbl .num{text-align:left}
+}
+/* segmented ▰▱ meters: the fill's width still comes from the inline style each
+   caller already sets, so every bar in the app picks this up with no JS change */
+.bar{height:8px;border-radius:2px;overflow:hidden;min-width:80px}
+.bar i{display:block;height:100%;transition:width var(--t-s)}
+.bar,.uwin .ubarm{background:repeating-linear-gradient(90deg,
+  var(--line) 0 var(--seg-w),transparent var(--seg-w) calc(var(--seg-w) + var(--seg-gap)))}
+.bar i,.uwin .ubarm i{background:repeating-linear-gradient(90deg,
+  var(--cyan) 0 var(--seg-w),transparent var(--seg-w) calc(var(--seg-w) + var(--seg-gap)))}
+.bar.hot i,.uwin.hot .ubarm i{background:repeating-linear-gradient(90deg,
+  var(--err) 0 var(--seg-w),transparent var(--seg-w) calc(var(--seg-w) + var(--seg-gap)))}
 
 /* modal / drawer / toast */
 /* NO backdrop-filter here. A blurred full-screen backdrop forces QtWebEngine's
@@ -341,22 +552,51 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .toast.show{opacity:1;transform:translateY(0)}
 .toast.ok{border-color:rgba(63,221,157,.4)}
 .toast.err{border-color:rgba(255,107,129,.4)}
+/* steps(8) was there to cut invalidation frequency, but this animates
+   transform:rotate — a compositor-only property that never invalidates paint at
+   all, so a smooth tween is both calmer AND cheaper than a stepped one. */
 .spin{width:16px;height:16px;border:2px solid var(--line);
-  border-top-color:var(--cyan);border-radius:50%;animation:sp .8s steps(8) infinite;
-  display:inline-block;vertical-align:-3px;flex:none}
+  border-top-color:var(--cyan);border-radius:50%;animation:sp .7s linear infinite;
+  display:inline-block;vertical-align:-3px;flex:none;
+  box-shadow:0 0 6px rgba(var(--cyan-rgb),.35)}
 @keyframes sp{to{transform:rotate(360deg)}}
-.shimmer{background:linear-gradient(90deg,var(--panel) 25%,var(--panel2) 50%,var(--panel) 75%);
-  background-size:200% 100%;animation:shimmer 1.5s steps(20) infinite;border-radius:var(--r-sm)}
-@keyframes shimmer{0%{background-position:200% 0}to{background-position:-200% 0}}
+/* the old shimmer animated background-position — a PAINT property, repainting
+   the whole element every step. This translates one child instead: compositor
+   only, and it reads as a sweep rather than a stutter. */
+.shimmer{position:relative;overflow:hidden;background:var(--panel2);
+  border-radius:var(--r-sm)}
+.shimmer::after{content:'';position:absolute;inset:0;
+  background:linear-gradient(90deg,transparent,rgba(var(--cyan-rgb),.13),transparent);
+  animation:shimmer 1.25s linear infinite}
+@keyframes shimmer{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
 .msgs{font-size:12px;color:var(--dim);margin-top:10px;max-height:120px;overflow-y:auto}
 .msgs div{padding:2px 0}
-/* inline non-blocking plan-exec banner (replaces the blocking #jovl modal for
-   plan jobs — see app.js peJob*): runs in the page, keeps the UI usable */
+/* inline non-blocking job banner. Every job now starts here instead of behind
+   the blocking #jovl modal; the modal only appears if the job parks at an
+   approval gate (see app.js jobPoll → modalGate). Keeps the UI usable while a
+   4-minute Claude call runs, and .beam marks it as still going. */
 .perun{display:flex;align-items:flex-start;gap:12px;background:var(--panel);
   border:1px solid var(--cyan);border-radius:var(--r);padding:12px 16px}
 .perun .sub{color:var(--dim);font-size:12px;margin-top:2px}
 .perun .msgs{margin-top:6px}
 .perun b{font-size:14px}
+.perun.err{border-color:var(--err)}
+.perun.err .ic{fill:var(--err)}
+/* pinned above the scroll area, so a long job can't scroll out of sight */
+.jban{padding:10px 26px 0;flex:none}
+
+/* a gauge in a page header, next to the sentence that explains it */
+.pghd,.memhd{display:flex;align-items:center;gap:var(--sp-4);margin-bottom:12px}
+.pghd .iwrap,.memhd .iwrap{flex:none}
+.pghd .i-ring .inst,.memhd .i-ring .inst{width:96px;height:96px}
+.pghdt{flex:1;min-width:0;font-size:13.5px}
+.pghdt b{font-size:16px}
+.pghdt .sub{color:var(--dim2);font-size:12px;margin-top:4px}
+.card h3 .i-eq{width:150px;flex:none}
+.card h3 .i-eq .inst{height:22px}
+.card h3 .i-eq .iread b{font-size:12px}
+@media(max-width:719px){.pghd,.memhd{flex-direction:column;align-items:stretch}
+  .pghd .iwrap,.memhd .iwrap{align-self:center}}
 .msgs .bad{color:var(--err)}
 .chip{display:inline-block;padding:2px 10px;border-radius:var(--r-pill);font-size:11px;
   background:var(--panel2);border:1px solid var(--line);margin:2px 3px 2px 0;cursor:pointer;
@@ -366,7 +606,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .dlbl{color:var(--dim2);font-size:11px;text-transform:uppercase;
   letter-spacing:.05em;margin-bottom:6px}
 .drow{display:flex;flex-wrap:wrap;gap:6px;color:var(--dim);font-size:12px}
-/* command palette — solid dim overlay (no backdrop-filter: GPU flicker source) */
+/* command palette — solid dim overlay (a blurred backdrop is the GPU flicker source) */
 .palette{position:fixed;inset:0;background:rgba(5,7,14,.65);display:flex;
   align-items:flex-start;justify-content:center;padding-top:12vh;z-index:60}
 .pbox{width:420px;max-width:92vw;background:var(--bg2);border:1px solid var(--line);
@@ -380,6 +620,139 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .pempty{padding:8px 12px;color:var(--dim2);font-size:13px}
 /* accessibility */
 :focus-visible{outline:2px solid currentColor;outline-offset:2px}
+/* ── instruments ──
+   Geometry on the canvas, numbers in the DOM (.iread). Keeping the readout as
+   real text means it inherits the theme, MO.count can tween it, and it stays
+   crisp — canvas text re-rasterises every frame and ignores the palette.
+
+   Sizing is by explicit HEIGHT, never aspect-ratio. A square gauge in a
+   `width:100%` slot grows as tall as the card is wide, so on a 1600px window the
+   four dashboard tiles each demanded a ~250px-tall circle and overflowed their
+   card — which is exactly what happened before this was rewritten. Height first,
+   width capped to it: the gauge shrinks with the card, never the reverse.
+
+   .iwrap stacks [gauge][readout?][label?]. Only a ring's readout goes INSIDE the
+   gauge box, because only a donut has a free centre — a dial has a hub with a
+   needle sweeping through it, and the flat gauges have a trace across the whole
+   box, so their numbers sit above/below instead of fighting the drawing. */
+.iwrap{display:flex;flex-direction:column;align-items:center;min-width:0;
+  max-width:100%}
+.inst{position:relative;display:block;min-width:0;flex:none}
+.inst canvas{display:block;width:100%;height:100%}
+.i-ring .inst,.i-dial .inst{height:112px;width:112px}
+.i-ring.big .inst,.i-dial.big .inst{height:148px;width:148px}
+.i-spark,.i-eq,.i-flow{align-items:stretch;width:100%}
+.i-spark .inst,.i-eq .inst{height:44px;width:100%}
+.i-flow .inst{height:190px;width:100%}
+/* the ring's readout overlays its centre, absolutely — so it can never add
+   height and push the tile past the card */
+.i-ring .iread{position:absolute;inset:0;justify-content:center}
+.iread{display:flex;flex-direction:column;align-items:center;
+  pointer-events:none;line-height:1.05;max-width:100%}
+.iread b{font:700 21px/1 var(--mono);font-variant-numeric:tabular-nums;
+  letter-spacing:-.6px;color:var(--txt)}
+.iread i{font:600 10.5px/1 var(--mono);color:var(--dim);font-style:normal;
+  margin-top:2px}
+.iread u{font:9.5px/1 var(--mono);color:var(--dim2);text-decoration:none;
+  margin-top:4px;text-transform:uppercase;letter-spacing:.07em}
+/* dial: number under the arc, in the gap its 240° sweep leaves at the bottom */
+.i-dial .iread{margin-top:-14px}
+/* flat gauges: label the trace from the left, above it */
+.i-spark .iread,.i-eq .iread{align-items:flex-start;flex-direction:row;
+  align-items:baseline;gap:6px;margin-bottom:2px;order:-1}
+.i-spark .iread b,.i-eq .iread b{font-size:16px}
+.i-spark .iread u,.i-eq .iread u{margin-top:0}
+.i-flow .iread{display:none}
+.ilbl{color:var(--dim2);font:var(--fs-micro)/1.2 var(--mono);
+  text-transform:uppercase;letter-spacing:.08em;text-align:center;margin-top:6px;
+  max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* the dashboard tiles are already titled by their header and explained by their
+   footer; a third label between the two was pure redundancy (and collided) */
+.dash .icard .ilbl{display:none}
+
+/* an instrument tile on the dashboard: header, gauge, one line of context.
+   The row is stretched so all four tiles agree on height — a ragged instrument
+   row reads as broken layout even when every tile is individually correct. */
+.dash .icard{display:flex;flex-direction:column;min-width:0}
+.icard .ihd{display:flex;align-items:center;gap:6px;
+  color:var(--dim2);font:var(--fs-cap)/1 var(--mono);text-transform:uppercase;
+  letter-spacing:.08em;margin-bottom:10px}
+.icard .ihd .ic{width:13px;height:13px;fill:var(--cyan)}
+.icard .ihd .sp{flex:1}
+.icard .itag{color:var(--dim);font:var(--fs-micro)/1 var(--mono)}
+.icard .ifoot{color:var(--dim2);font-size:11px;margin-top:auto;padding-top:10px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.icard .ifoot b{color:var(--dim);font-weight:600}
+/* One fixed gauge-area height for the whole instrument row. A ring, a needle
+   dial with its number underneath and an equalizer with its number above are
+   three different natural heights, and letting them size themselves left the row
+   ragged (196/215/196/204) — which reads as broken layout even though each tile
+   was individually correct. */
+.dash .icard .iwrap{height:140px;justify-content:center;width:100%}
+
+/* ── theme gallery (Settings → Appearance) ── */
+.thgal{display:grid;gap:var(--sp-3);
+  grid-template-columns:repeat(auto-fill,minmax(148px,1fr))}
+.thcard{border:1px solid var(--line);border-radius:var(--r-lg);padding:6px;
+  cursor:pointer;background:var(--panel);
+  transition:border-color var(--t-f),transform var(--t-f)}
+.thcard:hover{border-color:var(--cyan);transform:translateY(-1px)}
+.thcard.on{border-color:var(--cyan);box-shadow:var(--hud-glow-2)}
+.thmock{border:1px solid;border-radius:var(--r);overflow:hidden;height:82px;
+  display:flex;flex-direction:column}
+.thbar{display:flex;align-items:center;gap:5px;padding:5px 6px;border-bottom:1px solid}
+.thbar i{width:11px;height:11px;border-radius:3px;flex:none}
+.thbar u{height:4px;border-radius:2px;flex:1;opacity:.7}
+.thbody{flex:1;padding:6px;display:flex;flex-direction:column;gap:4px}
+.thl{height:4px;border-radius:2px;opacity:.85}
+.thfoot{margin-top:auto;display:flex;align-items:center;gap:4px}
+.thfoot s{width:12px;height:5px;border-radius:3px;display:block}
+.thfoot b{margin-left:auto;width:26px;height:9px;border-radius:3px;display:block}
+.thname{font-size:11.5px;font-weight:600;margin:6px 2px 4px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.thopts{display:flex;gap:4px}
+.thopt{flex:1;text-align:center;font-size:10px;padding:2px 0;border-radius:var(--r-sm);
+  border:1px solid var(--line);color:var(--dim2);background:var(--bg2)}
+.thopt:hover{color:var(--txt)}
+.thopt.on{background:var(--panel2);color:var(--dim);border-color:var(--line)}
+/* ── skin picker ──
+   Each tile previews the real geometry — corner treatment, border weight, radius
+   — in the currently selected palette, because a skin is a bigger change than a
+   colour and a swatch could not show it. */
+.skgal{display:grid;gap:var(--sp-2);
+  grid-template-columns:repeat(auto-fill,minmax(96px,1fr))}
+.skcard{cursor:pointer;padding:5px;border:1px solid transparent;
+  border-radius:var(--r);transition:border-color var(--t-f),transform var(--t-spring)}
+.skcard:hover{border-color:var(--line);transform:translateY(-1px)}
+.skcard.on{border-color:var(--cyan);box-shadow:var(--hud-glow-1)}
+.skmock{height:52px;border:1px solid var(--line);background:var(--panel);
+  padding:7px;display:flex;flex-direction:column;gap:5px;position:relative;
+  overflow:hidden}
+.skmock u{height:5px;width:44%;border-radius:2px;display:block}
+.skmock s{height:3px;width:74%;border-radius:2px;display:block;opacity:.6}
+.skname{font-size:11px;text-align:center;margin-top:5px;color:var(--dim);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.skcard.on .skname{color:var(--txt);font-weight:600}
+/* each mock carries its skin's signature trait, so the tiles are distinguishable
+   at a glance rather than seven near-identical rounded rectangles */
+.skm-hud{clip-path:polygon(7px 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%,0 7px)}
+.skm-sakura{background-image:linear-gradient(160deg,rgba(var(--cyan-rgb),.14),transparent 60%)}
+.skm-mecha{border-top:3px solid var(--warn)!important}
+.skm-mecha::after{content:'';position:absolute;inset:auto 0 0 0;height:7px;
+  background:repeating-linear-gradient(-45deg,rgba(var(--warn-rgb),.5) 0 5px,transparent 5px 10px)}
+.skm-neon-city{background-image:repeating-linear-gradient(0deg,rgba(var(--cyan-rgb),.09) 0 1px,transparent 1px 3px)}
+.skm-crt{background-image:repeating-linear-gradient(0deg,rgba(var(--cyan-rgb),.1) 0 1px,transparent 1px 3px)}
+.skm-crt::after{content:'';position:absolute;right:8px;bottom:8px;width:5px;height:10px;
+  background:var(--cyan)}
+.skm-brutal{border-width:3px!important;border-color:var(--txt)!important;
+  box-shadow:3px 3px 0 var(--txt)}
+.skm-glass{background-image:linear-gradient(rgba(255,255,255,.14),rgba(255,255,255,.03) 45%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.2)}
+.skm-auto{border-style:dashed}
+.skm-auto u{background:var(--dim2)}
+.skm-auto s{background:var(--dim2)}
+.thcard.on .thopt.on{background:var(--grad);color:var(--onacc);
+  border-color:transparent;font-weight:600}
 @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation:none !important;transition:none !important}}
 .ic{width:15px;height:15px;vertical-align:-3px;fill:currentColor;flex:none}
 .nav .ic,.btn .ic{margin-right:2px}
@@ -439,6 +812,438 @@ details.adv>summary:hover{color:var(--txt)}
   transition:border-color var(--t-f),box-shadow var(--t-f)}
 .lrow input:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(125,207,255,.12)}
 
+/* ══ motion layer ═════════════════════════════════════════════════════════
+   The CSS half of motion.js. Every rule here animates transform or opacity and
+   nothing else: those two are compositor-only, so none of this invalidates
+   paint or asks QtWebEngine's GPU surface to read anything back. No
+   backdrop-filter, no filter, no blur — that combination is what tore the Qt
+   shell (see CLAUDE.md).
+
+   Three gates, applied on <html> by MO.set():
+     (default)   full    — everything
+     .mo-subtle          — informational motion only; no beam, spot or stagger
+     .mo-off             — nothing moves, anywhere
+   .mo-beam is added only when @property is available to interpolate the angle.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* ── number ticker: direction tint ──
+   The tween itself is JS (MO.count); this is only the "which way did it go"
+   flash. Colour, not motion, because a number that also moves is unreadable. */
+.mo-up,.mo-dn{transition:color .5s ease}
+.mo-up{color:var(--ok)}
+.mo-dn{color:var(--dim)}
+html.mo-off .mo-up,html.mo-off .mo-dn{color:inherit;transition:none}
+
+/* ── spring hover: things that respond to you ──
+   Replaces the flat .btn:active{scale(.97)} snap. --mo-lift is per-theme
+   (themes.py motion personality), so a "crisp" palette barely moves and a
+   "lush" one travels further. */
+.lift{transition:transform var(--t-spring),border-color var(--t-f),
+  box-shadow var(--t-f)}
+.lift:hover{transform:translateY(var(--mo-lift))}
+.lift:active{transform:translateY(0) scale(.995)}
+html.mo-off .lift,html.mo-off .lift:hover,html.mo-off .lift:active{
+  transform:none;transition:border-color var(--t-f)}
+
+/* ── pointer spotlight ──
+   --mx/--my come from ONE delegated rAF-coalesced listener (MO.spot). The
+   gradient is painted, but only inside the card and only while a pointer is in
+   it, which is nothing like a full-screen blur pass. */
+.spot{position:relative;isolation:isolate}
+.spot::before{content:'';position:absolute;inset:0;border-radius:inherit;
+  pointer-events:none;z-index:-1;opacity:0;transition:opacity var(--t-n);
+  background:radial-gradient(240px circle at var(--mx,50%) var(--my,50%),
+    rgba(var(--cyan-rgb),calc(var(--mo-glow) * .30)),transparent 65%)}
+.spot:hover::before{opacity:1}
+html.mo-subtle .spot::before,html.mo-off .spot::before{display:none}
+
+/* ── travelling border: something is running ──
+   A conic gradient rotated behind the element, masked to a 1px frame by the
+   two-background-clip trick, so it costs one rotating layer and no extra DOM.
+   Applied ONLY while a job is live — MO.beam() adds and removes it. Without
+   @property support the angle can't interpolate, so .mo-beam is absent and the
+   fallback below gives a static accent frame instead of a broken one. */
+.beam{position:relative}
+html.mo-beam .beam{border-color:transparent;
+  background-image:linear-gradient(var(--panel),var(--panel)),
+    conic-gradient(from var(--beam-a),transparent 0deg,
+      var(--cyan) 40deg,var(--violet) 80deg,transparent 130deg,transparent 360deg);
+  background-origin:border-box;background-clip:padding-box,border-box;
+  animation:beamspin var(--mo-beam) linear infinite}
+@keyframes beamspin{to{--beam-a:360deg}}
+/* no @property (older QtWebEngine Chromium): a steady frame, still legible */
+html:not(.mo-beam) .beam{border-color:var(--cyan);
+  box-shadow:0 0 0 1px rgba(var(--cyan-rgb),.25)}
+html.mo-off .beam{animation:none}
+
+/* ── live pip: an expanding ring behind a status dot ── */
+.pip{position:relative}
+.pip::after{content:'';position:absolute;inset:0;border-radius:50%;
+  border:1px solid currentColor;
+  animation:pipring 1.8s cubic-bezier(.22,1,.36,1) infinite}
+@keyframes pipring{
+  0%{transform:scale(1);opacity:.7}
+  70%{transform:scale(2.6);opacity:0}
+  100%{transform:scale(2.6);opacity:0}}
+html.mo-off .pip::after,html.mo-off .membadge .pulse::after,
+html.mo-off .drow .pulse::after{animation:none;opacity:.5;transform:none}
+
+/* ── meter fill ──
+   A quota bar that jumps to 62% tells you the number; one that fills to 62%
+   tells you it changed. The leading edge glows so the travel is visible even
+   on a short bar. */
+.bar i,.uwin .ubarm i{transition:width .55s cubic-bezier(.22,1,.36,1)}
+.bar i{box-shadow:2px 0 6px -1px rgba(var(--cyan-rgb),var(--mo-glow))}
+.bar.hot i{box-shadow:2px 0 6px -1px rgba(255,107,129,var(--mo-glow))}
+html.mo-off .bar i,html.mo-off .uwin .ubarm i{transition:none}
+
+/* ── reconciled list rows (MO.patch) ──
+   .mo-row is the wrapper patch() owns; it must not introduce a box of its own,
+   or every adopted call site would gain a layer of padding. */
+.mo-row{display:contents}
+.mo-row.mo-box{display:block}
+
+/* ── in-button busy state ── */
+.btn.busy{color:transparent;pointer-events:none;justify-content:center}
+.btn.busy .spin{border-top-color:currentColor}
+.btn.pri.busy .spin{border-color:rgba(0,0,0,.2);border-top-color:var(--onacc)}
+
+/* the global kill switch. `transition:none` alone leaves WAAPI animations
+   running, so motion.js also short-circuits — this is the CSS half only. */
+html.mo-off *,html.mo-off *::before,html.mo-off *::after{
+  animation-duration:.01ms !important;animation-iteration-count:1 !important;
+  transition-duration:.01ms !important;scroll-behavior:auto !important}
+
 /* ── global loading bar ── */
 #loading{position:fixed;top:0;left:0;right:0;height:2px;background:var(--grad,linear-gradient(135deg,#7dcfff,#8a5cf6));z-index:9999;opacity:0;transition:opacity .12s;pointer-events:none}
 #loading.on{opacity:1}
+
+/* ── narrow window: the icon rail ─────────────────────────────────────────────
+   LAST in the file on purpose. @media adds no specificity, so these overrides
+   have to come after every base rule they countermand or source order silently
+   wins — which is exactly what happened when this block sat next to .app.
+
+   The sidebar collapses rather than disappearing: the nav is how you move around
+   the app, and the Qt window gets dragged narrow often enough that losing it
+   would be worse than losing the labels. Project names survive as tooltips. */
+@media(max-width:1099px){
+  .app{grid-template-columns:64px 1fr}
+  .brand small,.brand div>b,.search,.openp,.side .foot span{display:none}
+  .brand{justify-content:center;padding:14px 0 10px}
+  .plist{padding:2px 6px}
+  .proj .pt,.proj .tag{display:none}
+  .proj .nm{justify-content:center}
+  .proj .nm .pn{font-size:0}          /* keep the node for the tooltip/hit area */
+  .proj .nm .pn::first-letter{font-size:13px}
+  .nav{padding:6px 6px}
+  .nav .it{justify-content:center;padding:9px 0}
+  .nav .it span,.nav .it{font-size:0}
+  .nav .it .ic{width:18px;height:18px;margin:0}
+  .nav .it.sel::before,.tab.sel::before{content:none}
+  .side .foot{justify-content:center;padding:10px 4px}
+  .content,.top,.ubar,.tabs,.jban{padding-left:14px;padding-right:14px}
+}
+
+/* ══ skins ════════════════════════════════════════════════════════════════════
+   A palette says what colours; a skin says what the app IS. Data lives in
+   themes.py (SKINS); applyTheme() writes the --sk-* tokens and puts
+   skin-<name> on <html>.
+
+   LAST in the file, like the icon rail above, and for the same reason: these
+   override .card/.modal/.tab geometry declared earlier, and a class on <html>
+   adds no more specificity than the rule it countermands — only source order
+   decides. Move this block up and every skin silently becomes a no-op.
+
+   Every rule obeys the compositor contract: transform/opacity only in keyframes,
+   no backdrop-filter, no blur, no blend modes. The Glass skin is faked for
+   exactly that reason — read the note in themes.py before "fixing" it. */
+
+/* shared: geometry reads from the tokens, so a new skin needs no rules here */
+.card,.sess,.qcard,.acct-card,.rowtune,.pbox,.perun,.mcard,.preset{
+  border-radius:var(--sk-r,6px)}
+.card{border-width:var(--sk-bw,1px)}
+.modal,.pbox{border-radius:calc(var(--sk-r,6px) * 1.2)}
+.lbl,.icard .ihd,.tab,.thname,.dlbl{font-family:var(--sk-font,inherit);
+  letter-spacing:var(--sk-track,.05em);text-transform:var(--sk-caps,none)}
+.card h3{font-family:var(--sk-font,inherit)}   /* headings keep sentence case */
+
+/* ── HUD: instrument panel ──
+   The corner brackets used to be hard-coded onto every .dash card. They are a
+   skin trait, not a global one, so they live here now — which is also why the
+   base rule at the top of this file no longer paints them. Clipped corners come
+   from clip-path rather than a border-image: one property, no extra DOM. */
+html.skin-hud .dash>.card,html.skin-hud .modal,html.skin-hud .acct-card,
+html.skin-hud .perun,html.skin-hud .pbox,html.skin-hud .proj.sel{
+  background-image:
+    linear-gradient(var(--hud-line) var(--hud-corner-w),transparent 0),
+    linear-gradient(90deg,var(--hud-line) var(--hud-corner-w),transparent 0),
+    linear-gradient(-180deg,var(--hud-line) var(--hud-corner-w),transparent 0),
+    linear-gradient(-90deg,var(--hud-line) var(--hud-corner-w),transparent 0);
+  background-repeat:no-repeat;
+  background-size:var(--hud-corner) var(--hud-corner);
+  background-position:top left,top left,bottom right,bottom right}
+html.skin-hud .dash>.card{
+  clip-path:polygon(9px 0,100% 0,100% calc(100% - 9px),
+    calc(100% - 9px) 100%,0 100%,0 9px)}
+html.skin-hud .tab.sel{box-shadow:inset 0 -2px 0 var(--cyan)}
+
+/* ── Sakura: soft anime ──
+   A gradient wash and a wide soft shadow. The pastel palettes carry the colour,
+   so the shape only has to stop being a rectangle with a hairline. */
+html.skin-sakura .card,html.skin-sakura .modal,html.skin-sakura .acct-card{
+  background-image:linear-gradient(160deg,
+    rgba(var(--cyan-rgb),.07),transparent 42%,rgba(var(--violet-rgb),.06));
+  box-shadow:0 6px 24px -8px rgba(0,0,0,.35)}
+html.skin-sakura .btn{border-radius:999px}
+html.skin-sakura .chip{border-radius:999px}
+html.skin-sakura .lbl::before{content:'\273F  ';color:var(--cyan);opacity:.75}
+html.skin-sakura .iread b{letter-spacing:-.2px}
+
+/* ── Mecha: NERV console ──
+   Hard panels, a heavy warning rule, hazard stripes on every section label, and
+   oversized numerals — what these consoles actually do with a readout. */
+html.skin-mecha .card,html.skin-mecha .modal{border-top:3px solid var(--warn)}
+html.skin-mecha .lbl,html.skin-mecha .icard .ihd{
+  background:repeating-linear-gradient(-45deg,
+    rgba(var(--warn-rgb),.15) 0 6px,transparent 6px 12px);
+  padding:4px 8px;border-left:3px solid var(--warn)}
+html.skin-mecha .iread b{font-size:25px;font-weight:800}
+html.skin-mecha .kpi .kv2{font-size:24px;font-weight:800}
+html.skin-mecha .tab.sel{background:var(--warn);color:var(--onacc)}
+html.skin-mecha .btn,html.skin-mecha .chip{border-radius:0}
+
+/* ── Neon City: cyberpunk ──
+   A scanline texture plus a 1px chromatic edge offset. Two static paints — no
+   blend mode, no readback. */
+html.skin-neon-city .card,html.skin-neon-city .modal{
+  background-image:repeating-linear-gradient(0deg,
+    rgba(var(--cyan-rgb),.04) 0 1px,transparent 1px 3px);
+  box-shadow:1px 0 0 rgba(var(--violet-rgb),.3),-1px 0 0 rgba(var(--cyan-rgb),.24),
+    0 0 18px -6px rgba(var(--cyan-rgb),.35)}
+html.skin-neon-city .lbl,html.skin-neon-city .icard .ihd{
+  text-shadow:1px 0 rgba(var(--violet-rgb),.45),-1px 0 rgba(var(--cyan-rgb),.35)}
+
+/* ── Terminal: retro CRT ──
+   Phosphor glow, a double rule under headings, scanlines, and a block caret on
+   the card title. The caret is the ONE looping thing allowed anywhere in this
+   codebase: a terminal caret that does not blink is not a caret. It is a single
+   opacity step on one 7px element, and `motion:off` stops it. */
+html.skin-crt .card,html.skin-crt .modal{
+  background-image:repeating-linear-gradient(0deg,
+    rgba(var(--cyan-rgb),.05) 0 1px,transparent 1px 3px)}
+html.skin-crt .card h3{border-bottom:3px double var(--line);padding-bottom:7px}
+html.skin-crt .card h3::after{content:'';display:inline-block;width:7px;height:13px;
+  background:var(--cyan);margin-left:5px;vertical-align:-2px;
+  animation:crtcaret 1.1s steps(1,end) infinite}
+@keyframes crtcaret{0%,49%{opacity:1}50%,100%{opacity:0}}
+html.mo-off.skin-crt .card h3::after{animation:none;opacity:.55}
+html.skin-crt .card h3,html.skin-crt .iread b,html.skin-crt .kpi .kv2{
+  text-shadow:0 0 7px rgba(var(--cyan-rgb),.4)}
+html.skin-crt .btn{text-transform:lowercase}
+
+/* ── Brutalist ──
+   Thick border, hard offset shadow, no softness anywhere. The shadow snaps on
+   hover rather than easing, which is the whole personality. */
+html.skin-brutal .card,html.skin-brutal .modal,html.skin-brutal .sess,
+html.skin-brutal .qcard,html.skin-brutal .acct-card{
+  border:var(--sk-bw,3px) solid var(--txt);box-shadow:4px 4px 0 var(--txt)}
+html.skin-brutal .lift:hover{transform:translate(-2px,-2px);
+  box-shadow:6px 6px 0 var(--txt)}
+html.skin-brutal .btn{border:2px solid var(--txt);box-shadow:3px 3px 0 var(--txt);
+  border-radius:0;font-weight:800}
+html.skin-brutal .btn:hover{transform:translate(-1px,-1px);
+  box-shadow:4px 4px 0 var(--txt)}
+html.skin-brutal .btn:active{box-shadow:0 0 0 var(--txt);transform:translate(3px,3px)}
+html.skin-brutal .tab.sel{background:var(--txt);color:var(--bg)}
+html.skin-brutal .chip{border-radius:0;border-width:2px}
+
+/* ── Glass: layered translucency, NO blur ──
+   Real glassmorphism uses backdrop-filter: blur(), which forces QtWebEngine's
+   compositor to read back and reblur the framebuffer every composite — the exact
+   cause of this project's tearing, and rejected outright by
+   tests/test_gui_flicker.py. A translucent gradient + a 1px inset top highlight
+   + a hairline border gives the same read for zero readback. The second
+   background layer is the opaque panel, so text contrast is unaffected.
+   Do not add the blur. */
+html.skin-glass .card,html.skin-glass .modal,html.skin-glass .acct-card,
+html.skin-glass .pbox{
+  background-image:linear-gradient(rgba(255,255,255,.07),rgba(255,255,255,.02) 40%),
+    linear-gradient(var(--panel),var(--panel));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 8px 26px -12px rgba(0,0,0,.5);
+  border-color:rgba(255,255,255,.13)}
+html.theme-light.skin-glass .card,html.theme-light.skin-glass .modal,
+html.theme-light.skin-glass .acct-card{
+  background-image:linear-gradient(rgba(255,255,255,.75),rgba(255,255,255,.4) 40%),
+    linear-gradient(var(--panel),var(--panel));
+  border-color:rgba(0,0,0,.09);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 8px 26px -14px rgba(0,0,0,.22)}
+html.skin-glass .btn{background-image:linear-gradient(rgba(255,255,255,.09),transparent)}
+
+/* ── one-shot signature effects (MO.burst) ──
+   One overlay, pointer-transparent, removed the moment its animations finish. It
+   can never affect layout and it never loops — see the rule in themes.py. */
+.burst{position:absolute;inset:0;pointer-events:none;overflow:hidden;
+  border-radius:inherit;z-index:3}
+.burst i{position:absolute;display:block}
+/* HUD: corner brackets drawing themselves in */
+.b-brackets .bk{width:16px;height:16px;border:2px solid var(--cyan)}
+.b-brackets .bk0{top:0;left:0;border-right:0;border-bottom:0}
+.b-brackets .bk1{top:0;right:0;border-left:0;border-bottom:0}
+.b-brackets .bk2{bottom:0;right:0;border-left:0;border-top:0}
+.b-brackets .bk3{bottom:0;left:0;border-right:0;border-top:0}
+/* Sakura: petals. --d scales each one so the drift is not uniform. */
+.b-petals .pt{top:0;width:calc(9px * var(--d,1));height:calc(9px * var(--d,1));
+  background:var(--cyan);opacity:0;
+  border-radius:100% 0 100% 0;box-shadow:0 0 6px rgba(var(--cyan-rgb),.5)}
+/* Mecha: hazard stripe sweep */
+.b-stripe .st{inset:0;background:repeating-linear-gradient(-45deg,
+  rgba(var(--warn-rgb),.5) 0 10px,transparent 10px 20px)}
+/* Neon City: a single scanline */
+.b-scan .sc{left:0;right:0;top:0;height:2px;
+  background:linear-gradient(90deg,transparent,var(--cyan),transparent);
+  box-shadow:0 0 12px rgba(var(--cyan-rgb),.7)}
+/* Terminal: a caret running the width */
+.b-caret .cr{left:0;top:50%;margin-top:-7px;width:8px;height:14px;
+  background:var(--cyan);box-shadow:0 0 8px rgba(var(--cyan-rgb),.6)}
+/* Brutalist: the hard shadow snapping out */
+.b-snap .sn{inset:0;border:3px solid var(--txt)}
+/* Glass: a highlight sweeping the surface */
+.b-sheen .sh{top:0;bottom:0;width:38%;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.16),transparent)}
+html.mo-off .burst,html.mo-subtle .burst{display:none}
+
+/* ══ chassis ══════════════════════════════════════════════════════════════════
+   A skin used to be chrome. This is the half that makes switching one read as
+   switching application: the type scale, the row density, how much of the stage
+   shows through every surface, the frame the viewport sits in, and the shape of
+   the top bar.
+
+   LAST in the file, below even the skin block, for the third time and the same
+   reason: `html.ch-console .top` is one class plus one element, exactly the
+   weight of the `.top` rule it countermands, so only source order decides. This
+   file now ends with three override blocks stacked in dependency order — icon
+   rail, skins, chassis. Keep them there.
+
+   The compositor contract is unchanged and non-negotiable: translucency is
+   rgba() on a pre-split channel var, NEVER opacity (which would fade the text
+   with the panel) and NEVER backdrop-filter (which is what tore the Qt surface
+   swap in the first place). There is a real animated scene behind these panels
+   now, which is what makes plain alpha look like glass without any blur. */
+
+/* ── surfaces: let the stage through ──
+   --sk-op is the skin's answer to "how much of the background is this app
+   willing to show". Brutalist says none (1.0); Glass says most of it (.66). */
+.card,.sess,.qcard,.acct-card,.pbox,.mcard,.rowtune{
+  background-color:rgba(var(--panel-rgb,22,30,46),var(--sk-op,1))}
+.side{background-color:rgba(var(--bg2-rgb,17,24,39),var(--sk-op,1))}
+.top,.tabs,.ubar{background-color:rgba(var(--bg2-rgb,17,24,39),
+  calc(var(--sk-op,1) * .92 + .08))}
+/* a light palette needs more body or the text loses its ground */
+html.theme-light .card,html.theme-light .sess,html.theme-light .qcard,
+html.theme-light .acct-card,html.theme-light .pbox{
+  background-color:rgba(var(--panel-rgb,255,255,255),
+    calc(var(--sk-op,1) * .55 + .45))}
+/* no stage, no reason to be see-through */
+html.stage-off .card,html.stage-off .sess,html.stage-off .qcard,
+html.stage-off .acct-card,html.stage-off .pbox,html.stage-off .side,
+html.stage-off .top,html.stage-off .tabs,html.stage-off .ubar{
+  background-color:var(--panel)}
+html.stage-off .side,html.stage-off .top,html.stage-off .tabs,
+html.stage-off .ubar{background-color:var(--bg2)}
+/* the body must not paint over the canvas */
+html.stage-on body{background:transparent}
+
+/* ── type scale ──
+   One multiplier, applied where size actually carries the skin's voice:
+   headings, section labels, the big readouts. Body copy is left alone — a skin
+   may shout, but it may not make the transcript hard to read. */
+.card h3{font-size:calc(14px * var(--sk-scale,1))}
+.top h1{font-size:calc(16px * var(--sk-scale,1))}
+.lbl{font-size:calc(11px * var(--sk-scale,1))}
+.kpi .kv2{font-size:calc(20px * var(--sk-scale,1))}
+.iread b{font-size:calc(17px * var(--sk-scale,1))}
+.dhd,.thname{font-size:calc(13px * var(--sk-scale,1))}
+
+/* ── density ── */
+.card{padding:calc(16px * var(--sk-dens,1)) calc(18px * var(--sk-dens,1));
+  margin-bottom:calc(12px * var(--sk-dens,1))}
+.sess{padding:calc(11px * var(--sk-dens,1)) calc(16px * var(--sk-dens,1))}
+.content{padding:calc(20px * var(--sk-dens,1)) calc(26px * var(--sk-dens,1))}
+.dash{gap:calc(var(--sp-3) * var(--sk-dens,1))}
+
+/* ── chassis: brackets (HUD, Neon City) ──
+   Corner rules on the VIEWPORT, not on each card — an instrument housing the
+   whole app sits inside. Drawn on .main with two gradients per corner so it
+   costs no DOM and no extra layer. */
+html.ch-brackets .main{position:relative}
+html.ch-brackets .main::before,html.ch-brackets .main::after{
+  content:'';position:absolute;width:26px;height:26px;pointer-events:none;z-index:9;
+  border-color:var(--cyan);opacity:.55}
+html.ch-brackets .main::before{top:0;left:0;border-top:2px solid;border-left:2px solid}
+html.ch-brackets .main::after{bottom:0;right:0;border-bottom:2px solid;border-right:2px solid}
+/* the status rail: a tick ruler down the left of the content column */
+html.ch-brackets .content{border-left:1px solid rgba(var(--cyan-rgb),.16);
+  background-image:repeating-linear-gradient(180deg,
+    rgba(var(--cyan-rgb),.30) 0 8px,transparent 8px 40px);
+  background-repeat:no-repeat;background-size:2px 100%;background-position:0 0}
+
+/* ── chassis: console (Mecha) ──
+   A hard indicator column down the left edge and a heavy warning rule under the
+   header. Hazard, not decoration: this is what those consoles look like. */
+html.ch-console .main{border-left:6px solid var(--warn);position:relative}
+html.ch-console .top{border-bottom:3px solid var(--warn)}
+html.ch-console .content{
+  background-image:repeating-linear-gradient(180deg,
+    var(--warn) 0 14px,transparent 14px 34px);
+  background-repeat:no-repeat;background-size:3px 100%;background-position:0 0;
+  padding-left:calc(26px * var(--sk-dens,1) + 10px)}
+html.ch-console .card{border-left:3px solid rgba(var(--warn-rgb),.5)}
+
+/* ── chassis: bezel (Terminal) ──
+   The app is inside a tube. Rounded screen corners, an inset shadow standing in
+   for the glass edge, and a vignette. The vignette is a gradient, not a filter. */
+/* The bezel is an OUTWARD box-shadow filling the padding gap, not a background
+   on .app. A background there paints over the whole viewport — .app is in
+   normal flow and the canvas is at z-index:-2 — so the tube went completely
+   black and the scene was invisible. The shadow reaches exactly as far as the
+   padding and no further. */
+html.ch-bezel .app{padding:12px}
+html.ch-bezel .main,html.ch-bezel .side{border-radius:14px}
+html.ch-bezel .main{box-shadow:inset 0 0 60px 12px rgba(0,0,0,.8),
+  inset 0 0 0 1px rgba(var(--cyan-rgb),.22),0 0 0 12px #08080a;
+  overflow:hidden;position:relative}
+html.ch-bezel .side{box-shadow:inset 0 0 40px 8px rgba(0,0,0,.65),
+  inset 0 0 0 1px rgba(var(--cyan-rgb),.15),0 0 0 12px #08080a}
+html.ch-bezel .main::after{content:'';position:absolute;inset:0;pointer-events:none;
+  z-index:8;border-radius:14px;
+  background:radial-gradient(120% 100% at 50% 50%,transparent 55%,rgba(0,0,0,.55))}
+
+/* ── chassis: float (Sakura, Glass) ──
+   Panels lift clear of the window edges so the scene is visible around them,
+   which is the entire point of a translucent skin over a live background. */
+html.ch-float .app{padding:14px;gap:14px;grid-template-columns:266px 1fr}
+html.ch-float .side{border-radius:20px;border:1px solid var(--line)}
+html.ch-float .main{border-radius:20px;border:1px solid var(--line);overflow:hidden}
+html.ch-float .top{border-radius:20px 20px 0 0}
+
+/* ── topbar shapes ── */
+html.tb-notch .top{clip-path:polygon(0 0,calc(100% - 22px) 0,100% 22px,100% 100%,0 100%)}
+html.tb-rail .top{border-bottom:1px solid var(--line);
+  box-shadow:0 1px 0 rgba(var(--cyan-rgb),.25)}
+/* the tick ruler hangs off the bar's bottom edge; .top is already sticky, which
+   is what gives it a positioned ancestor */
+html.tb-rail .top::after{content:'';position:absolute;left:0;right:0;bottom:-4px;
+  height:4px;pointer-events:none;
+  background:repeating-linear-gradient(90deg,
+    rgba(var(--cyan-rgb),.45) 0 1px,transparent 1px 12px)}
+
+/* narrow windows: a bracket frame and a 6px hazard column both eat width that a
+   1000px window does not have to spare. The icon rail already handles the
+   sidebar; this handles the chassis. */
+@media(max-width:1099px){
+  html.ch-float .app{padding:6px;gap:6px;grid-template-columns:64px 1fr}
+  html.ch-bezel .app{padding:4px}
+  html.ch-console .main{border-left-width:3px}
+  html.ch-brackets .main::before,html.ch-brackets .main::after{width:14px;height:14px}
+}
+

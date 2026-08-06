@@ -199,6 +199,70 @@ def test_headless_never_prefixes_model(monkeypatch, tmp_path):
     args = captured['args']
     assert args[args.index('--model') + 1] == 'claude-sonnet-5'
 
+    # '' is the 'default' choice everywhere else in the app: omit the flag,
+    # let the account decide. `--model ""` makes the CLI fail outright.
+    plan_execute._headless('', 'p', str(tmp_path))
+    assert '--model' not in captured['args']
+
+
+def test_plan_omits_model_flag_when_blank(monkeypatch, tmp_path):
+    from claude_sessions import config, gui_api, memory
+    monkeypatch.setattr(config, 'get_claude_exe', lambda: r'C:\fake.exe')
+    captured = {}
+    def fake_run_cancellable(args, **kw):
+        captured['args'] = args
+        return 'plan text'
+    monkeypatch.setattr(gui_api, '_run_cancellable', fake_run_cancellable)
+    monkeypatch.setattr(memory._tls, 'silent', True, raising=False)
+
+    plan_execute._plan('task', '', str(tmp_path))
+    assert '--model' not in captured['args']
+
+    plan_execute._plan('task', 'claude-opus-5', str(tmp_path))
+    args = captured['args']
+    assert args[args.index('--model') + 1] == 'claude-opus-5'
+
+
+def test_build_exec_launch_omits_model_flag_when_blank(monkeypatch, tmp_path):
+    from claude_sessions import config
+    monkeypatch.setattr(config, 'get_claude_exe', lambda: r'C:\fake.exe')
+    proj = tmp_path / 'proj'
+    proj.mkdir()
+    folder = tmp_path / 'folder'
+    folder.mkdir()
+
+    args, _env = plan_execute.build_exec_launch(str(proj), str(folder), 'task', '')
+    assert '--model' not in args
+
+    args, _env = plan_execute.build_exec_launch(str(proj), str(folder), 'task', 'claude-sonnet-5')
+    assert args[args.index('--model') + 1] == 'claude-sonnet-5'
+
+
+def test_run_cancellable_nonzero_exit_records_job_error(monkeypatch):
+    import threading
+    from claude_sessions import gui_api
+
+    class FakeProc:
+        pid = 1234
+        returncode = 1
+        def communicate(self, input=None, timeout=None):
+            return ('error: model not found', None)
+        def poll(self):
+            return 1
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(gui_api.subprocess, 'Popen', lambda *a, **k: FakeProc())
+    job = {'cancel_event': threading.Event(), 'procs': []}
+    gui_api._JOBCTX.job = job
+    try:
+        assert gui_api._run_cancellable(['claude'], input_text='hi') == ''
+        detail = gui_api._subprocess_error_detail()
+    finally:
+        gui_api._JOBCTX.job = None
+    assert job['last_subprocess_error'] == {'code': 1, 'output': 'error: model not found'}
+    assert 'exited 1' in detail and 'model not found' in detail
+
 
 def test_council_uses_omni_roster_when_routed_through_omniroute(monkeypatch, tmp_path):
     calls = []
