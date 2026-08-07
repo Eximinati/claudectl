@@ -289,7 +289,7 @@ const MO = {
      at `subtle` these carry no information, and at `off` nothing runs. */
   burst(el, kind) {
     if (!this.full || !el) return;
-    kind = kind || (SKIN_BURST[this.skin] || 'sheen');
+    kind = kind || (SKIN_BURST[this.skin] || 'brackets');
     const mk = MO_BURST[kind];
     if (!mk || !el.animate) return;
     const host = document.createElement('div');
@@ -424,6 +424,19 @@ const MO = {
      --mx/--my on the hovered card lets CSS paint a soft radial highlight; no
      filter, no blur, no readback. Per-card listeners would mean dozens of
      handlers and a layout read per pointermove. */
+  /* A world's pointer response rides the SAME delegated listener rather than
+     adding its own: 'speed' (anime speed-lines), 'glitch' (cyberpunk chromatic
+     split), 'bracket' (deck corner snap), 'link' (graph edges lighting up). All
+     of them are a class on the hovered element and CSS does the rest, so this
+     costs one class toggle per hover and no extra handler. */
+  hover: '',
+  _hov: null,
+  _mark(el) {
+    if (this._hov === el) return;
+    if (this._hov) this._hov.classList.remove('hv');
+    this._hov = el;
+    if (el && this.hover && this.full) el.classList.add('hv');
+  },
   spot(root) {
     if (!root || root.__mosp) return;
     root.__mosp = 1;
@@ -431,6 +444,7 @@ const MO = {
     root.addEventListener('pointermove', ev => {
       if (!this.full) return;
       const card = ev.target.closest && ev.target.closest('.spot');
+      this._mark(card || null);
       if (!card) return;
       target = card; px = ev.clientX; py = ev.clientY;
       if (pending) return;
@@ -442,7 +456,9 @@ const MO = {
         target.style.setProperty('--my', (py - b.top).toFixed(0) + 'px');
       });
     }, { passive: true });
-    root.addEventListener('pointerleave', () => { target = null; }, { passive: true });
+    root.addEventListener('pointerleave', () => {
+      target = null; this._mark(null);
+    }, { passive: true });
   },
   _unspot() {
     document.querySelectorAll('.spot').forEach(c => {
@@ -508,19 +524,24 @@ const SKIN_ENTER = {
   hud:    { ms: 300, ease: 'cubic-bezier(.2,.9,.3,1)', frames: [
             { opacity: 0, clipPath: 'inset(0 100% 0 0)' },
             { opacity: 1, clipPath: 'inset(0 0 0 0)' }] },
-  // soft bloom: scales up from just under full size, never overshoots
-  sakura: { ms: 340, ease: 'cubic-bezier(.34,1.4,.5,1)', frames: [
-            { opacity: 0, transform: 'scale(.96) translateY(6px)' },
-            { opacity: 1, transform: 'none' }] },
-  // hard cut — a mecha console does not ease, it switches on
-  mecha:  { ms: 170, ease: 'steps(3,end)', frames: [
-            { opacity: 0, clipPath: 'inset(50% 0 50% 0)' },
+  // same wipe, faster and tighter — a deck boots one strip at a time
+  deck:   { ms: 220, ease: 'cubic-bezier(.2,.9,.3,1)', frames: [
+            { opacity: 0, clipPath: 'inset(0 100% 0 0)' },
             { opacity: 1, clipPath: 'inset(0 0 0 0)' }] },
+  // cel-shaded pop: overshoots once and settles, never eases in softly
+  anime:  { ms: 320, ease: 'cubic-bezier(.34,1.6,.5,1)', frames: [
+            { opacity: 0, transform: 'scale(.88) rotate(-1.5deg)' },
+            { opacity: 1, transform: 'scale(1.03) rotate(.4deg)', offset: .6 },
+            { opacity: 1, transform: 'none' }] },
   // glitch slice: two quick horizontal displacements, then settle
-  'neon-city': { ms: 240, ease: 'cubic-bezier(.16,1,.3,1)', frames: [
+  cyber:  { ms: 240, ease: 'cubic-bezier(.16,1,.3,1)', frames: [
             { opacity: 0, transform: 'translateX(-7px)', clipPath: 'inset(0 0 62% 0)' },
             { opacity: 1, transform: 'translateX(5px)',  clipPath: 'inset(38% 0 0 0)', offset: .35 },
             { opacity: 1, transform: 'translateX(-2px)', clipPath: 'inset(0 0 0 0)', offset: .7 },
+            { opacity: 1, transform: 'none' }] },
+  // a node settling into the layout after the force solve
+  graph:  { ms: 400, ease: 'cubic-bezier(.22,1,.36,1)', frames: [
+            { opacity: 0, transform: 'translateY(12px) scale(.97)' },
             { opacity: 1, transform: 'none' }] },
   // typed in: revealed left-to-right in discrete steps, like text arriving
   crt:    { ms: 320, ease: 'steps(14,end)', frames: [
@@ -531,12 +552,9 @@ const SKIN_ENTER = {
             { opacity: 0, transform: 'translate(-6px,-6px)' },
             { opacity: 1, transform: 'translate(2px,2px)', offset: .6 },
             { opacity: 1, transform: 'none' }] },
-  glass:  { ms: 380, ease: 'cubic-bezier(.22,1,.36,1)', frames: [
-            { opacity: 0, transform: 'translateY(10px) scale(.99)' },
-            { opacity: 1, transform: 'none' }] },
 };
-const SKIN_BURST = { hud: 'brackets', sakura: 'petals', mecha: 'stripe',
-  'neon-city': 'scan', crt: 'caret', brutal: 'snap', glass: 'sheen' };
+const SKIN_BURST = { hud: 'brackets', deck: 'brackets', anime: 'sparkle',
+  cyber: 'scan', graph: 'link', crt: 'caret', brutal: 'snap' };
 
 /* ── per-skin page-arrival sequences (anime.js) ────────────────────────────
    `step` is the stagger in ms, `from` the grid origin it radiates out of, `p`
@@ -582,6 +600,40 @@ const MO_TL_NOOP = {add() { return this; }, then(f) { if (f) f(); return this; }
    construction — no `iterations` option is ever passed, and
    tests/test_skins.py checks that stays true. */
 const MO_BURST = {
+  // Anime: a one-shot sparkle burst — hard-edged four-point stars, flat fill,
+  // no gradient. Cel shading does not do soft glows.
+  sparkle(host) {
+    const out = [];
+    for (let i = 0; i < 10; i++) {
+      const p = document.createElement('i');
+      p.className = 'sp';
+      p.style.left = (8 + (i * 71) % 84) + '%';
+      p.style.top = (10 + (i * 43) % 76) + '%';
+      p.style.setProperty('--d', (0.7 + ((i * 29) % 60) / 100).toFixed(2));
+      host.appendChild(p);
+      out.push(p.animate([
+        { opacity: 0, transform: 'scale(0) rotate(0deg)' },
+        { opacity: 1, transform: 'scale(1) rotate(45deg)', offset: .45 },
+        { opacity: 0, transform: 'scale(0) rotate(90deg)' }],
+        { duration: 620, delay: i * 34, easing: 'cubic-bezier(.3,.1,.4,1)' }));
+    }
+    return out;
+  },
+  // Graph: an edge draws itself across the node and retracts
+  link(host) {
+    const out = [];
+    for (let i = 0; i < 3; i++) {
+      const e = document.createElement('i');
+      e.className = 'lk lk' + i;
+      host.appendChild(e);
+      out.push(e.animate([
+        { transform: 'scaleX(0)', opacity: 0 },
+        { transform: 'scaleX(1)', opacity: 1, offset: .5 },
+        { transform: 'scaleX(1)', opacity: 0 }],
+        { duration: 700, delay: i * 90, easing: 'cubic-bezier(.22,1,.36,1)' }));
+    }
+    return out;
+  },
   // HUD: four corner brackets draw themselves in and fade
   brackets(host) {
     const out = [];
@@ -596,40 +648,7 @@ const MO_BURST = {
     }
     return out;
   },
-  // Sakura: petals drift down once and are gone. THE canonical example of the
-  // rule — this exact effect looping is what the old ambient layer did wrong.
-  petals(host) {
-    const out = [];
-    for (let i = 0; i < 14; i++) {
-      const p = document.createElement('i');
-      p.className = 'pt';
-      // deterministic spread rather than Math.random: a burst that lands the
-      // same way every time reads as designed, not as noise
-      p.style.left = (5 + (i * 67) % 90) + '%';
-      p.style.setProperty('--d', (0.9 + ((i * 37) % 60) / 100).toFixed(2));
-      host.appendChild(p);
-      // total wall time is capped: the longest petal must finish inside ~1.6s.
-      // A burst that outlasts the action it marks stops reading as feedback and
-      // starts reading as ambient decoration — the exact line this layer holds.
-      out.push(p.animate([
-        { opacity: 0, transform: 'translateY(-12px) rotate(0deg)' },
-        { opacity: .9, offset: .15 },
-        { opacity: 0, transform: `translateY(${120 + (i % 5) * 30}px) translateX(${(i % 2 ? 1 : -1) * (18 + i * 3)}px) rotate(${(i % 2 ? 1 : -1) * 220}deg)` }],
-        { duration: 900 + (i % 5) * 120, delay: i * 22,
-          easing: 'cubic-bezier(.3,.1,.4,1)' }));
-    }
-    return out;
-  },
-  // Mecha: a hazard stripe sweeps across once
-  stripe(host) {
-    const b = document.createElement('i');
-    b.className = 'st';
-    host.appendChild(b);
-    return [b.animate([{ transform: 'translateX(-100%)' },
-                       { transform: 'translateX(100%)' }],
-      { duration: 620, easing: 'steps(10,end)' })];
-  },
-  // Neon City: one scanline passes top to bottom
+  // Cyberpunk: one scanline passes top to bottom
   scan(host) {
     const b = document.createElement('i');
     b.className = 'sc';
@@ -657,15 +676,6 @@ const MO_BURST = {
     return [b.animate([{ transform: 'translate(0,0)', opacity: .9 },
                        { transform: 'translate(10px,10px)', opacity: 0 }],
       { duration: 260, easing: 'linear' })];
-  },
-  // Glass: a highlight sweeps the surface once
-  sheen(host) {
-    const b = document.createElement('i');
-    b.className = 'sh';
-    host.appendChild(b);
-    return [b.animate([{ transform: 'translateX(-120%) skewX(-18deg)' },
-                       { transform: 'translateX(220%) skewX(-18deg)' }],
-      { duration: 900, easing: 'cubic-bezier(.22,1,.36,1)' })];
   },
 };
 

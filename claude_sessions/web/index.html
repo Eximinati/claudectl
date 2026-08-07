@@ -53,6 +53,11 @@
      and replaces the static body::before/::after washes entirely. Those washes
      remain as the `off`-tier fallback. -->
 <canvas id="stage" aria-hidden="true"></canvas>
+<!-- A world's persistent overlay: scanlines, halftone, a grid, drifting edges.
+     ONE element, above the app but pointer-transparent, and it is the closest
+     thing here to the ambient layer that was deleted — so it is static or
+     transform/opacity only, and `motion:off` stops it. Empty in classic mode. -->
+<div id="overlay" class="ovl-fx" aria-hidden="true" style="display:none"></div>
 <div class="app">
   <aside class="side">
     <div class="brand">

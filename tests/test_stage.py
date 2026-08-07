@@ -21,6 +21,8 @@ import re
 from claude_sessions import gui, themes
 from claude_sessions.gui_html import PAGE, VENDOR_FILES, vendor_asset
 
+import inspect
+_SRC = inspect.getsource(gui)
 _CSS = PAGE[PAGE.index('<style>'):PAGE.index('</style>')]
 #: all of stage.js — the object AND the scene factories, which is what the
 #: "must not appear" assertions below want to cover
@@ -61,10 +63,30 @@ def test_translucency_is_what_makes_the_stage_visible():
     every skin has to make a deliberate choice about it — and Brutalist choosing
     1.0 is a choice, not an oversight."""
     for name, sk in themes.SKINS.items():
-        assert 0.5 <= sk['op'] <= 1.0, f'{name}: op={sk["op"]}'
-    assert themes.SKINS['glass']['op'] < themes.SKINS['brutal']['op']
+        # the ceiling matters as much as the floor: at 0.9+ the scene is only
+        # visible in the gutters, which is why the first cut looked like it had
+        # no background at all ("i don't see anything with the graph")
+        assert 0.5 <= sk['op'] <= 0.9, f'{name}: op={sk["op"]}'
+    # Graph is the most translucent — it has a live lattice to sit over.
+    assert themes.SKINS['graph']['op'] < themes.SKINS['brutal']['op']
     assert '--sk-op' in _CSS
     assert 'rgba(var(--panel-rgb' in _CSS
+
+
+def test_the_user_can_override_transparency_for_every_look():
+    """A look proposes an `op`; how much background you want behind your working
+    surfaces is taste and monitor, so it is exposed and it wins everywhere.
+    0 means "follow the look"."""
+    assert 'def _surface(' in _SRC
+    assert gui._surface({}) == 0
+    assert gui._surface({'surface': 70}) == 70
+    assert gui._surface({'surface': 5}) == 40, 'no floor — text would fight the scene'
+    assert gui._surface({'surface': 'nope'}) == 0
+    assert "st.setProperty('--sk-op',ST.surface?(ST.surface/100)" in PAGE
+    assert 'id="sSurf"' in PAGE
+    assert "post('/api/settings',{surface:+el.value})" in PAGE
+    # dragging must not POST per pixel
+    assert 'el.oninput=' in PAGE and 'el.onchange=' in PAGE
 
 
 # ── the contract ──────────────────────────────────────────────
@@ -106,6 +128,10 @@ def test_it_is_frame_capped_and_render_scaled():
     on purpose: this is a soft full-screen field, not the instruments' hairline
     arcs (which clamp to 2 for exactly the opposite reason)."""
     assert 'const STAGE_SCALE = 0.75;' in PAGE
+    # Idle sits in the 20s: low enough to be nearly free, high enough that the
+    # drift reads as motion rather than a stutter. It was briefly dropped to 12
+    # along with the brightness, and the background stopped looking animated —
+    # see test_the_background_still_moves_when_nothing_is_happening.
     assert re.search(r'STAGE_FPS_IDLE = 2\d;', PAGE)
     assert 'if (this._acc < 1 / fps) return true;' in _STAGE
     assert 'devicePixelRatio' not in _STAGE, 'DPR must not drive the stage'
@@ -195,8 +221,9 @@ def test_vendored_assets_are_cached_hard():
 
 def test_stage_tier_round_trips(monkeypatch, tmp_path):
     monkeypatch.setattr(gui._c, 'config_dir', str(tmp_path))
-    for saved, want in (({}, 'cinematic'), ({'stage': 'lite'}, 'lite'),
-                        ({'stage': 'off'}, 'off'), ({'stage': 'bogus'}, 'cinematic')):
+    # the DEFAULT is lite: bloom is opt-in after the first cut read as too much
+    for saved, want in (({}, 'lite'), ({'stage': 'cinematic'}, 'cinematic'),
+                        ({'stage': 'off'}, 'off'), ({'stage': 'bogus'}, 'lite')):
         assert gui._stage_tier(saved) == want, saved
 
 
@@ -221,3 +248,50 @@ def test_lite_is_documented_as_the_tearing_escape_hatch():
     assert 'lite' in themes.STAGE_TIERS
     assert 'tear' in PAGE[PAGE.index('const STAGE_NOTE={'):
                           PAGE.index('const STAGE_NOTE={') + 700]
+
+
+# ── persistence ───────────────────────────────────────────────
+
+def test_every_setting_the_gui_can_post_actually_survives_a_reload():
+    """The one that bit hardest, and silently.
+
+    load_settings() keeps only keys present in _DEFAULT_SETTINGS, and
+    /api/settings does load -> mutate -> save. So a key the POST handler accepted
+    but the defaults did not declare was written to disk once and then DELETED by
+    the next save of any other setting. `world`, `skin`, `stage`, `motion` and
+    `surface` were all in that state:
+
+        "when i close and open the claudectl app, it goes back to classic theme"
+
+    `theme` happened to be declared, which is why it was the only appearance
+    setting that appeared to work. Reading the POST allowlist straight out of the
+    handler means a new setting cannot be added without also being declared."""
+    import re
+    from claude_sessions.config import _DEFAULT_SETTINGS
+    src = inspect.getsource(gui._Handler.do_POST)
+    body = src[src.index("elif u.path == '/api/settings':"):]
+    body = body[:body.index('save_settings')]
+    tup = re.search(r"for k in \((.*?)\):", body, re.S)
+    assert tup, 'could not read the settings allowlist'
+    keys = re.findall(r"'([a-z_]+)'", tup.group(1))
+    assert 'world' in keys and 'surface' in keys, keys
+    undeclared = [k for k in keys if k not in _DEFAULT_SETTINGS]
+    assert not undeclared, f'accepted but discarded on read: {undeclared}'
+
+
+def test_appearance_settings_round_trip_through_disk(tmp_path, monkeypatch):
+    from claude_sessions import config as cfg
+    monkeypatch.setattr(cfg, 'settings_file', str(tmp_path / 'claudectl.json'))
+    s = cfg.load_settings()
+    s.update({'world': 'graph', 'skin': 'crt', 'stage': 'lite',
+              'motion': 'subtle', 'surface': 64, 'theme': 'slate'})
+    assert cfg.save_settings(s)
+    back = cfg.load_settings()
+    for k, v in (('world', 'graph'), ('skin', 'crt'), ('stage', 'lite'),
+                 ('motion', 'subtle'), ('surface', 64), ('theme', 'slate')):
+        assert back.get(k) == v, f'{k} did not survive: {back.get(k)!r}'
+    # …and saving something ELSE must not wipe them, which is the actual failure
+    back['default_effort'] = 'high'
+    cfg.save_settings(back)
+    again = cfg.load_settings()
+    assert again.get('world') == 'graph', 'a later save deleted the world again'

@@ -10,6 +10,35 @@ let NAV_ID=0;               // bumped on every navigation; stale draws check it
 let ACTIVE_MEM=new Set();   // project paths whose memory is refreshing right now
 let _VIS=true;              // QtWebEngine stays 'visible' when minimized — blur toggles this
 
+/* ── writing #content ──────────────────────────────────────────────────────
+   THE ONLY two places allowed to assign #content.innerHTML. Everything else
+   goes through them, and tests/test_gui_flicker.py enforces it.
+
+   Why: almost every renderer is async — it paints a spinner, awaits a fetch,
+   then writes the real markup. Nothing stopped that second write from landing
+   after you had already navigated somewhere else, so a slow page would
+   overwrite the page you were actually looking at:
+
+     "la pagina MCP ci mette un po' a caricare… se ti sposti su altre pagine,
+      quando si carica sovrascrive la pagina su cui stai davvero.
+      Ero in settings ma con la schermata di MCP."
+
+   NAV_ID has existed since the beginning but exactly one renderer (drawMemory)
+   remembered to check it, which is the failure mode of any convention that
+   lives in fifteen places. Now the check is in the function itself: you cannot
+   write #content without going through the guard.
+
+     const nav = paintNow(LOADING);     // pre-await, always safe, returns the token
+     …await…
+     if(!paint(nav, html)) return;      // post-await, drops if we navigated away */
+function paintNow(html){$('#content').innerHTML=html;return NAV_ID;}
+function paint(nav,html){
+  if(nav!==NAV_ID)return false;         // navigated away mid-fetch — drop it
+  $('#content').innerHTML=html;
+  return true;
+}
+const LOADING='<div class="empty"><span class="spin"></span> Loading…</div>';
+
 function toast(msg,cls){const w=$('#toast-wrap');const t=document.createElement('div');
   t.className='toast '+(cls||'');t.textContent=msg;w.appendChild(t);
   requestAnimationFrame(()=>{t.classList.add('show');});
@@ -81,11 +110,105 @@ map:'M20.5 3l-.16.03L15 5.1 9 3 3.36 4.9c-.21.07-.36.25-.36.48V20.5c0 .28.22.5.5
 inject:'M21 3H3c-1.1 0-2 .9-2 2v3h2V5h18v14H3v-3H1v3c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM11 15l4-3-4-3v2H1v2h10z',
 star:'M12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z',
 palette:'M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16a5 5 0 0 0 5-5c0-4.42-4.03-8-9-8zm-5.5 9a1.5 1.5 0 1 1 1.5-1.5A1.5 1.5 0 0 1 6.5 12zm3-4A1.5 1.5 0 1 1 11 6.5 1.5 1.5 0 0 1 9.5 8zm5 0A1.5 1.5 0 1 1 16 6.5 1.5 1.5 0 0 1 14.5 8zm3 4a1.5 1.5 0 1 1 1.5-1.5 1.5 1.5 0 0 1-1.5 1.5z'};
-const ic=n=>`<svg class="ic" viewBox="0 0 24 24"><path d="${ICONS[n]||ICONS.doc}"/></svg>`;
+/* ── per-world icon sets ────────────────────────────────────────────────────
+   A world redraws only the ~16 glyphs that actually appear in the nav and the
+   primary actions, and falls back to the base Material set for the other ~18.
+   Redrawing all 34 four times would be 136 paths for glyphs most people never
+   see; a missing key here is a fallback, never a blank box.
+
+   Each set is a genuine restyle, not a recolour: Cyberpunk is angular and cut,
+   Anime is round and sticker-like, Deck is hairline geometry, Graph builds every
+   glyph out of nodes and edges. */
+const ICON_SETS={
+  cyber:{
+    play:'M7 4l12 8-12 8zM4 4h2v16H4z',
+    add:'M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7z',
+    search:'M4 4h10v2H6v8H4zm6 6h10v10H10zm2 2v6h6v-6z',
+    settings:'M4 4h6v2H6v4H4zm10 0h6v6h-2V6h-4zm6 10v6h-6v-2h4v-4zM4 14h2v4h4v2H4z',
+    chart:'M4 20V8h3v12zm5 0V4h3v16zm5 0v-8h3v8zm5 0v-5h3v5z',
+    terminal:'M3 3h18v18H3zm3 4l4 4-4 4v2l6-6-6-6zm7 9h6v2h-6z',
+    robot:'M8 2h8v3h4v14H4V5h4zm-1 7v3h3V9zm7 0v3h3V9zM8 15h8v2H8z',
+    plug:'M8 2h2v6H8zm6 0h2v6h-2zM5 9h14v3l-3 4v4h-2v-4l-3-3-3 3v4H6v-4l-1-4z',
+    doc:'M5 2h9l5 5v15H5zm9 1v5h5',
+    folder:'M3 5h7l2 2h9v12H3zm2 4v8h14V9z',
+    del:'M6 6h12l-1 15H7zM9 3h6v2H9z',
+    check:'M4 12l2-2 4 4 8-8 2 2-10 10z',
+    close:'M5 5h3l4 4 4-4h3l-5.5 7L19 19h-3l-4-4-4 4H5l5.5-7z',
+    history:'M4 4h2v4h4v2H4zm8 0a8 8 0 1 1-7.4 11h2.3A6 6 0 1 0 12 6v3L8 5.5 12 2z',
+    label:'M3 6h11l6 6-6 6H3zm3 5v2h2v-2z',
+    help:'M12 2l8 5v10l-8 5-8-5V7zm-1 5v2h2V7zm0 4v6h2v-6z',
+  },
+  anime:{
+    play:'M9 6.5c0-1.2 1.3-1.9 2.3-1.3l7 4.8c1 .7 1 2.2 0 2.9l-7 4.8c-1 .7-2.3 0-2.3-1.2z',
+    add:'M12 3a1.6 1.6 0 0 1 1.6 1.6v5.8h5.8a1.6 1.6 0 0 1 0 3.2h-5.8v5.8a1.6 1.6 0 0 1-3.2 0v-5.8H4.6a1.6 1.6 0 0 1 0-3.2h5.8V4.6A1.6 1.6 0 0 1 12 3z',
+    search:'M11 3a8 8 0 1 1-5 14.3l-2.4 2.4a1.5 1.5 0 0 1-2.2-2.1L3.8 15A8 8 0 0 1 11 3zm0 3.2A4.8 4.8 0 1 0 11 16a4.8 4.8 0 0 0 0-9.8z',
+    settings:'M12 8.4a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2zm8.4 4.8-1.9 1.5.5 2.4-2.2 1.3-2-1.4-2.3.9-.5 2.4h-2.5l-.5-2.4-2.3-.9-2 1.4-2.2-1.3.5-2.4-1.9-1.5v-2.4l1.9-1.5-.5-2.4L4.7 5.6l2 1.4 2.3-.9.5-2.4h2.5l.5 2.4 2.3.9 2-1.4 2.2 1.3-.5 2.4 1.9 1.5z',
+    chart:'M5 13.5c0-.8.7-1.5 1.5-1.5S8 12.7 8 13.5v5c0 .8-.7 1.5-1.5 1.5S5 19.3 5 18.5zm5.5-7c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5v12c0 .8-.7 1.5-1.5 1.5s-1.5-.7-1.5-1.5zm5.5 4c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5v8c0 .8-.7 1.5-1.5 1.5s-1.5-.7-1.5-1.5z',
+    terminal:'M5 3.5h14A2.5 2.5 0 0 1 21.5 6v12a2.5 2.5 0 0 1-2.5 2.5H5A2.5 2.5 0 0 1 2.5 18V6A2.5 2.5 0 0 1 5 3.5zm2.6 4.4a1.3 1.3 0 0 0 0 1.9L9.8 12l-2.2 2.2a1.3 1.3 0 1 0 1.9 1.9l3.1-3.2a1.3 1.3 0 0 0 0-1.8L9.5 7.9a1.3 1.3 0 0 0-1.9 0zM13.5 15h4v2h-4z',
+    robot:'M12 2a1.4 1.4 0 0 1 1.4 1.4V5h3.4A3.2 3.2 0 0 1 20 8.2v8.6a3.2 3.2 0 0 1-3.2 3.2H7.2A3.2 3.2 0 0 1 4 16.8V8.2A3.2 3.2 0 0 1 7.2 5h3.4V3.4A1.4 1.4 0 0 1 12 2zM9 9.6a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2zm6 0a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2zM8.6 15.4a1.1 1.1 0 0 0 0 2.2h6.8a1.1 1.1 0 0 0 0-2.2z',
+    plug:'M8.5 2a1.3 1.3 0 0 1 1.3 1.3V8h4.4V3.3a1.3 1.3 0 1 1 2.6 0V8h.9a1.3 1.3 0 0 1 1.3 1.3v2.2a6.5 6.5 0 0 1-5.2 6.4v3.8a1.3 1.3 0 1 1-2.6 0v-3.8A6.5 6.5 0 0 1 6 11.5V9.3A1.3 1.3 0 0 1 7.2 8h.1V3.3A1.3 1.3 0 0 1 8.5 2z',
+    doc:'M7 2.5h7L19.5 8v11.5A2 2 0 0 1 17.5 21.5h-11A2 2 0 0 1 4.5 19.5V4.5a2 2 0 0 1 2-2zM13.5 4v4.5H18z',
+    folder:'M4.5 4.5h5l2.2 2.2h7.8a2 2 0 0 1 2 2v8.8a2 2 0 0 1-2 2h-15a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2z',
+    del:'M9.6 2.5h4.8a1.4 1.4 0 0 1 1.4 1.4v.6h3.4a1.2 1.2 0 0 1 0 2.4h-.5l-1 12.4a2.2 2.2 0 0 1-2.2 2h-6a2.2 2.2 0 0 1-2.2-2l-1-12.4h-.5a1.2 1.2 0 0 1 0-2.4h3.4v-.6a1.4 1.4 0 0 1 1.4-1.4z',
+    check:'M20.3 6.4a1.6 1.6 0 0 1 0 2.3L10.6 18.4a1.6 1.6 0 0 1-2.3 0L3.7 13.8a1.6 1.6 0 1 1 2.3-2.3l3.5 3.5 8.5-8.6a1.6 1.6 0 0 1 2.3 0z',
+    close:'M5.7 4.3a1.5 1.5 0 0 0-2.1 2.1L9.9 12l-6.3 6.3a1.5 1.5 0 1 0 2.1 2.1L12 14.1l6.3 6.3a1.5 1.5 0 0 0 2.1-2.1L14.1 12l6.3-6.3a1.5 1.5 0 1 0-2.1-2.1L12 9.9z',
+    history:'M12 3a9 9 0 1 1-8.6 11.6 1.4 1.4 0 1 1 2.7-.8A6.2 6.2 0 1 0 12 5.8c-1.5 0-2.9.5-4 1.4l1.7 1.7H4.5V3.6l1.6 1.6A8.9 8.9 0 0 1 12 3zm0 3.9a1.3 1.3 0 0 1 1.3 1.3v3.3l2.4 1.4a1.3 1.3 0 1 1-1.3 2.3l-3-1.8a1.3 1.3 0 0 1-.7-1.1V8.2A1.3 1.3 0 0 1 12 6.9z',
+    label:'M4.5 5.5h9.1a2 2 0 0 1 1.5.7l4.6 5a1.2 1.2 0 0 1 0 1.6l-4.6 5a2 2 0 0 1-1.5.7H4.5a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2zm3 5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z',
+    help:'M12 2.5a9.5 9.5 0 1 1 0 19 9.5 9.5 0 0 1 0-19zm0 13.2a1.3 1.3 0 1 0 0 2.6 1.3 1.3 0 0 0 0-2.6zm0-9.4a3.5 3.5 0 0 0-3.5 3.4 1.2 1.2 0 1 0 2.4 0 1.1 1.1 0 1 1 1.7.9c-.9.6-1.8 1.4-1.8 2.7a1.2 1.2 0 0 0 2.4 0c0-.2.4-.5.8-.7A3.5 3.5 0 0 0 12 6.3z',
+  },
+  deck:{
+    play:'M9 5.5v13l10-6.5zM9 5.5 19 12 9 18.5z',
+    add:'M11.6 4h.8v7.6H20v.8h-7.6V20h-.8v-7.6H4v-.8h7.6z',
+    search:'M10.5 3.5a7 7 0 1 1 0 14 7 7 0 0 1 0-14zm0 .9a6.1 6.1 0 1 0 0 12.2 6.1 6.1 0 0 0 0-12.2zm5 11.4 5 5-.6.6-5-5z',
+    settings:'M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6zm0 .9a2.1 2.1 0 1 0 0 4.2 2.1 2.1 0 0 0 0-4.2zM11.5 2h1v3h-1zm0 17h1v3h-1zM2 11.5h3v1H2zm17 0h3v1h-3zM4.6 4l2.2 2.1-.7.7L4 4.6zm12.6 12.6 2.2 2.1-.7.7-2.1-2.2zM19.4 4l.6.6-2.1 2.2-.7-.7zM6.8 16.6l.7.7L5.3 20l-.7-.7z',
+    chart:'M3 20h18v.8H3zM5 14h1.6v5.2H5zm4 -4h1.6v9.2H9zm4 6h1.6v3.2H13zm4 -8h1.6v11.2H17z',
+    terminal:'M2.5 4.5h19v15h-19zm.9.9v13.2h17.2V5.4zM5 8.2l3.6 3.6L5 15.4l.6.6 4.2-4.2L5.6 7.6zM11 15h6v.9h-6z',
+    robot:'M11.6 2h.8v3h4.1a2 2 0 0 1 2 2v11.5a2 2 0 0 1-2 2H7.5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4.1zM6.4 7v11.5a1.1 1.1 0 0 0 1.1 1.1h9a1.1 1.1 0 0 0 1.1-1.1V7a1.1 1.1 0 0 0-1.1-1.1h-9A1.1 1.1 0 0 0 6.4 7zM9 9.5h1.8v1.8H9zm4.2 0H15v1.8h-1.8zM9 15h6v.9H9z',
+    plug:'M8.5 2.5h.9V8h5.2V2.5h.9V8h2.1v3.3a6 6 0 0 1-5.1 5.9v4.3h-.9v-4.3a6 6 0 0 1-5.1-5.9V8h2.1zM7.3 8.9v2.4a5.1 5.1 0 0 0 10.2 0V8.9z',
+    doc:'M6 2.5h8.2L18.5 6.8V21.5H6zm.9.9v17.2h10.7V7.6h-3.9V3.4zM15 4v2.7h2.7z',
+    folder:'M2.5 4.5h7.2l2 2h9.8v13h-19zm.9.9v11.2h17.2V7.4h-9.3l-2-2z',
+    del:'M9 2.5h6v2h5v.9H4v-.9h5zM5.5 7h13l-.9 14.5H6.4zm1 .9.8 12.7h9.4l.8-12.7z',
+    check:'M4 12.4 5 11.4l4.7 4.7L19 6.8l1 1-10.3 10.3z',
+    close:'M5.3 4.6 12 11.3l6.7-6.7.7.7L12.7 12l6.7 6.7-.7.7L12 12.7l-6.7 6.7-.7-.7L11.3 12 4.6 5.3z',
+    history:'M12 3a9 9 0 1 1-8.9 10.3h.9A8.1 8.1 0 1 0 12 3.9a8 8 0 0 0-5.8 2.5l2.4 2.4H3.2V3.4l2.3 2.3A8.9 8.9 0 0 1 12 3zm-.5 3.5h.9v5.8l3.6 2.1-.5.8-4-2.3z',
+    label:'M3 6h11.3l5.4 6-5.4 6H3zm.9.9v10.2h10l4.6-5.1-4.6-5.1zM7 11.1a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8z',
+    help:'M12 2.5a9.5 9.5 0 1 1 0 19 9.5 9.5 0 0 1 0-19zm0 .9a8.6 8.6 0 1 0 0 17.2 8.6 8.6 0 0 0 0-17.2zm0 12.4a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zm0-9a3.1 3.1 0 0 1 1.9 5.6c-.8.6-1.4 1-1.4 1.9h-1c0-1.3.9-2 1.8-2.6a2.2 2.2 0 1 0-3.4-1.8h-.9A3.1 3.1 0 0 1 12 6.8z',
+  },
+  graph:{
+    // every glyph is built out of nodes and edges — the project's own graph
+    play:'M6 4.6a2 2 0 1 1-1.4 3.4L4.5 16a2 2 0 1 1 2.6 2.6l9.3-5a2 2 0 1 1 .4-1.6zM7 8.2v7.4l7-3.7z',
+    add:'M12 2.5a2 2 0 0 1 1 3.7V10h3.8a2 2 0 1 1 0 2h-3.8v3.8a2 2 0 1 1-2 0V12H7.2a2 2 0 1 1 0-2H11V6.2a2 2 0 0 1 1-3.7z',
+    search:'M10 3a7 7 0 0 1 5.6 11.2l4.1 4.1a1.2 1.2 0 1 1-1.7 1.7l-4.1-4.1A7 7 0 1 1 10 3zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm0 2.6a2.4 2.4 0 1 1 0 4.8 2.4 2.4 0 0 1 0-4.8z',
+    settings:'M12 2.4a2 2 0 0 1 1 3.7v1.3a4.6 4.6 0 0 1 3 1.7l1.2-.7a2 2 0 1 1 1 1.7l-1.2.7a4.6 4.6 0 0 1 0 2.4l1.2.7a2 2 0 1 1-1 1.7l-1.2-.7a4.6 4.6 0 0 1-3 1.7v1.3a2 2 0 1 1-2 0v-1.3a4.6 4.6 0 0 1-3-1.7l-1.2.7a2 2 0 1 1-1-1.7l1.2-.7a4.6 4.6 0 0 1 0-2.4l-1.2-.7a2 2 0 1 1 1-1.7l1.2.7a4.6 4.6 0 0 1 3-1.7V6.1a2 2 0 0 1 1-3.7zm0 6.8a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6z',
+    chart:'M5 17.4a2 2 0 1 1-1.3 3.5A2 2 0 0 1 5 17.4zm5-6a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm5 3a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm5-10a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM6.4 17.9l2.6-4M11.6 13.2l2 1.6M16.4 13.1l2.4-5.4',
+    terminal:'M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm3.5 4.4a1.4 1.4 0 1 0 .8 2.5l1.3 1.1-1.3 1.1a1.4 1.4 0 1 0 .9 1.2l2.6-2.3-2.6-2.3a1.4 1.4 0 0 0-1.7-1.3zM13 15h5v1.6h-5z',
+    robot:'M12 2a1.6 1.6 0 0 1 .8 3V5h4.4a2.4 2.4 0 0 1 2.4 2.4v9.2a2.4 2.4 0 0 1-2.4 2.4H6.8a2.4 2.4 0 0 1-2.4-2.4V7.4A2.4 2.4 0 0 1 6.8 5h4.4a1.6 1.6 0 0 1 .8-3zM9 9.4a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6zm6 0a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6zm-4.2 1.8h2.4',
+    plug:'M9 2.4a1.7 1.7 0 0 1 .9 3.1V8h4.2V5.5a1.7 1.7 0 1 1 1.8 0V8h1.6a1 1 0 0 1 1 1v2.4a6.4 6.4 0 0 1-5.4 6.3v2.4a1.7 1.7 0 1 1-2.2 0v-2.4A6.4 6.4 0 0 1 5.5 11.4V9a1 1 0 0 1 1-1h1.6V5.5A1.7 1.7 0 0 1 9 2.4z',
+    doc:'M7 2.5h7l4.5 4.5v12A2 2 0 0 1 16.5 21h-9a2 2 0 0 1-2-2V4.5a2 2 0 0 1 2-2zm2 6a1.4 1.4 0 1 0 0 2.8 1.4 1.4 0 0 0 0-2.8zm5 3a1.4 1.4 0 1 0 0 2.8 1.4 1.4 0 0 0 0-2.8zm-4 0.6 3 1.6',
+    folder:'M4 5h5.5l2 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm4 6a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm7 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm-5.6 1.5h4.2',
+    del:'M9.5 2.5h5a1.5 1.5 0 0 1 1.5 1.5v1h4v2H4v-2h4V4a1.5 1.5 0 0 1 1.5-1.5zM5.8 9h12.4l-1 11a2 2 0 0 1-2 1.8H8.8a2 2 0 0 1-2-1.8zm4 3a1.3 1.3 0 1 0 0 2.6 1.3 1.3 0 0 0 0-2.6zm4.4 0a1.3 1.3 0 1 0 0 2.6 1.3 1.3 0 0 0 0-2.6z',
+    check:'M6 10.2a2 2 0 1 1-1.6 3.2l3.9 4.2a2 2 0 1 0 2.9.2l7.4-8.2A2 2 0 1 0 17 8.2L10.7 15 8 12.1A2 2 0 0 0 6 10.2z',
+    close:'M6 4a2 2 0 1 1-1.4 3.4l4.2 4.2-4.2 4.2A2 2 0 1 0 7.4 19l4.2-4.2 4.2 4.2A2 2 0 1 0 19 16.6l-4.2-4.2 4.2-4.2A2 2 0 1 0 16.6 5L12.4 9.2 8.2 5A2 2 0 0 0 6 4z',
+    history:'M12 3a9 9 0 1 1-8.7 11.4 1.5 1.5 0 1 1 2.9-.8A6 6 0 1 0 12 6a6 6 0 0 0-4.1 1.6l1.9 1.9H4V4.2l1.8 1.8A8.9 8.9 0 0 1 12 3zm0 4a1.6 1.6 0 0 1 1 2.9l2.3 1.4a1.6 1.6 0 1 1-.8 1.4L11.2 11A1.6 1.6 0 0 1 12 7z',
+    label:'M4 6h9.6a2 2 0 0 1 1.5.7l4.4 5a1.2 1.2 0 0 1 0 1.6l-4.4 5a2 2 0 0 1-1.5.7H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zm3.5 4.4a1.6 1.6 0 1 0 0 3.2 1.6 1.6 0 0 0 0-3.2z',
+    help:'M12 2.5a9.5 9.5 0 1 1 0 19 9.5 9.5 0 0 1 0-19zm0 2a7.5 7.5 0 1 0 0 15 7.5 7.5 0 0 0 0-15zm0 10.4a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 0 1 0-2.8zm0-8.2a3.3 3.3 0 0 1 1.9 6c-.6.4-.9.7-.9 1.2h-2c0-1.5 1-2.1 1.8-2.7a1.3 1.3 0 1 0-2-1.1h-2A3.3 3.3 0 0 1 12 6.7z',
+  },
+};
+let ICONSET='';   // '' = the base Material set; a world name = its override
+/* Falls back per glyph, not per set: a world only draws the icons it has an
+   opinion about, and a missing key is never a blank box. */
+const ic=n=>{
+  const set=ICON_SETS[ICONSET];
+  const d=(set&&set[n])||ICONS[n]||ICONS.doc;
+  return `<svg class="ic" viewBox="0 0 24 24"><path d="${d}"/></svg>`;
+};
 
 /* ── theme → CSS variables (palette mirrors the TUI themes) ── */
 function hexRgb(h){const n=parseInt(h.slice(1),16);return `${(n>>16)&255},${(n>>8)&255},${n&255}`;}
 function applyTheme(name){
+  // a world overrides whatever palette was passed: it is all or nothing
+  const w=curWorld();
+  if(w)name=w.palette;
   const t=(ST.themes||{})[name];if(!t)return;
   const r=document.documentElement.style;
   const map={'--cyan':t.accent,'--violet':t.accent2,'--ok':t.ok,'--warn':t.warn,
@@ -117,8 +240,23 @@ function applyTheme(name){
   r.setProperty('--mo-beam',mp.beam);
   r.setProperty('--t-spring',mp.spring);
   applySkin(skinFor(name));
+  applyWorld(w);
   if(window.INST)INST.setTheme(t);   // canvas can't parse var() — hand it hex
   if(window.STAGE)STAGE.setTheme(t); // ditto: GL wants hex, not a custom prop
+}
+/* The parts of a world a skin token cannot express: which glyph set the icons
+   come from, the persistent overlay, the pointer behaviour and the cursor. */
+function applyWorld(w){
+  const r=document.documentElement;
+  for(const n of Object.keys(ST.worlds||{}))r.classList.toggle('world-'+n,!!w&&ST.world===n);
+  r.classList.toggle('in-world',!!w);
+  ICONSET=(w&&w.icons)||'';
+  MO.hover=(w&&w.hover)||'';
+  const ov=$('#overlay');
+  if(ov){
+    ov.className=w&&w.overlay?('ovl-fx ov-'+w.overlay):'ovl-fx';
+    ov.style.display=w&&w.overlay?'':'none';
+  }
 }
 /* lift = hover travel, glow = accent bleed, beam = how fast a running border
    circles, spring = the response curve. Named in themes.py per palette. */
@@ -137,7 +275,23 @@ const MOTION_PERSONA={
    --sk-* custom properties (so any rule can read them), and a `skin-<name>` class
    goes on <html> for the structural work a variable cannot express — corner
    brackets, warning stripes, scanlines, a block caret. */
+/* ── worlds ────────────────────────────────────────────────────────────────
+   A world is a theme that refuses to be mixed: it owns its palette, skin,
+   background scene, icon set, overlay, hover behaviour and cursor, and while
+   you wear one the palette and skin pickers are disabled.
+
+   Why the orthogonal model was not enough: a skin that has to look sane under
+   29 palettes can commit to nothing, which is how Sakura/Mecha/Glass ended up
+   as loud wallpapers on weak chrome ("da buttare"). Classic mode is untouched —
+   Slate + Terminal still works exactly as before — this sits above it. */
+function curWorld(){return (ST.worlds||{})[ST.world]||null;}
+function themeFor(){
+  const w=curWorld();
+  return w?w.palette:(ST.theme||'default');
+}
 function skinFor(themeName){
+  const w=curWorld();
+  if(w)return w.skin;                       // a world locks its own
   // an explicit user choice wins; otherwise wear what the palette asks for
   if(ST.skin&&(ST.skins||{})[ST.skin])return ST.skin;
   const t=(ST.themes||{})[themeName]||{};
@@ -159,7 +313,10 @@ function applySkin(name){
   // read the tokens, so a new skin still needs no new geometry CSS.
   st.setProperty('--sk-scale',sk.scale!=null?sk.scale:1);
   st.setProperty('--sk-dens',sk.density!=null?sk.density:1);
-  st.setProperty('--sk-op',sk.op!=null?sk.op:1);
+  // How much of the scene shows through every surface. The look proposes a
+  // value; the user's slider, if they have moved it, wins for every look —
+  // taste, and monitor, vary more than a designer can guess.
+  st.setProperty('--sk-op',ST.surface?(ST.surface/100):(sk.op!=null?sk.op:1));
   for(const n of Object.keys(ST.skins||{}))r.classList.toggle('skin-'+n,n===name);
   for(const c of ['brackets','console','bezel','float','none'])
     r.classList.toggle('ch-'+c,(sk.chassis||'none')===c);
@@ -587,7 +744,7 @@ function fmtTok(n){
 function drawHome(){
   $('#ttl').textContent='Dashboard';$('#tpath').textContent='';
   const inst=(kind,key,o)=>INST.html(kind,key,o);
-  $('#content').innerHTML=`
+  paintNow(`
   <div class="dash">
     <section class="card icard d-i1 spot lift">
       <div class="ihd">${ic('bolt')}<span>plan quota</span><span class="sp"></span>
@@ -622,7 +779,7 @@ function drawHome(){
       <div class="fld"><input id="hqSearch" placeholder="Search every session…"></div>
       <div id="hqRes"></div>
       <div class="dlist" id="dashRecent">${MO.skel(4)}</div></section>
-  </div>`;
+  </div>`);
   bindHomeSearch();
   mounted();
   startDashboard();
@@ -1119,11 +1276,11 @@ function drawReview(){
         <div style="color:var(--dim);font-size:13px">${esc(f.detail||'')}</div></div>`;
     }).join('');
   }
-  $('#content').innerHTML=`<div class="card"><h3>Code review <span class="sp"></span>
+  paintNow(`<div class="card"><h3>Code review <span class="sp"></span>
       <button class="btn sm pri" onclick="runReview(false)">${ic('search')} Review working changes</button>
       <button class="btn sm" onclick="runReview(true)">Staged only</button></h3>
       <p style="color:var(--dim);font-size:12px;margin:0 0 10px">Inspired by the Claude Code code-review plugin — confidence-scored, high-threshold, CLAUDE.md-aware.</p>
-      ${out}</div>`;
+      ${out}</div>`);
 }
 function runReview(staged){
   inlineJob('#jban','review',{...C(),staged},{label:'Reviewing changes',
@@ -1132,7 +1289,7 @@ function runReview(staged){
 
 /* sessions tab */
 async function drawSessions(archived){
-  $('#content').innerHTML='<div class="empty"><span class="spin"></span> Loading…</div>';
+  const nav=paintNow(LOADING);
   const d=archived?await api('/api/session/archived?'+qs({enc:CUR.encoded,cfgdir:CUR.primary_cfgdir}))
                   :await api('/api/sessions?enc='+encodeURIComponent(CUR.encoded));
   SESS=d.sessions||[];
@@ -1144,9 +1301,9 @@ async function drawSessions(archived){
     <button class="btn sm" onclick="drawSessions(${archived?'false':'true'})">
       ${archived?'← Active sessions':ic('archive')+' Archived'}</button></div>`;
   if(!SESS.length){
-    $('#content').innerHTML=hdr+`<div class="empty">${archived?'No archived sessions.':'No sessions yet — start one with New session.'}</div>`;
+    paint(nav,hdr+`<div class="empty">${archived?'No archived sessions.':'No sessions yet — start one with New session.'}</div>`);
     return;}
-  $('#content').innerHTML=hdr+'<div class="slist">'+SESS.map((s,i)=>{
+  if(!paint(nav,hdr+'<div class="slist">'+SESS.map((s,i)=>{
     const tg=(tags[s.sid]||[]).map(t=>`<span class="tag ok">${esc(t)}</span>`).join(' ');
     return `<div class="sess">
       <span class="dot" style="background:${acctColor(s.account)}"
@@ -1176,7 +1333,7 @@ async function drawSessions(archived){
         <div class="frontends"><span>Cheap &amp; fast</span><span>Max power</span></div>
         <div class="frontread rtread"></div>
         <button class="btn sm pri" onclick="resumeTuned(${i})" style="margin-top:8px">Resume with these settings →</button>
-      </div>`}`;}).join('')+'</div>';
+      </div>`}`;}).join('')+'</div>'))return;
 }
 // one-click resume: launches immediately with the recommended/last-used
 // model+effort — no dialog. The settings ⚙ icon expands this row in place
@@ -1303,13 +1460,12 @@ async function tagS(i){const s=SESS[i];
 
 /* memory tab */
 async function drawMemory(){
-  const myNav=NAV_ID;
-  $('#content').innerHTML='<div class="empty"><span class="spin"></span> Loading…</div>';
+  const nav=paintNow(LOADING);
   const c=C();
   const [st,les,ws,wl]=await Promise.all([
     api('/api/memory/state?'+qs(c)),api('/api/lessons?'+qs(c)),
     api('/api/workspace-status?'+qs(c)),api('/api/worklog?'+qs(c))]);
-  if(myNav!==NAV_ID)return;   // navigated away mid-fetch — don't clobber the new page
+  if(nav!==NAV_ID)return;   // navigated away mid-fetch — don't clobber the new page
   const lesRows=(les.lessons||[]).map(l=>`
     <tr><td>${l.status==='pending'?'…':l.status==='pinned'?ic('pin'):ic('check')} ${esc(l.status)}</td>
     <td><b>${esc(l.name)}</b><div style="color:var(--dim);font-size:12px">${esc(l.summary)}</div></td>
@@ -1322,7 +1478,7 @@ async function drawMemory(){
   // freshness: entities the graph holds against a rough expectation of ~4 per
   // module. Deliberately its own project's scale, not an absolute target.
   const cover=st.n_entities?Math.min(1,st.n_entities/Math.max(8,modules*4)):0;
-  $('#content').innerHTML=`
+  paint(nav,`
     <div class="card"><h3>Project memory <span class="sp"></span>
       <button class="btn sm" onclick="askMem()">${ic('chat')} Ask</button>
       <button class="btn sm" onclick="recallPrev()">${ic('eye')} Recall preview</button>
@@ -1358,7 +1514,7 @@ async function drawMemory(){
           <td style="color:var(--dim);font-size:12px">${esc((e.files||[]).join(', '))}</td></tr>`).join('')
         +`</table>`:'<div style="color:var(--dim);margin-top:8px">No sessions recorded yet.</div>'}</div>
     <div class="card"><h3>Workspace status — score ${ws.score??'?'} ${ws.safe?'<span class="tag ok">safe</span>':'<span class="tag warn">attention</span>'}</h3>
-      <div style="font:12px Consolas,monospace;white-space:pre-wrap">${esc((ws.lines||[]).join('\n'))}</div></div>`;
+      <div style="font:12px Consolas,monospace;white-space:pre-wrap">${esc((ws.lines||[]).join('\n'))}</div></div>`);
   INST.set('memory',{v:cover,tone:cover>=.6?'ok':cover>=.25?null:'warn'});
   setRead('memory',cover*100);
 }
@@ -1416,12 +1572,12 @@ async function recallPrev(){
 
 /* CLAUDE.md tab */
 async function drawClaudeMd(){
-  $('#content').innerHTML='<div class="empty"><span class="spin"></span></div>';
+  const nav=paintNow('<div class="empty"><span class="spin"></span></div>');
   const c=C();
   const [md,mm]=await Promise.all([api('/api/claude-md?'+qs(c)),
                                    api('/api/memory-map?'+qs(c))]);
   const mf=mm.files||[],have=mf.filter(f=>f.exists).length;
-  $('#content').innerHTML=`
+  paint(nav,`
     <div class="card"><h3>CLAUDE.md <span class="sp"></span>
       <button class="btn sm" onclick="cmScaffold()">${ic('doc')} Scaffold</button>
       <button class="btn sm" onclick="inlineJob('#jban','ai_scaffold',C(),{label:'AI-analyzing project',onDone:()=>drawClaudeMd()})">${ic('ai')} AI analyze</button>
@@ -1437,7 +1593,7 @@ async function drawClaudeMd(){
         <span style="color:var(--dim2);font-size:11px">${esc(f.path)}</span>
         ${f.exists?`<button class="btn sm" onclick="post('/api/open-editor',{file:'${esc(f.path).replace(/\\/g,'\\\\')}'})">open</button>`:''}
       </div>`).join('')}</div>
-    <div class="card"><h3>System prompt</h3><div id="spBox"></div></div>`;
+    <div class="card"><h3>System prompt</h3><div id="spBox"></div></div>`);
   const sp=await api('/api/system-prompt?'+qs(c));
   $('#spBox').innerHTML=`<div class="fld"><textarea id="spText">${esc(sp.text)}</textarea></div>
     <div class="mrow"><button class="btn pri sm" onclick="spSave()">Save</button></div>`;
@@ -1453,7 +1609,7 @@ async function spSave(){
 
 /* audit tab */
 async function drawAudit(){
-  $('#content').innerHTML='<div class="empty"><span class="spin"></span></div>';
+  const nav=paintNow('<div class="empty"><span class="spin"></span></div>');
   const c=C();
   const [d,deny]=await Promise.all([api('/api/ctxaudit?'+qs(c)),api('/api/deny?'+qs(c))]);
   const it=d.items||[];
@@ -1461,7 +1617,7 @@ async function drawAudit(){
     <tr><td>${esc(it.label)} ${it.lazy?'<span class="tag">lazy</span>':''}</td>
     <td class="num">${it.tokens}</td>
     <td style="color:var(--warn);font-size:12px">${esc((it.warnings||[]).join(' · '))}</td></tr>`).join('');
-  $('#content').innerHTML=`
+  paint(nav,`
     <div class="card"><h3>Context weight — ~${d.total||0} tok loaded every turn
       <span class="sp"></span>
       <button class="btn sm" onclick="cmPrune().then(()=>drawAudit())">${ic('cut')} Prune sessions</button>
@@ -1472,25 +1628,25 @@ async function drawAudit(){
       ${(deny.patterns||[]).map(p=>`<div style="display:flex;gap:10px;padding:2px 0">
         <code style="color:var(--cyan)">${esc(p.pattern)}</code>
         <span style="color:var(--dim);font-size:12px">${esc(p.why)}</span></div>`).join('')
-      ||'<div style="color:var(--dim)">Nothing heavy found.</div>'}</div>`;
+      ||'<div style="color:var(--dim)">Nothing heavy found.</div>'}</div>`);
 }
 
 /* project usage tab */
 async function drawProjUsage(){
-  $('#content').innerHTML='<div class="empty"><span class="spin"></span> Crunching…</div>';
+  const nav=paintNow('<div class="empty"><span class="spin"></span> Crunching…</div>');
   const d=await api('/api/usage/project?'+qs(C()));
   const ss=d.sessions||[],spend=ss.reduce((a,r)=>a+(r.cost||0),0);
   const rows=(d.sessions||[]).map(r=>`
     <tr><td>${esc(r.age)}</td><td>${esc(r.name)} ${r.account&&r.account!=='default'?`<span class="tag">${esc(r.account)}</span>`:''}</td>
     <td class="num">${r.msgs}</td><td class="num">${r.usage.in}</td>
     <td class="num">${r.usage.out}</td><td class="num">${r.exact?'':'~'}$${r.cost.toFixed(2)}</td></tr>`).join('');
-  $('#content').innerHTML=`<div class="card"><h3>Per-session usage</h3>
-    <table class="tbl"><tr><th>age</th><th>session</th><th>msgs</th><th>in</th><th>out</th><th>est.$</th></tr>${rows}</table></div>`;
+  paint(nav,`<div class="card"><h3>Per-session usage</h3>
+    <table class="tbl"><tr><th>age</th><th>session</th><th>msgs</th><th>in</th><th>out</th><th>est.$</th></tr>${rows}</table></div>`);
 }
 
 /* tools tab */
 function drawTools(){
-  $('#content').innerHTML=`
+  paintNow(`
     <div class="card"><h3>${ic('inject')} New chat with injected context</h3>
       <p style="color:var(--dim);font-size:13px;margin-bottom:10px">Start a new session seeded with another session's transcript — from any account, into any account.</p>
       <button class="btn" onclick="injectFlow()">Choose source session…</button></div>
@@ -1504,7 +1660,7 @@ function drawTools(){
       <p style="color:var(--dim);font-size:13px;margin-bottom:10px">Extra working directories passed as <code>--add-dir</code> on every launch.</p>
       <div id="xdirs"></div>
       <div class="mrow"><button class="btn sm" onclick="dirAdd('xdirs')">${ic('add')} Add directory</button>
-        <button class="btn pri sm" onclick="saveDirs()">Save</button></div></div>`;
+        <button class="btn pri sm" onclick="saveDirs()">Save</button></div></div>`);
   drawAgentPicker();
   api('/api/extra-paths?'+qs(C())).then(d=>dirRows('xpaths',d.paths||[]));
   api('/api/add-dirs?'+qs(C())).then(d=>dirRows('xdirs',d.dirs||[]));
@@ -1675,7 +1831,7 @@ function peRenderStatus(){
 }
 function drawPlanExec(){
   const o=ST.options;
-  $('#content').innerHTML=`
+  paintNow(`
     <div id="peStatus" style="display:none;margin-bottom:14px"></div>
     <div class="card"><h3>${ic('map')} Plan → Execute <span class="sp"></span>
       ${INST.html('eq','planexec',{fmt:'int',sub:'steps'})}</h3>
@@ -1716,7 +1872,7 @@ function drawPlanExec(){
         <li>A real interactive <code>claude</code> session opens in a new console, pointed at the plan file — with this project's usual agents, skills, system prompt, and add-dirs already in place.</li>
         <li>Executing via OmniRoute: it auto-starts in the background if it isn't already running (no terminal to babysit), and on <i>Auto</i> it picks the best free model per request, falling back automatically if one is rate-limited or exhausted.</li>
         <li>Model council (optional): the draft plan is critiqued by a small set of other models, then merged into one improved plan before you see it for approval.</li>
-      </ol></div>`;
+      </ol></div>`);
   chipsFill($('#pePlan'),o.models,o.model_labels,ST.plan_model||'');
   chipsFill($('#peEff'),o.efforts,null,'xhigh');
   $('#peVia').querySelectorAll('.chip').forEach(c=>c.onclick=()=>{
@@ -1898,12 +2054,14 @@ async function drawPage(id){
   $('#ttl').textContent=({usage:'Usage',searchp:'Search all sessions',mcp:'MCP servers',
     agents:'Agents',skills:'Skills',hooks:'Hooks',accounts:'Accounts',settings:'Settings',helpp:'Help'})[id]||id;
   $('#tpath').textContent='';
-  $('#content').innerHTML='<div class="empty"><span class="spin"></span> Loading…</div>';
+  // the token is taken BEFORE the fetches start; each page function drops its
+  // write if navigation moved on while it was waiting
+  const nav=paintNow(LOADING);
   await ({usage:pgUsage,searchp:pgSearch,mcp:pgMcp,agents:pgAgents,skills:pgSkills,
-          hooks:pgHooks,accounts:pgAccounts,settings:pgSettings,helpp:pgHelp}[id])();
+          hooks:pgHooks,accounts:pgAccounts,settings:pgSettings,helpp:pgHelp}[id])(nav);
 }
 
-async function pgUsage(){
+async function pgUsage(nav){
   const [plan,daily,projects]=await Promise.all([
     api('/api/usage/plan'),api('/api/usage/daily?days=14'),api('/api/usage/projects')]);
   const planRows=(plan.accounts||[]).map(a=>{
@@ -1928,24 +2086,27 @@ async function pgUsage(){
     <td class="num">${p.usage.in}</td><td class="num">${p.usage.out}</td>
     <td class="num">${p.exact?'':'~'}$${p.cost.toFixed(2)}</td></tr>`).join('');
   const total=(projects.projects||[]).reduce((a,p)=>a+p.cost,0);
-  $('#content').innerHTML=`
+  if(!paint(nav,`
     <div class="card"><h3>Plan usage by account</h3>${planRows||'<div style="color:var(--dim)">checking…</div>'}</div>
     <div class="card"><h3>Daily tokens (14 days)</h3>
       ${INST.html('spark','daily',{fmt:'tok',unit:'peak day'})}
       ${dRows}</div>
     <div class="card"><h3>Per-project — total est. $${total.toFixed(2)}</h3>
-      <table class="tbl"><tr><th>project</th><th>sess</th><th>msgs</th><th>in</th><th>out</th><th>est.$</th></tr>${pRows}</table></div>`;
+      <table class="tbl"><tr><th>project</th><th>sess</th><th>msgs</th><th>in</th><th>out</th><th>est.$</th></tr>${pRows}</table></div>`))return;
   const days=(daily.days||[]).map(d=>d.tokens||0);
   INST.set('daily',{series:days});
   setRead('daily',Math.max(0,...days));
 }
 
 let SIDX=null;
-async function pgSearch(){
-  $('#content').innerHTML=`<div class="card"><h3>${ic('search')} Search every session</h3>
+async function pgSearch(nav){
+  // this one paints its shell BEFORE the fetch so the input is focusable
+  // immediately; the guard still matters for everything after the await
+  if(!paint(nav,`<div class="card"><h3>${ic('search')} Search every session</h3>
     <div class="fld"><input id="gq" placeholder="Type to search names, titles, previews…"></div>
-    <div id="gres" style="margin-top:10px"></div></div>`;
+    <div id="gres" style="margin-top:10px"></div></div>`))return;
   if(!SIDX){const d=await api('/api/search-index');SIDX=d.rows||[];}
+  if(nav!==NAV_ID)return;
   const draw=()=>{
     const q=($('#gq').value||'').toLowerCase().trim();
     const m=q?SIDX.filter(r=>q.split(/\s+/).every(w=>r.haystack.includes(w))):SIDX;
@@ -1965,10 +2126,10 @@ function gResume(i){const r=window._gmatch[i];
   askLaunch({title:'Resume — '+r.display,sub:r.project,isNew:false,
     path:r.path,enc:r.enc,choice:'resume:'+r.sid,cfgdir:r.cfgdir});}
 
-async function pgMcp(){
+async function pgMcp(nav){
   const d=await api('/api/mcp');
   const srv=d.servers||[],up=srv.filter(x=>x.status==='ok').length;
-  $('#content').innerHTML=`<div class="card"><h3>MCP servers <span class="sp"></span>
+  if(!paint(nav,`<div class="card"><h3>MCP servers <span class="sp"></span>
     <button class="btn sm" onclick="mcpAdd()">${ic('add')} Add server</button></h3>
     ${srv.length?`<div class="pghd">
       ${INST.html('ring','mcp',{fmt:'ratio',unit:'/–',sub:'up',label:'reachable'})}
@@ -1981,7 +2142,7 @@ async function pgMcp(){
       <span style="color:${s.status==='ok'?'var(--ok)':'var(--warn)'}">${ic(s.status==='ok'?'check':'help')}</span><b style="flex:1">${esc(s.name)}</b>
       <button class="btn sm" onclick="inlineJob('#jban','mcp_analyze',{name:'${esc(s.name)}'},{label:'Analyzing MCP ${esc(s.name)}',onDone:()=>toast('Tool docs written to global CLAUDE.md','ok')})">${ic('search')} Analyze tools</button>
       <button class="btn sm danger" onclick="mcpRemove('${esc(s.name)}')">Remove</button>
-    </div>`).join('')||'<div style="color:var(--dim)">No MCP servers configured.</div>'}</div>`;
+    </div>`).join('')||'<div style="color:var(--dim)">No MCP servers configured.</div>'}</div>`))return;
   if(srv.length){
     INST.set('mcp',{v:up/srv.length,tone:up===srv.length?'ok':up?'warn':'err'});
     setRead('mcp',up);
@@ -2006,7 +2167,7 @@ async function mcpRemove(name){
   toast(r.ok?'Removed':'Failed: '+(r.error||''),r.ok?'ok':'err');drawPage('mcp');
 }
 
-async function pgAgents(){
+async function pgAgents(nav){
   const d=await api('/api/agents/library');
   const own=(d.own||[]).map(a=>`
     <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
@@ -2023,13 +2184,12 @@ async function pgAgents(){
       <span style="flex:1;color:var(--dim);font-size:12px">${esc(a.desc)}</span>
       <button class="btn sm" onclick='agView(${JSON.stringify(a.path)})'>view</button></div>`).join('')}
     </details>`).join('');
-  $('#content').innerHTML=`
+  paint(nav,`
     <div class="card"><h3>My agents <span class="sp"></span>
       <button class="btn sm" onclick="agNew()">${ic('add')} New agent</button>
       <button class="btn sm" onclick="agAI()">${ic('ai')} AI-generate</button></h3>
       ${own||'<div style="color:var(--dim)">No user/project agents yet.</div>'}</div>
-    <div class="card"><h3>Agent library</h3>${lib||'<div style="color:var(--dim)">Library is empty.</div>'}</div>`;
-  const cats=d.categories||[],libN=cats.reduce((a,c)=>a+(c.agents||[]).length,0);
+    <div class="card"><h3>Agent library</h3>${lib||'<div style="color:var(--dim)">Library is empty.</div>'}</div>`);
 }
 async function agView(path){
   const d=await api('/api/agents/read?file='+encodeURIComponent(path));
@@ -2062,7 +2222,7 @@ async function agDel(path){
 }
 
 /* ── Skills ── */
-async function pgSkills(){
+async function pgSkills(nav){
   const path=CUR?CUR.path:'';
   const d=await api('/api/skills'+(path?'?'+qs({path}):''));
   const proj=(d.project||[]).map(s=>`
@@ -2079,7 +2239,7 @@ async function pgSkills(){
       <span style="flex:1;color:var(--dim);font-size:12px">${esc(s.desc)}</span>
       <button class="btn sm" onclick='skView(${JSON.stringify(s.dir)})'>view</button>
       ${path?`<button class="btn sm pri" onclick='skInstall(${JSON.stringify(s.dir)})'>install</button>`:''}</div>`).join('');
-  $('#content').innerHTML=`
+  paint(nav,`
     <div class="card"><h3>Project skills <span class="sp"></span>
       <button class="btn sm" onclick="skNew()">${ic('add')} New skill</button>
       <button class="btn sm" onclick="skAI()">${ic('ai')} AI-generate</button></h3>
@@ -2095,8 +2255,7 @@ async function pgSkills(){
         execution to worker/verifier subagents. If a free execute model is set under Settings, its agents'
         <code>model:</code> pin is rewritten to that model automatically.</p>
       <div class="fld"><input id="skGitUrl" value="https://github.com/olsenbrands/fable-foreman"></div>
-      <div class="mrow"><button class="btn pri sm" onclick="skGitInstall()">${ic('download')} Clone &amp; install</button></div></div>`;
-  const pr=d.project||[],tp=d.templates||[];
+      <div class="mrow"><button class="btn pri sm" onclick="skGitInstall()">${ic('download')} Clone &amp; install</button></div></div>`);
 }
 function skGitInstall(){
   const url=($('#skGitUrl').value||'').trim();
@@ -2139,7 +2298,7 @@ async function skAI(){
     {label:'Generating skill',onDone:()=>drawPage('skills')});
 }
 
-async function pgHooks(){
+async function pgHooks(nav){
   const d=await api('/api/hooks');
   const active=(d.hooks||[]).map(h=>`
     <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
@@ -2153,14 +2312,12 @@ async function pgHooks(){
       <span style="flex:1;color:var(--dim);font-size:12px">${esc(t.desc)}</span>
       ${t.installed?`<span class="tag ok">${ic('check')} installed</span>`
         :`<button class="btn sm" onclick='hookAdd(${JSON.stringify(t.key)})'>${ic('add')} Install</button>`}</div>`).join('');
-  $('#content').innerHTML=`
+  paint(nav,`
     <div class="card"><h3>Active hooks <span class="sp"></span>
       <button class="btn sm" onclick="hookPurge()">${ic('del')} Purge broken</button>
       <button class="btn sm" onclick="hookAI()">${ic('ai')} AI-generate</button></h3>
       ${active||'<div style="color:var(--dim)">No hooks installed.</div>'}</div>
-    <div class="card"><h3>Templates</h3>${tmpl}</div>`;
-  const ev={};for(const h of (d.hooks||[]))ev[h.event]=(ev[h.event]||0)+1;
-  const tp=d.templates||[],ins=tp.filter(t=>t.installed).length;
+    <div class="card"><h3>Templates</h3>${tmpl}</div>`);
 }
 async function hookAdd(key){const r=await post('/api/hooks/template',{key});
   toast(r.ok?'Hook installed':'Failed','ok');drawPage('hooks');}
@@ -2176,7 +2333,7 @@ async function hookAI(){
     {label:'Generating hook',onDone:()=>drawPage('hooks')});
 }
 
-async function pgAccounts(){
+async function pgAccounts(nav){
   // /api/usage/plan is server-cached, so pairing it with the account list costs
   // nothing and lets every row carry its own quota ring instead of sending you
   // to the dashboard to find out which account is the one that's nearly full
@@ -2189,7 +2346,7 @@ async function pgAccounts(){
     const wins=(a.windows||[]).map(w=>(w.pct||0)/100);
     return wins.length?Math.max(...wins):null;
   };
-  $('#content').innerHTML=`<div class="card"><h3>Claude accounts <span class="sp"></span>
+  if(!paint(nav,`<div class="card"><h3>Claude accounts <span class="sp"></span>
     <button class="btn sm" onclick="acctAdd()">${ic('add')} Add account</button></h3>
     ${(d.accounts||[]).map(a=>{
       const q=quotaOf(a.name);
@@ -2205,7 +2362,7 @@ async function pgAccounts(){
         ${a.name!=='default'?`
           <button class="btn sm" onclick='acctRename(${JSON.stringify(a.name)})'>Rename</button>
           <button class="btn sm danger" onclick='acctAct("remove",${JSON.stringify(a.name)})'>${ic('del')}</button>`:''}
-      </div>`;}).join('')}</div>`;
+      </div>`;}).join('')}</div>`))return;
   for(const a of (d.accounts||[])){
     const q=quotaOf(a.name);
     if(q==null)continue;
@@ -2245,9 +2402,9 @@ async function acctTerm(name,dir){
   toast(r.ok?`Terminal opened as '${name}' — use /login if needed`:'Failed','ok');
 }
 
-async function pgHelp(){
+async function pgHelp(nav){
   const row=(where,what)=>`<tr><td style="white-space:nowrap;color:var(--cyan)">${where}</td><td>${what}</td></tr>`;
-  $('#content').innerHTML=`
+  paint(nav,`
     <div class="card"><h3>${ic('help')} Where everything lives</h3>
     <table class="tbl"><tr><th>place</th><th>what you can do</th></tr>
     ${row('Sidebar','Filter and open projects; global pages below; TUI/GUI default toggle')}
@@ -2275,23 +2432,29 @@ async function pgHelp(){
     ${row('Equalizer','Live activity. The only gauge that keeps moving with a steady input, because "work is happening" is itself continuous. Flat means idle.')}
     ${row('Flow map','The workspace: one node per project, size by tokens, colour by account, dashed links where two projects share an account.')}
     </table>
-    <p style="color:var(--dim2);font-size:12px;margin-top:10px">Motion elsewhere is transitional: numbers count to their new value, rows slide when they reorder, and a travelling border marks a job that is still running. <b>Settings → Appearance → Motion</b> sets how much of that you get; your OS "reduce motion" preference always wins.</p></div>`;
+    <p style="color:var(--dim2);font-size:12px;margin-top:10px">Motion elsewhere is transitional: numbers count to their new value, rows slide when they reorder, and a travelling border marks a job that is still running. <b>Settings → Appearance → Motion</b> sets how much of that you get; your OS "reduce motion" preference always wins.</p></div>`);
 }
 
-async function pgSettings(){
+async function pgSettings(nav){
   const o=ST.options;
-  $('#content').innerHTML=`<div class="card"><h3>Defaults</h3>
+  if(!paint(nav,`<div class="card"><h3>Defaults</h3>
     ${fld('sEff','Effort')}${fld('sMod','Model')}${fld('sPerm','Permission mode')}
     ${fld('sThink','Thinking cap')}${fld('sSub','Subagent model')}
     ${fld('sShell','GUI window')}
     <div class="chips" id="sTheme" style="display:none"></div>
     <div class="mrow"><button class="btn pri" onclick="setSave()">Save</button></div></div>
   <div class="card"><h3>${ic('palette')} Appearance</h3>
-    <p style="color:var(--dim);font-size:13px;margin-bottom:10px">Themes apply and save the moment you pick one — hover to preview, click to keep. Each palette also carries a motion <i>personality</i> (how far things travel, how much they glow), so Mono stays terse and Dracula does not.</p>
-    <div class="thgal" id="thGallery"></div>
-    <div class="fld" style="margin-top:16px"><label>Skin — the shape of the app, independent of its colours</label>
-      <div class="skgal" id="thSkin"></div>
-      <div class="monote" id="skNote"></div></div>
+    <div class="fld"><label>World — a complete look, locked</label>
+      <p style="color:var(--dim);font-size:13px;margin:0 0 8px">A world owns everything at once: its own palette, shape, icons, background, overlay and hover behaviour. Nothing in it can be mixed with anything else — that is the point, and it is why these can go much further than a skin that has to survive 32 different palettes.</p>
+      <div class="wgal" id="thWorld"></div>
+      <div class="monote" id="wNote"></div></div>
+    <div id="classicBlock">
+      <p style="color:var(--dim);font-size:13px;margin-bottom:10px">Or build your own: a palette for the colours, a skin for the shape. Click a card to apply and save it. Each palette also carries a motion <i>personality</i> (how far things travel, how much they glow), so Mono stays terse and Dracula does not.</p>
+      <div class="thgal" id="thGallery"></div>
+      <div class="fld" style="margin-top:16px"><label>Skin — the shape of the app, independent of its colours</label>
+        <div class="skgal" id="thSkin"></div>
+        <div class="monote" id="skNote"></div></div>
+    </div>
     <div class="fld" style="margin-top:14px"><label>Motion</label>
       <div class="chips" id="sMotion"></div>
       <div style="color:var(--dim2);font-size:12px;margin-top:6px">
@@ -2299,6 +2462,12 @@ async function pgSettings(){
         <b>subtle</b>: only the motion that carries information — value tweens, meter fills, page changes ·
         <b>off</b>: nothing moves.<br>
         Gauges stop once they reach their value either way, so an idle page renders no frames at all. Your OS <i>reduce motion</i> setting overrides this.</div></div>
+    <div class="fld" style="margin-top:14px"><label>Surface transparency — how much of the background shows through</label>
+      <input type="range" id="sSurf" min="40" max="100" step="2">
+      <div class="frontends"><span>See-through</span><span>Solid</span></div>
+      <div class="frontread" id="surfRead"></div>
+      <div style="color:var(--dim2);font-size:12px;margin-top:4px">Applies to every theme. Each look proposes its own value — drag to override it everywhere, or
+        <a href="#" id="surfReset" style="color:var(--cyan)">use each theme's default</a>.</div></div>
     <div class="fld" style="margin-top:14px"><label>Background</label>
       <div class="chips" id="sStage"></div>
       <div class="monote" id="stgNote"></div>
@@ -2374,7 +2543,7 @@ async function pgSettings(){
   <div class="card"><h3>${ic('refresh')} Auto-memory <span class="sp"></span>
     <span class="fld" style="margin:0"><select id="amInt" onchange="amSaveInterval(this.value)" style="width:auto"></select></span></h3>
     <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Projects checked below have their memory refreshed in the background — on GUI start and on the interval — whenever their files change. Only changed projects use Claude; nothing runs while unchanged.</p>
-    <div id="amList"><span class="spin"></span></div></div>`;
+    <div id="amList"><span class="spin"></span></div></div>`))return;
   chipsFill($('#sEff'),o.efforts,null,ST.defaults.effort);
   chipsFill($('#sMod'),o.models,o.model_labels,ST.defaults.model);
   chipsFill($('#sPerm'),o.perms,o.perm_labels,ST.defaults.perm);
@@ -2401,8 +2570,10 @@ async function pgSettings(){
    body/secondary text, and the three state tints. Hover previews live, leaving
    reverts to the saved theme, clicking saves immediately (a theme is a setting
    you judge by looking at it, not one you stage behind a Save button). */
-const FAM_ORDER=['cyan','blue','azure','teal','green','sage','amber','yellow',
-  'orange','red','magenta','purple','violet','rose','neutral','light'];
+// 'oled' leads: a true-black neutral with one accent is what both users landed
+// on unprompted, so it should be the first thing the gallery offers.
+const FAM_ORDER=['oled','neutral','cyan','blue','azure','teal','green','sage',
+  'amber','yellow','orange','red','magenta','purple','violet','rose','light'];
 function themeCardHtml(n,t,cur){
   const sel=n===cur;
   const grad=`linear-gradient(135deg,${t.accent},${t.accent2})`;
@@ -2436,8 +2607,11 @@ function drawSkinPicker(){
   const box=$('#thSkin');if(!box)return;
   const skins=ST.skins||{};
   const cur=skinFor(ST.theme);
-  const t=(ST.themes||{})[ST.theme]||{};
-  box.innerHTML=Object.keys(skins).map(n=>{
+  const t=(ST.themes||{})[themeFor()]||{};
+  // only the CLASSIC skins are offered: a world skin is one part of a bundle
+  // and is meaningless bolted onto an arbitrary palette
+  const names=(ST.classic_skins||Object.keys(skins)).filter(n=>skins[n]);
+  box.innerHTML=names.map(n=>{
     const sk=skins[n];
     const on=n===cur;
     const st=`border-radius:${Math.min(sk.radius,14)}px;border-width:${Math.min(sk.border,3)}px;`
@@ -2456,11 +2630,13 @@ function drawSkinPicker(){
   if(note)note.textContent=(skins[cur]||{}).blurb||'';
   box.querySelectorAll('.skcard').forEach(card=>{
     const n=card.dataset.v;
+    // Blurb on hover, but NOTHING is applied until you click. Hover-to-preview
+    // was both unasked-for and expensive: applySkin/applyTheme reach STAGE,
+    // whose setTheme disposes and rebuilds the entire three.js scene, so
+    // sweeping the pointer across the gallery rebuilt one scene per card.
     card.addEventListener('mouseenter',()=>{
-      applySkin(n||skinFor(ST.theme));
       if(note)note.textContent=(skins[n||skinFor(ST.theme)]||{}).blurb||'';});
     card.addEventListener('mouseleave',()=>{
-      applySkin(skinFor(ST.theme));
       if(note)note.textContent=(skins[skinFor(ST.theme)]||{}).blurb||'';});
     card.addEventListener('click',async()=>{
       ST.skin=n;
@@ -2472,26 +2648,74 @@ function drawSkinPicker(){
     });
   });
 }
+/* ── world picker ──
+   Above the palette gallery, because it is the bigger decision: picking a world
+   turns the other two pickers off. Click to apply — no hover preview anywhere
+   in Appearance any more. */
+function drawWorldPicker(){
+  const box=$('#thWorld');if(!box)return;
+  const worlds=ST.worlds||{};
+  const note=$('#wNote');
+  const card=(n,w)=>{
+    const p=(ST.themes||{})[w?w.palette:'']||{};
+    const on=ST.world===n;
+    const grad=`linear-gradient(135deg,${p.accent||'var(--dim2)'},${p.accent2||'var(--dim)'})`;
+    return `<div class="wcard${on?' on':''}" data-v="${esc(n)}" title="${esc(w?w.blurb:'')}">
+      <div class="wmock wm-${esc(n)}" style="background:${p.bg||'var(--panel)'};
+        border-color:${p.line||'var(--line)'}">
+        <i style="background:${grad}"></i>
+        <s style="background:${p.txt||'var(--txt)'}"></s>
+        <s style="background:${p.dim||'var(--dim)'};width:54%"></s></div>
+      <div class="wname">${esc(w?w.label:'Classic')}</div></div>`;
+  };
+  box.innerHTML=Object.keys(worlds).map(n=>card(n,worlds[n])).join('')
+    +`<div class="wcard${ST.world?'':' on'}" data-v="" title="Build your own from a palette and a skin">
+        <div class="wmock wm-none"><i></i><s></s><s style="width:54%"></s></div>
+        <div class="wname">Classic</div></div>`;
+  if(note)note.textContent=(worlds[ST.world]||{}).blurb
+    ||'Classic: pick a palette and a skin yourself.';
+  box.querySelectorAll('.wcard').forEach(c=>{
+    const n=c.dataset.v;
+    c.addEventListener('mouseenter',()=>{if(note)note.textContent=
+      (worlds[n]||{}).blurb||'Classic: pick a palette and a skin yourself.';});
+    c.addEventListener('click',async()=>{
+      ST.world=n;
+      localStorage.setItem('ctl_world',n);
+      applyTheme(ST.theme);
+      drawWorldPicker();drawThemeGallery();
+      MO.burst($('#content'));
+      await post('/api/settings',{world:n});
+    });
+  });
+  // a world locks the classic pickers: it is all or nothing
+  const cb=$('#classicBlock');
+  if(cb){cb.classList.toggle('locked',!!ST.world);
+    cb.setAttribute('aria-disabled',ST.world?'true':'false');}
+}
 function drawThemeGallery(){
-  const cur=ST.theme||'default';
+  const cur=themeFor();
   // hidden chips keep chipVal($('#sTheme')) working for setSave(). Filled
   // FIRST: an empty #sTheme would make Save post theme:'' and silently reset
   // the user to the default palette.
   const h=$('#sTheme');
   if(h)h.innerHTML=`<span class="chip on" data-v="${esc(cur)}"></span>`;
   const box=$('#thGallery');if(!box)return;
-  const names=Object.keys(ST.themes||{});
+  // hidden palettes stay loadable (a saved settings.json may name one) but are
+  // not offered — see HIDDEN_PALETTES in themes.py. The one you are currently
+  // wearing is always shown, or selecting it would look like it vanished.
+  const names=Object.keys(ST.themes||{}).filter(n=>!ST.themes[n].hidden||n===cur);
   names.sort((a,b)=>{
     const fa=FAM_ORDER.indexOf(ST.themes[a].family),fb=FAM_ORDER.indexOf(ST.themes[b].family);
     return fa-fb||a.localeCompare(b);
   });
   box.innerHTML=names.map(n=>themeCardHtml(n,ST.themes[n],cur)).join('');
+  // Click to select. No hover preview — see the note in drawSkinPicker: it
+  // rebuilt a whole three.js scene per card the pointer crossed, and it was not
+  // wanted anyway ("devo cliccare su un tema per selezionarlo").
   box.querySelectorAll('.thcard').forEach(card=>{
-    const n=card.dataset.v;
-    card.addEventListener('mouseenter',()=>applyTheme(n));
-    card.addEventListener('mouseleave',()=>applyTheme(ST.theme));
-    card.addEventListener('click',()=>themePick(n));
+    card.addEventListener('click',()=>themePick(card.dataset.v));
   });
+  drawWorldPicker();
   drawSkinPicker();
   chipsFill($('#sMotion'),['full','subtle','off'],null,ST.motion||'full');
   const mb=$('#sMotion');
@@ -2518,6 +2742,23 @@ function drawThemeGallery(){
     const n=$('#stgNote');if(n)n.textContent=STAGE_NOTE[ST.stage]||'';
   }));
   const sn=$('#stgNote');if(sn)sn.textContent=STAGE_NOTE[ST.stage||'cinematic']||'';
+  drawSurfaceSlider();
+}
+/* Surface transparency. Live on input (you judge this by looking at it, not by
+   saving it) and persisted on release, so dragging does not fire a POST per
+   pixel. 0 in storage means "whatever the look asks for". */
+function drawSurfaceSlider(){
+  const el=$('#sSurf');if(!el)return;
+  const skOp=(curSkin().op!=null?curSkin().op:1);
+  const show=v=>{const r=$('#surfRead');
+    if(r)r.textContent=ST.surface?`${v}% opaque`:`${Math.round(skOp*100)}% opaque — this theme's default`;};
+  el.value=String(ST.surface||Math.round(skOp*100));
+  show(el.value);
+  el.oninput=()=>{ST.surface=+el.value;applySkin(skinFor(ST.theme));show(el.value);};
+  el.onchange=()=>post('/api/settings',{surface:+el.value});
+  const rs=$('#surfReset');
+  if(rs)rs.onclick=e=>{e.preventDefault();ST.surface=0;
+    applySkin(skinFor(ST.theme));drawSurfaceSlider();post('/api/settings',{surface:0});};
 }
 const STAGE_NOTE={
   cinematic:'Full scene with bloom. Each skin brings its own — a wireframe horizon, a petal field, a neon flythrough.',
@@ -3148,12 +3389,14 @@ function startHeartbeat(){if(!HB_TIMER){heartbeat();HB_TIMER=setInterval(heartbe
   if(lsSk!==null)ST.skin=lsSk;
   const lsStg=localStorage.getItem('ctl_stage');
   if(lsStg)ST.stage=lsStg;
+  const lsW=localStorage.getItem('ctl_world');
+  if(lsW!==null&&(lsW===''||(ST.worlds||{})[lsW]))ST.world=lsW;
   MO.set(ST.motion||'full');
   // Tell the stage its tier BEFORE applyTheme, which hands it the palette and
   // skin. The vendor bundle is deferred, so boot() may not have happened yet —
   // STAGE holds the settings and mounts when `vendor-ready` fires.
   if(window.STAGE){
-    STAGE.tier=ST.stage||'cinematic';
+    STAGE.tier=ST.stage||'lite';
     if(STAGE.tier==='off'||!MO.on)STAGE._static();
   }
   applyTheme(ST.theme);segDraw();

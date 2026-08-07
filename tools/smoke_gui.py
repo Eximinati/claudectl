@@ -24,6 +24,7 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from claude_sessions import gui                       # noqa: E402
 from claude_sessions.gui_html import PAGE, vendor_asset  # noqa: E402
+from claude_sessions import themes as _TH        # noqa: E402
 
 PORT = 8793
 
@@ -47,8 +48,10 @@ STATE = {
     'ui_mode': 'gui', 'gui_shell': 'auto', 'theme': 'neon', 'motion': 'full',
     'stage': 'cinematic',
     'themes': gui.theme_palettes(), 'skin': '',
-    'skins': {n: dict(v) for n, v in __import__(
-        'claude_sessions.themes', fromlist=['x']).SKINS.items()},
+    'skins': {n: dict(v) for n, v in _TH.SKINS.items()},
+    'worlds': {n: dict(v) for n, v in _TH.WORLDS.items()},
+    'classic_skins': list(_TH.CLASSIC_SKINS),
+    'world': '',
     'plan_model': '', 'exec_model': '', 'extract_model': '',
     'omniroute_base_url': '', 'omniroute_has_key': False,
     'omniroute_exec_model': '', 'failover_models': [], 'failover_port': 20129,
@@ -209,13 +212,29 @@ def main():
               pg.evaluate("getComputedStyle(document.body,'::before').opacity") == '0')
         # a scene per skin, each one actually building
         bad = pg.evaluate("""(()=>{const out=[];
-          for(const n of Object.keys(ST.skins||{})){
+          const S=ST.skins||{};
+          for(const n of Object.keys(ST.worlds||{})){
+            try{ST.world=n;applyTheme(ST.theme);
+              const want=S[ST.worlds[n].skin].stage;
+              if(!STAGE.ok)out.push(n+':dead');
+              else if(STAGE.scene!==want)out.push(n+':'+STAGE.scene);
+              else if(!document.documentElement.classList.contains('world-'+n))out.push(n+':no class');
+            }catch(e){out.push(n+':'+e.message);}}
+          ST.world='';
+          for(const n of (ST.classic_skins||[])){
             try{ST.skin=n;applyTheme(ST.theme);
               if(!STAGE.ok)out.push(n+':dead');
-              else if(STAGE.scene!==ST.skins[n].stage)out.push(n+':'+STAGE.scene);
+              else if(STAGE.scene!==S[n].stage)out.push(n+':'+STAGE.scene);
             }catch(e){out.push(n+':'+e.message);}}
           ST.skin='';applyTheme(ST.theme);return out;})()""")
-        check('every skin builds its own scene', bad == [], bad)
+        # A scene object can construct fine while its shader fails to compile —
+        # three logs that to the console and renders nothing. Counting console
+        # errors across the loop is what actually catches an undeclared uniform.
+        pg.wait_for_timeout(400)
+        shader = [t for t in errs if 'Shader Error' in t[1] or 'not compiled' in t[1]]
+        check('every world and skin builds its own scene', bad == [], bad)
+        check('and every shader compiles', not shader,
+              shader[0][1].split(chr(10))[0] if shader else '')
 
         print('\n— …and it is driven by state, not free-running —')
         # The whole justification for bringing a background back. String matching
@@ -345,8 +364,13 @@ def main():
         # stop the 10s dashboard poll first: it can wake the frame loop mid-check
         # and make a perfectly-parked burst look like a leak
         pg.evaluate("stopDashboard()")
-        for sk in pg.evaluate("Object.keys(ST.skins||{})"):
-            pg.evaluate(f"ST.skin='{sk}';applyTheme(ST.theme)")
+        looks = ([('world', w) for w in pg.evaluate("Object.keys(ST.worlds||{})")]
+                 + [('skin', k) for k in pg.evaluate("ST.classic_skins||[]")])
+        for kind, sk in looks:
+            if kind == 'world':
+                pg.evaluate(f"ST.world='{sk}';applyTheme(ST.theme)")
+            else:
+                pg.evaluate(f"ST.world='';ST.skin='{sk}';applyTheme(ST.theme)")
             pg.wait_for_timeout(350)
             pg.evaluate("MO.burst(document.querySelector('.d-continue'))")
             pg.wait_for_timeout(100)
@@ -367,7 +391,7 @@ def main():
         pg.wait_for_timeout(150)
         check('no burst at motion=subtle',
               pg.evaluate("document.querySelectorAll('.burst').length") == 0)
-        pg.evaluate("MO.set('full');ST.skin='';applyTheme(ST.theme);startDashboard()")
+        pg.evaluate("MO.set('full');ST.world='';ST.skin='';applyTheme(ST.theme);startDashboard()")
 
         print('\n— narrow window —')
         pg.set_viewport_size({'width': 700, 'height': 900})
@@ -389,6 +413,33 @@ def main():
             }catch(e){out.push(n+':'+e.message);}}
           return out;})()""")
         check('all palettes apply with a personality', bad == [], bad)
+
+        print(chr(10) + '— shader attributes —')
+        # A vertex shader can declare `attribute float li` while the geometry
+        # never sets it: WebGL reads 0 for every vertex, nothing errors, and the
+        # object silently collapses. That is how the graph's connecting lines
+        # disappeared — every segment pinned to node 0, so zero length. Compare
+        # what each shader asks for against what its geometry actually has.
+        missing = pg.evaluate("""(()=>{
+          const out=[];
+          for(const w of Object.keys(ST.worlds||{})){
+            ST.world=w; applyTheme(ST.theme);
+            if(!STAGE._sc) continue;
+            STAGE._sc.scene.traverse(o=>{
+              if(!o.material||!o.material.vertexShader||!o.geometry)return;
+              const want=[...o.material.vertexShader.matchAll(
+                /^\s*attribute\s+\w+\s+(\w+)\s*;/gm)].map(m=>m[1]);
+              const have=Object.keys(o.geometry.attributes);
+              const builtin=['position','normal','uv','color'];
+              for(const a of want)
+                if(!have.includes(a)&&!builtin.includes(a))
+                  out.push(w+':'+o.type+':'+a);
+            });
+          }
+          ST.world=''; applyTheme(ST.theme); return out;})()""")
+        check('no shader reads an attribute its geometry never set',
+              missing == [], missing)
+
         br.close()
     srv.shutdown()
 

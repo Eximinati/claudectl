@@ -121,8 +121,41 @@ def test_long_jobs_back_off():
     assert 'J.elapsed>60?4000' in PAGE
 
 
-def test_stale_draw_is_discarded():
-    assert 'let NAV_ID=0' in PAGE and 'if(myNav!==NAV_ID)return' in PAGE
+def test_no_page_can_paint_over_the_one_you_are_on():
+    """A slow renderer must not overwrite the page you navigated to.
+
+    This used to assert one renderer's local variable name, which is exactly why
+    it kept passing while the bug was live: NAV_ID existed from the start and
+    exactly ONE of fifteen async renderers remembered to check it, so a slow page
+    landed on top of whatever you had moved to —
+
+        "la pagina MCP ci mette un po' a caricare… quando si carica sovrascrive
+         la pagina su cui stai davvero. Ero in settings ma con la schermata di MCP."
+
+    A convention living in fifteen call sites is not a guarantee. The guard is
+    now inside the only two functions allowed to touch #content, and what this
+    test pins is that no sixteenth renderer can go around them."""
+    assert 'let NAV_ID=0' in PAGE
+    assert 'function paint(nav,html)' in PAGE
+    assert 'if(nav!==NAV_ID)return false;' in PAGE
+    # every write must be one of the two helpers, and nothing else
+    writes = re.findall(r"\$\('#content'\)\.innerHTML\s*=", PAGE)
+    assert len(writes) == 2, f'{len(writes)} direct #content writes — must go through paint()'
+    # and the router has to take its token before it starts fetching
+    assert 'const nav=paintNow(LOADING);' in PAGE
+    assert '}[id])(nav);' in PAGE, 'drawPage does not thread the nav token'
+
+
+def test_the_theme_gallery_does_not_apply_on_hover():
+    """Click to select. Hover-preview was unwanted, and expensive with it:
+    applyTheme reaches STAGE.setTheme, which disposes and rebuilds the whole
+    three.js scene — so sweeping the pointer across the gallery rebuilt one
+    scene per card it crossed."""
+    for dead in ("card.addEventListener('mouseenter',()=>applyTheme(n))",
+                 "card.addEventListener('mouseleave',()=>applyTheme(ST.theme))",
+                 'applySkin(n||skinFor(ST.theme));'):
+        assert dead not in PAGE, dead
+    assert "card.addEventListener('click',()=>themePick(card.dataset.v));" in PAGE
 
 
 def test_esc_escapes_quotes_without_dom():
@@ -245,14 +278,17 @@ def test_no_frame_throttling_steps():
     keyframe is transform/opacity now, so the compositor owns them and stepping
     buys nothing.
 
-    steps() as a deliberate aesthetic still stands: the CRT caret must snap rather
-    than fade (a caret that eases is not a caret) and the Mecha entrance hard-cuts
-    on purpose. Those are design, not throttling."""
+    steps() as a deliberate aesthetic still stands, and it is a short list: the
+    CRT caret must snap rather than fade (a caret that eases is not a caret), and
+    the Cyberpunk hover must jump between displacements (a glitch that eases is
+    not a glitch). Those are design decisions, not frame-rate workarounds — the
+    difference is that both animate `transform`, so the compositor still owns
+    them and stepping costs nothing."""
     for dead in ('steps(8)', 'steps(20)', 'steps(30)'):
         assert dead not in _CSS, dead
-    # the only stepped CSS animation may be the CRT caret
     stepped = re.findall(r'animation:\s*([\w-]+)[^;}]*steps\(', _CSS)
-    assert set(stepped) <= {'crtcaret'}, f'unexpected stepped animation: {stepped}'
+    assert set(stepped) <= {'crtcaret', 'cyglitch'}, \
+        f'unexpected stepped animation: {stepped}'
 
 
 def test_custom_property_animation_is_feature_detected():

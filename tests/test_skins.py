@@ -70,8 +70,13 @@ def test_skin_css_comes_last():
 
 
 def test_no_skin_reintroduces_a_readback_layer():
-    """Glass is the obvious temptation: real glassmorphism wants backdrop-filter,
-    the exact property that caused this project's QtWebEngine tearing."""
+    """The temptation moves between looks; the answer does not.
+
+    It used to be Glass wanting real glassmorphism. That skin was thrown out, and
+    the pull is now Cyberpunk wanting a neon bloom — both reach for the same
+    property that caused this project's QtWebEngine tearing. The reasoning has to
+    live somewhere a skin's deletion cannot take it with it, which is why it now
+    sits at the top of the override block rather than inside one look."""
     for dead in ('backdrop-filter', 'filter:blur', 'mix-blend-mode'):
         assert dead not in _CSS, dead
     # and the reasoning has to survive in the source, or someone "fixes" it
@@ -193,9 +198,18 @@ def test_skin_setting_round_trips():
 def test_settings_offers_the_picker():
     assert 'function drawSkinPicker()' in PAGE
     assert 'id="thSkin"' in PAGE
-    # every skin needs a distinguishable mock, or the picker is seven grey boxes
-    for name in SKIN_NAMES:
+    # Only the CLASSIC skins are offered — a world skin is one part of a bundle
+    # and is meaningless bolted onto an arbitrary palette. Worlds get their own
+    # picker above the gallery.
+    from claude_sessions.themes import CLASSIC_SKINS, WORLDS
+    for name in CLASSIC_SKINS:
         assert f'.skm-{name}' in _CSS, f'no picker mock for {name}'
+    assert 'function drawWorldPicker()' in PAGE
+    assert 'id="thWorld"' in PAGE
+    for name in WORLDS:
+        assert f'.wm-{name}' in _CSS or f"data-v=\"${{esc(n)}}\"" in PAGE, name
+    # and picking a world must disable the classic controls
+    assert "cb.classList.toggle('locked',!!ST.world)" in PAGE
 
 
 def test_fonts_stay_offline():

@@ -169,9 +169,15 @@ def state_payload():
         'motion': _motion_level(s),
         # '' = wear whatever skin the selected palette names as its default
         'skin': s.get('skin', ''),
+        # '' = classic mode (palette x skin). A name = that world, locked.
+        'world': s.get('world', '') if s.get('world') in _themes.WORLDS else '',
         'stage': _stage_tier(s),
+        # 0 = follow whatever the look asks for; 40..100 = an explicit override
+        'surface': _surface(s),
         'themes': theme_palettes(),
         'skins': {n: dict(v) for n, v in _themes.SKINS.items()},
+        'worlds': {n: dict(v) for n, v in _themes.WORLDS.items()},
+        'classic_skins': list(_themes.CLASSIC_SKINS),
     }
 
 
@@ -195,6 +201,20 @@ def _motion_level(s):
     return 'full'
 
 
+def _surface(s):
+    """How opaque the panels are, as a percentage — or 0 for "ask the look".
+
+    Every look ships an `op` chosen for its own scene, but how much background
+    you want showing through your working surfaces is a taste question and a
+    per-monitor one, so it is exposed. Clamped at 40: below that the text starts
+    fighting the scene behind it whatever the look says."""
+    try:
+        v = int(s.get('surface') or 0)
+    except (TypeError, ValueError):
+        return 0
+    return 0 if v <= 0 else max(40, min(100, v))
+
+
 def _stage_tier(s):
     """How much of the animated background runs: 'cinematic' | 'lite' | 'off'.
 
@@ -208,7 +228,11 @@ def _stage_tier(s):
     if _motion_level(s) == 'off':
         return 'off'
     t = s.get('stage')
-    return t if t in _themes.STAGE_TIERS else 'cinematic'
+    # Default is `lite`, not `cinematic`. The first cut shipped bloom on by
+    # default and the verdict was "overstimulating, confonde" — both users then
+    # picked the one skin with no background at all. The scene still runs; it
+    # just stops competing with the text. Bloom is opt-in now.
+    return t if t in _themes.STAGE_TIERS else 'lite'
 
 
 def launch_session(path, encoded, choice, opts):
@@ -386,7 +410,8 @@ class _Handler(BaseHTTPRequestHandler):
                       # 'motion' replaced theme_motion/_scope/_bg/_intensity;
                       # the old keys are read for back-compat (_motion_level)
                       # but never written again, so they age out of settings.json
-                      'gui_shell', 'theme', 'motion', 'skin', 'stage',
+                      'gui_shell', 'theme', 'motion', 'skin', 'stage', 'world',
+                      'surface',
                       'editor', 'claude_exe',
                       'plan_model', 'exec_model', 'omniroute_base_url',
                       'omniroute_exec_model', 'failover_port', 'failover_quiet'):

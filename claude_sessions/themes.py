@@ -332,6 +332,109 @@ PALETTES = {
         'line': '#2e2e35', 'txt': '#ededf0', 'dim': '#a8a8b2', 'dim2': '#84848f',
         'code': '#070708',
     },
+    # ── OLED ──
+    # A true-black neutral family, asked for directly:
+    #   "un bel grigio scuro nero profondo che sugli OLED fa la sua figura,
+    #    e colori di accento diversi, rosso verde blu viola arancione"
+    # The point is what they are NOT: every surface here has chroma 0, so there
+    # is no overall tint to fatigue the eye over a long session — the only colour
+    # in the interface is the data and the accent. Slate is the prototype (it was
+    # the one both users settled on, measured chroma 2); these push it to 0 and
+    # vary only the accent pair. On an OLED panel #050505 is genuinely unlit.
+    #
+    # Contrast: every one clears the floors in tests/test_themes.py, and the
+    # accent survives ANSI-256 quantization with its hue intact (the 30%-toward-bg
+    # header mix lands in the colour cube, not the gray ramp) — the trap
+    # documented at the top of this file.
+    'oled-red': {
+        'label': 'OLED Red', 'family': 'oled', 'mode': 'dark', 'motion': 'crisp',
+        'accent': '#ff4d5e', 'accent2': '#ff9f7a', 'ok': '#3ddc84',
+        'warn': '#ffb84d', 'err': '#ff5c6c',
+        'bg': '#050505', 'bg2': '#0b0b0b', 'panel': '#101010', 'panel2': '#191919',
+        'line': '#2a2a2a', 'txt': '#ededed', 'dim': '#a0a0a0', 'dim2': '#7a7a7a',
+        'code': '#000000',
+    },
+    'oled-green': {
+        'label': 'OLED Green', 'family': 'oled', 'mode': 'dark', 'motion': 'crisp',
+        'accent': '#3ddc84', 'accent2': '#9ae66e', 'ok': '#3ddc84',
+        'warn': '#ffb84d', 'err': '#ff5c6c',
+        'bg': '#050505', 'bg2': '#0b0b0b', 'panel': '#101010', 'panel2': '#191919',
+        'line': '#2a2a2a', 'txt': '#ededed', 'dim': '#a0a0a0', 'dim2': '#7a7a7a',
+        'code': '#000000',
+    },
+    'oled-blue': {
+        'label': 'OLED Blue', 'family': 'oled', 'mode': 'dark', 'motion': 'crisp',
+        'accent': '#4d9fff', 'accent2': '#7ad7ff', 'ok': '#3ddc84',
+        'warn': '#ffb84d', 'err': '#ff5c6c',
+        'bg': '#050505', 'bg2': '#0b0b0b', 'panel': '#101010', 'panel2': '#191919',
+        'line': '#2a2a2a', 'txt': '#ededed', 'dim': '#a0a0a0', 'dim2': '#7a7a7a',
+        'code': '#000000',
+    },
+    'oled-violet': {
+        'label': 'OLED Violet', 'family': 'oled', 'mode': 'dark', 'motion': 'crisp',
+        'accent': '#a97bff', 'accent2': '#ff8ad4', 'ok': '#3ddc84',
+        'warn': '#ffb84d', 'err': '#ff5c6c',
+        'bg': '#050505', 'bg2': '#0b0b0b', 'panel': '#101010', 'panel2': '#191919',
+        'line': '#2a2a2a', 'txt': '#ededed', 'dim': '#a0a0a0', 'dim2': '#7a7a7a',
+        'code': '#000000',
+    },
+    'oled-amber': {
+        'label': 'OLED Amber', 'family': 'oled', 'mode': 'dark', 'motion': 'crisp',
+        'accent': '#ffab3d', 'accent2': '#ffd76e', 'ok': '#3ddc84',
+        'warn': '#ffb84d', 'err': '#ff5c6c',
+        'bg': '#050505', 'bg2': '#0b0b0b', 'panel': '#101010', 'panel2': '#191919',
+        'line': '#2a2a2a', 'txt': '#ededed', 'dim': '#a0a0a0', 'dim2': '#7a7a7a',
+        'code': '#000000',
+    },
+    'oled-cyan': {
+        'label': 'OLED Cyan', 'family': 'oled', 'mode': 'dark', 'motion': 'crisp',
+        'accent': '#22e0d6', 'accent2': '#6ee7ff', 'ok': '#3ddc84',
+        'warn': '#ffb84d', 'err': '#ff5c6c',
+        'bg': '#050505', 'bg2': '#0b0b0b', 'panel': '#101010', 'panel2': '#191919',
+        'line': '#2a2a2a', 'txt': '#ededed', 'dim': '#a0a0a0', 'dim2': '#7a7a7a',
+        'code': '#000000',
+    },
+    # ── world palettes ───────────────────────────────────────
+    # Hidden from the gallery (see HIDDEN_PALETTES): these belong to a WORLD and
+    # are worn only as part of it. A world is all-or-nothing, so offering its
+    # colours separately would just be a way to get half of it.
+    'anime': {
+        'label': 'Anime', 'family': 'world', 'mode': 'dark', 'motion': 'lush',
+        'accent': '#ff5fa2', 'accent2': '#5fe0ff', 'ok': '#7df5a0',
+        'warn': '#ffd166', 'err': '#ff6b6b',
+        'bg': '#12101c', 'bg2': '#181428', 'panel': '#1e1a33', 'panel2': '#2a2447',
+        'line': '#3d3663', 'txt': '#ffffff', 'dim': '#c4bde0', 'dim2': '#948cba',
+        'code': '#0d0b16',
+    },
+    # near-black with a blue/purple cast, NOT pure black: the cyberpunk reference
+    # is explicit that a slight tint is what keeps neon-on-dark from fatiguing —
+    # which is the same complaint the background ceiling answers.
+    'cyber': {
+        'label': 'Cyberpunk', 'family': 'world', 'mode': 'dark', 'motion': 'crisp',
+        'accent': '#00fff5', 'accent2': '#ff3df5', 'ok': '#00ff9d',
+        'warn': '#ffc400', 'err': '#ff2d5e',
+        'bg': '#0a0a12', 'bg2': '#0e0e1a', 'panel': '#12121f', 'panel2': '#1a1a2e',
+        'line': '#2a2a45', 'txt': '#e0e0e8', 'dim': '#9d9dba', 'dim2': '#7a7a99',
+        'code': '#06060d',
+    },
+    'deck': {
+        'label': 'Deck', 'family': 'world', 'mode': 'dark', 'motion': 'crisp',
+        'accent': '#7fd4ff', 'accent2': '#ffb347', 'ok': '#5ce6a8',
+        'warn': '#ffb347', 'err': '#ff6b7a',
+        'bg': '#06090c', 'bg2': '#0a0f14', 'panel': '#0e141b', 'panel2': '#161f28',
+        'line': '#243240', 'txt': '#dce6f0', 'dim': '#93a6b8', 'dim2': '#6f8094',
+        'code': '#04070a',
+    },
+    # lifted straight from connections.TYPE_COLORS so the app wears the exact
+    # colours its own architecture graph draws with
+    'graph': {
+        'label': 'Graph', 'family': 'world', 'mode': 'dark', 'motion': 'smooth',
+        'accent': '#7dcfff', 'accent2': '#9d7bff', 'ok': '#73daca',
+        'warn': '#e0af68', 'err': '#f7768e',
+        'bg': '#0a0c10', 'bg2': '#0e1117', 'panel': '#12161e', 'panel2': '#1a2029',
+        'line': '#28303d', 'txt': '#dfe9ff', 'dim': '#a3b1c9', 'dim2': '#7d8aa3',
+        'code': '#07090c',
+    },
     # ── light ──
     'catppuccin-latte': {
         'label': 'Catppuccin Latte', 'family': 'light', 'mode': 'light', 'motion': 'smooth',
@@ -372,6 +475,34 @@ COLOR_KEYS = ('accent', 'accent2', 'ok', 'warn', 'err',
               'bg', 'bg2', 'panel', 'panel2', 'line', 'txt', 'dim', 'dim2', 'code')
 
 PALETTE_NAMES = list(PALETTES)
+
+
+# ── hidden palettes ──────────────────────────────────────────
+#: Present and fully working, but not offered in the gallery.
+#:
+#: These three carry a warm cream body text — Gruvbox #ebdbb2, Everforest
+#: #d3c6aa, Kanagawa #dcd7ba, measured text chroma 57 / 41 / 34 — which is
+#: authentic to every one of them upstream and which both users read as broken:
+#:
+#:   "questo kanagawa o altri che hanno il testo giallo piscio… sembra tipo un
+#:    filtro luce blu o che qualcuno ha pisciato sullo schermo"
+#:
+#: HIDDEN, not deleted, and not recoloured. Deleting breaks a saved
+#: settings.json (and test_legacy_theme_names_survive); recolouring would redo
+#: exactly the mistake the hex-first rewrite corrected, since the cream IS
+#: Kanagawa. Anyone already on one keeps it; it simply stops being offered.
+#: Milder warm palettes (citrus 17, ink 11, ayu 10) stay visible.
+#: The world palettes are hidden for a different reason: they are one part of an
+#: all-or-nothing bundle, so offering them alone would only be a way to get half
+#: of a world. See WORLDS.
+HIDDEN_PALETTES = ('gruvbox', 'everforest', 'kanagawa',
+                   'anime', 'cyber', 'deck', 'graph')
+for _h in HIDDEN_PALETTES:
+    PALETTES[_h]['hidden'] = True
+
+#: what the gallery offers
+def visible_palettes():
+    return [n for n, p in PALETTES.items() if not p.get('hidden')]
 
 
 # ── skins ────────────────────────────────────────────────────
@@ -429,6 +560,16 @@ Keys — chassis
   stage          which background scene runs (STAGE_SCENES in stage.js)
   bloom          bloom strength for that scene; 0 disables the composer entirely
                  (two render targets saved), which is what brutal/crt want
+  calm           how BRIGHT the scene is allowed to be, 0..1. Mixed back toward
+                 --bg by (1 - calm) in every fragment shader.
+  flow           how much the scene MOVES, scaling its clock.
+
+                 These two are separate on purpose and the separation was
+                 learned the hard way. "Overstimulating, confonde" was a
+                 brightness complaint; turning motion down as well produced a
+                 background that had simply stopped being animated. Cap `calm`
+                 to keep it out of the way of the text; keep `flow` up so it is
+                 still alive.
 
 THE RULE: every `burst` is event-scoped — it fires on mount, open or launch, runs
 ONCE, and removes itself. None of them loop. Petals falling forever is the ambient
@@ -443,51 +584,79 @@ blur, motion:off and stage:off. See the header of stage.js.
 
 SKINS = {
     'hud': {
-        'label': 'HUD', 'blurb': 'Instrument panel over a wireframe horizon. Corner brackets, range rings, radar sweep.',
-        'radius': 4, 'border': 1, 'shadow': 'none',
+        # Reworked on direct feedback: "HUD non è male, si può scurire, rendere
+        # più simile a terminal ma con forme diverse". So: darker ground (op up,
+        # bloom and stage calm way down), tighter density, and the difference
+        # from Terminal is geometry — brackets and ticks — not colour.
+        'label': 'HUD', 'blurb': 'Instrument housing. Near-black, corner brackets, tick rails, hairline arcs.',
+        'radius': 3, 'border': 1, 'shadow': 'none',
         'surface': 'grid', 'edge': 'brackets',
         'font': 'var(--mono)', 'track': '.10em', 'caps': 'uppercase',
         'ease': 'cubic-bezier(.2,.9,.3,1)',
         'enter': 'wipe', 'burst': 'brackets',
-        'gauge': {'tick': 'line', 'cap': 'round', 'lw': 1.0, 'glow': .5},
-        'chassis': 'brackets', 'scale': 1.0, 'density': .94, 'topbar': 'rail',
-        'arrive': 'boot', 'op': .84, 'stage': 'hud', 'bloom': .55,
+        'gauge': {'tick': 'line', 'cap': 'round', 'lw': 1.0, 'glow': .35},
+        'chassis': 'brackets', 'scale': 1.0, 'density': .90, 'topbar': 'rail',
+        'arrive': 'boot', 'op': .74, 'stage': 'hud', 'bloom': .25, 'calm': .25, 'flow': 0.55,
     },
-    'sakura': {
-        'label': 'Sakura', 'blurb': 'Soft anime. Petals drifting through colour blooms, airy panels, big radii.',
-        'radius': 18, 'border': 1, 'shadow': 'soft',
-        'surface': 'wash', 'edge': 'soft',
-        'font': '"Segoe UI Variable Display","Segoe UI Semibold","Segoe UI",system-ui,sans-serif',
+    # ── world skins ──────────────────────────────────────────
+    # These are not offered in the skin picker (`world: True`). Each belongs to
+    # one WORLD and is worn only as part of it, which is exactly what the three
+    # they replace could not do: Sakura had to look sane under 29 palettes, so
+    # it committed to nothing and read as a loud wallpaper on weak chrome.
+    # "Glass, Mecha e Sakura da buttare."
+    'anime': {
+        'label': 'Anime', 'world': True,
+        'blurb': 'Cel-shaded. Hard black outlines, flat fills, halftone shadows, speed lines.',
+        'radius': 16, 'border': 3, 'shadow': 'hard',
+        'surface': 'halftone', 'edge': 'ink',
+        'font': '"Segoe UI Variable Display","Segoe UI Black","Segoe UI",system-ui,sans-serif',
         'track': '.01em', 'caps': 'none',
-        'ease': 'cubic-bezier(.34,1.4,.5,1)',
-        'enter': 'bloom', 'burst': 'petals',
-        'gauge': {'tick': 'dot', 'cap': 'round', 'lw': 1.25, 'glow': .8},
-        'chassis': 'float', 'scale': 1.06, 'density': 1.18, 'topbar': 'flat',
-        'arrive': 'bloom', 'op': .80, 'stage': 'sakura', 'bloom': .5,
+        'ease': 'cubic-bezier(.34,1.5,.5,1)',
+        'enter': 'bloom', 'burst': 'sparkle',
+        # no gradients anywhere: cel shading quantises to flat levels
+        'gauge': {'tick': 'dot', 'cap': 'round', 'lw': 2.4, 'glow': 0},
+        'chassis': 'float', 'scale': 1.16, 'density': 1.12, 'topbar': 'flat',
+        'arrive': 'bloom', 'op': .82, 'stage': 'anime', 'bloom': .35, 'calm': .45, 'flow': 1.0,
     },
-    'mecha': {
-        'label': 'Mecha', 'blurb': 'NERV console. A hex panel wall snapping in blocks, hazard stripes, no easing.',
-        'radius': 0, 'border': 2, 'shadow': 'none',
-        'surface': 'stripe', 'edge': 'heavy',
-        'font': '"Bahnschrift Condensed","Bahnschrift SemiCondensed",'
-                '"Franklin Gothic Medium Cond","Arial Narrow",Impact,sans-serif',
-        'track': '.16em', 'caps': 'uppercase',
-        'ease': 'steps(1,end)',
-        'enter': 'cut', 'burst': 'stripe',
-        'gauge': {'tick': 'block', 'cap': 'butt', 'lw': 1.6, 'glow': .2},
-        'chassis': 'console', 'scale': 1.16, 'density': .86, 'topbar': 'notch',
-        'arrive': 'slam', 'op': .90, 'stage': 'mecha', 'bloom': .35,
-    },
-    'neon-city': {
-        'label': 'Neon City', 'blurb': 'Cyberpunk. An endless neon flythrough behind scanlined glass, heavy bloom.',
-        'radius': 2, 'border': 1, 'shadow': 'glow',
+    'cyber': {
+        'label': 'Cyberpunk', 'world': True,
+        'blurb': 'Clipped corners, chromatic edges, glitch on hover, hazard tape, scanlines.',
+        'radius': 0, 'border': 1, 'shadow': 'glow',
         'surface': 'scan', 'edge': 'chroma',
-        'font': 'var(--mono)', 'track': '.14em', 'caps': 'uppercase',
+        'font': 'var(--mono)', 'track': '.16em', 'caps': 'uppercase',
         'ease': 'cubic-bezier(.16,1,.3,1)',
         'enter': 'glitch', 'burst': 'scan',
-        'gauge': {'tick': 'line', 'cap': 'butt', 'lw': 1.15, 'glow': 1.0},
-        'chassis': 'brackets', 'scale': 1.02, 'density': .94, 'topbar': 'rail',
-        'arrive': 'glitch', 'op': .76, 'stage': 'neon-city', 'bloom': .9,
+        'gauge': {'tick': 'line', 'cap': 'butt', 'lw': 1.15, 'glow': .8},
+        'chassis': 'brackets', 'scale': 1.04, 'density': .92, 'topbar': 'notch',
+        'arrive': 'glitch', 'op': .70, 'stage': 'cyber', 'bloom': .7, 'calm': .4, 'flow': 1.15,
+    },
+    'deck': {
+        'label': 'Deck', 'world': True,
+        'blurb': 'Flight deck. Hairlines on a grid, dense rows, segmented meters, tabular numerals.',
+        'radius': 1, 'border': 1, 'shadow': 'none',
+        'surface': 'grid', 'edge': 'hair',
+        'font': 'var(--mono)', 'track': '.08em', 'caps': 'uppercase',
+        'ease': 'cubic-bezier(.2,.9,.3,1)',
+        'enter': 'wipe', 'burst': 'brackets',
+        'gauge': {'tick': 'line', 'cap': 'butt', 'lw': .8, 'glow': .2},
+        'chassis': 'brackets', 'scale': .96, 'density': .78, 'topbar': 'rail',
+        'arrive': 'boot', 'op': .76, 'stage': 'deck', 'bloom': .3, 'calm': .3, 'flow': 0.7,
+    },
+    'graph': {
+        # Homage to this project's own architecture graph — the thing in the
+        # README gif. Cards are nodes, rows are linked by hairlines, the sidebar
+        # is a tree with edges. Its palette is lifted from connections.TYPE_COLORS.
+        'label': 'Graph', 'world': True,
+        'blurb': 'The semantic memory graph, worn as an interface. Cards are nodes, rows are edges.',
+        'radius': 10, 'border': 1, 'shadow': 'soft',
+        'surface': 'nodes', 'edge': 'link',
+        'font': '"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif',
+        'track': '.02em', 'caps': 'none',
+        'ease': 'cubic-bezier(.22,1,.36,1)',
+        'enter': 'lift', 'burst': 'link',
+        'gauge': {'tick': 'dot', 'cap': 'round', 'lw': 1.1, 'glow': .5},
+        'chassis': 'float', 'scale': 1.0, 'density': 1.06, 'topbar': 'flat',
+        'arrive': 'lift', 'op': .58, 'stage': 'graph', 'bloom': .5, 'calm': .5, 'flow': 0.85,
     },
     'crt': {
         'label': 'Terminal', 'blurb': 'Retro CRT in a bezel. Curved raster, rolling refresh, phosphor glow.',
@@ -500,7 +669,7 @@ SKINS = {
         # bloom 0: the tube's glow is drawn in the scene shader itself, so the
         # composer would only cost two render targets to duplicate it
         'chassis': 'bezel', 'scale': .98, 'density': .92, 'topbar': 'flat',
-        'arrive': 'type', 'op': .88, 'stage': 'crt', 'bloom': 0,
+        'arrive': 'type', 'op': .78, 'stage': 'crt', 'bloom': 0, 'calm': .2, 'flow': 0.5,
     },
     'brutal': {
         'label': 'Brutalist', 'blurb': 'Halftone dot field, thick borders, hard offset shadows, zero easing.',
@@ -514,44 +683,81 @@ SKINS = {
         # op 1.0 and bloom 0 on purpose: brutalism does not do translucency and
         # it does not do glow. The stage shows in the gutters, and that is all.
         'chassis': 'none', 'scale': 1.20, 'density': 1.0, 'topbar': 'flat',
-        'arrive': 'slam', 'op': 1.0, 'stage': 'brutal', 'bloom': 0,
-    },
-    'glass': {
-        # DELIBERATELY faked. Real glassmorphism wants backdrop-filter: blur(),
-        # which is the property that caused this project's QtWebEngine tearing and
-        # which tests/test_gui_flicker.py now forbids outright. Layered translucent
-        # gradients + a 1px inset highlight + a hairline border read as glass with
-        # zero framebuffer readback. Do not "fix" this by adding the blur back.
-        #
-        # It got much more convincing for free: with a live caustic scene behind
-        # the lowest `op` in the set, there is now something real to be translucent
-        # *over*, which is the half that was always missing.
-        'label': 'Glass', 'blurb': 'Liquid caustics under floating translucent panels (no blur — see themes.py).',
-        'radius': 14, 'border': 1, 'shadow': 'soft',
-        'surface': 'sheen', 'edge': 'inset',
-        'font': '"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif',
-        'track': '.02em', 'caps': 'none',
-        'ease': 'cubic-bezier(.22,1,.36,1)',
-        'enter': 'lift', 'burst': 'sheen',
-        'gauge': {'tick': 'dot', 'cap': 'round', 'lw': 1.1, 'glow': .6},
-        'chassis': 'float', 'scale': 1.0, 'density': 1.12, 'topbar': 'flat',
-        'arrive': 'lift', 'op': .66, 'stage': 'glass', 'bloom': .75,
+        'arrive': 'slam', 'op': .88, 'stage': 'brutal', 'bloom': 0, 'calm': .3, 'flow': 0.6,
     },
 }
 
 SKIN_NAMES = list(SKINS)
+
+#: offered in the skin picker — the classic, palette-agnostic ones. A world skin
+#: is worn only through its world, never mixed with an arbitrary palette.
+CLASSIC_SKINS = [n for n, s in SKINS.items() if not s.get('world')]
 
 #: keys every skin must define — tests/test_skins.py rejects a partial skin,
 #: because a missing token silently falls back and the skin becomes a no-op
 SKIN_KEYS = ('label', 'blurb', 'radius', 'border', 'shadow', 'surface', 'edge',
              'font', 'track', 'caps', 'ease', 'enter', 'burst', 'gauge',
              'chassis', 'scale', 'density', 'topbar', 'arrive', 'op',
-             'stage', 'bloom')
+             'stage', 'bloom', 'calm', 'flow')
 
 #: the background scenes stage.js implements, one per skin. Kept here so
 #: tests/test_stage.py can assert the two sides never drift apart — a skin
 #: naming a scene that does not exist would silently fall back to 'hud'.
-STAGE_SCENES = ('hud', 'sakura', 'mecha', 'neon-city', 'crt', 'brutal', 'glass')
+STAGE_SCENES = ('hud', 'crt', 'brutal', 'anime', 'cyber', 'deck', 'graph')
+
+
+# ── worlds ───────────────────────────────────────────────────
+"""A world is a theme that refuses to be mixed.
+
+PALETTES x SKINS is orthogonal, and that is right for the classic looks — the
+whole point of Slate-under-Terminal is that you chose both. But orthogonality is
+also why the loud skins failed: a skin that has to look sane under 29 palettes
+can commit to nothing, so Sakura/Mecha/Glass ended up as loud wallpapers bolted
+onto weak chrome, and were rejected on sight.
+
+A world commits. It owns its palette, its skin, its background scene, its icon
+set, a persistent overlay, its hover behaviour and its cursor, and while you are
+wearing one the palette and skin pickers are disabled. All or nothing.
+
+Keys
+  palette/skin   both hidden from their own pickers; worn only through here
+  icons          ICON_SETS key in app.js — overrides the ~16 glyphs that
+                 actually appear, falling back to ICONS for the rest
+  overlay        a persistent full-screen layer (ov-<name> in app.css). ONE
+                 element, pointer-transparent, transform/opacity only, and
+                 `motion:off` stops it. This is the closest thing to the ambient
+                 layer that was deleted, so the limit is deliberate and tested.
+  hover          per-world pointer response (HOVER_FX in motion.js)
+  cursor         inline data-URI SVG — not a webfont and not a CDN, so the
+                 offline rule holds
+"""
+
+WORLDS = {
+    'anime': {
+        'label': 'Anime', 'palette': 'anime', 'skin': 'anime',
+        'blurb': 'Cel-shaded everything. Ink outlines, flat colour, halftone, speed lines.',
+        'icons': 'anime', 'overlay': 'halftone', 'hover': 'speed', 'cursor': 'anime',
+    },
+    'cyber': {
+        'label': 'Cyberpunk', 'palette': 'cyber', 'skin': 'cyber',
+        'blurb': 'Neon on near-black. Clipped corners, chromatic edges, glitch, scanlines.',
+        'icons': 'cyber', 'overlay': 'scan', 'hover': 'glitch', 'cursor': 'cyber',
+    },
+    'deck': {
+        'label': 'Deck', 'palette': 'deck', 'skin': 'deck',
+        'blurb': 'Flight deck. Hairline grid, dense telemetry, segmented meters.',
+        'icons': 'deck', 'overlay': 'grid', 'hover': 'bracket', 'cursor': 'deck',
+    },
+    'graph': {
+        'label': 'Graph', 'palette': 'graph', 'skin': 'graph',
+        'blurb': "This project's own memory graph, worn as an interface.",
+        'icons': 'graph', 'overlay': 'edges', 'hover': 'link', 'cursor': 'graph',
+    },
+}
+
+WORLD_NAMES = list(WORLDS)
+WORLD_KEYS = ('label', 'blurb', 'palette', 'skin', 'icons', 'overlay',
+              'hover', 'cursor')
 
 #: how much of the stage runs. 'cinematic' = bloom (two extra render targets);
 #: 'lite' = the scene without the composer, the first thing to try if the Qt
@@ -561,16 +767,30 @@ STAGE_TIERS = ('cinematic', 'lite', 'off')
 #: which skin each palette wears by default. Chosen so the pairing reads as one
 #: idea — Neon HUD under HUD, the pastel/rose palettes under Sakura, the warm
 #: high-contrast ones under Mecha, the monochromes under Terminal.
+#: Only the three CLASSIC skins are reachable here. Everything that used to
+#: default to sakura/mecha/glass/neon-city was remapped: those four are gone, and
+#: the world skins that replaced them are not mixable with an arbitrary palette.
 DEFAULT_SKIN = {
-    'neon': 'neon-city', 'aurora': 'glass', 'noir': 'sakura',
-    'default': 'hud', 'slate': 'hud', 'poimandres': 'hud', 'ocean': 'hud',
-    'tokyo': 'neon-city', 'oxocarbon': 'neon-city', 'dracula': 'neon-city',
-    'ember': 'mecha', 'gruvbox': 'mecha', 'ayu': 'mecha',
+    # instrument-panel palettes → HUD
+    'neon': 'hud', 'default': 'hud', 'slate': 'hud', 'poimandres': 'hud',
+    'ocean': 'hud', 'tokyo': 'hud', 'oxocarbon': 'hud', 'dracula': 'hud',
+    'aurora': 'hud', 'monokai-pro': 'hud', 'nord': 'hud',
+    # terminal palettes → Terminal, the one both users settled on
     'mono': 'crt', 'vesper': 'crt', 'citrus': 'crt', 'ink': 'crt',
+    'solarized': 'crt', 'noir': 'crt', 'kanagawa': 'crt', 'rose': 'crt',
+    'mocha': 'crt', 'forest': 'crt', 'everforest': 'crt', 'ember': 'crt',
+    'gruvbox': 'crt', 'ayu': 'crt',
+    # light palettes → Brutalist: hard borders survive a pale ground, glow does not
     'mono-light': 'brutal', 'paper': 'brutal', 'catppuccin-latte': 'brutal',
-    'rose': 'sakura', 'dawn': 'sakura', 'mocha': 'sakura',
-    'monokai-pro': 'glass', 'kanagawa': 'glass', 'nord': 'glass',
-    'forest': 'sakura', 'everforest': 'sakura', 'solarized': 'crt',
+    'dawn': 'brutal',
+    # the OLED neutrals: Terminal, because a true-black ground with one accent is
+    # the look these were authored for and the one both users chose unprompted
+    'oled-red': 'crt', 'oled-green': 'crt', 'oled-blue': 'crt',
+    'oled-violet': 'crt', 'oled-amber': 'crt', 'oled-cyan': 'crt',
 }
+#: world palettes wear their own world skin; kept out of the table above so the
+#: "every classic palette names a classic skin" invariant stays checkable
+for _w in WORLDS.values():
+    DEFAULT_SKIN[_w['palette']] = _w['skin']
 for _n in PALETTES:
     PALETTES[_n]['skin'] = DEFAULT_SKIN.get(_n, 'hud')

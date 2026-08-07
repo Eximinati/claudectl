@@ -139,9 +139,14 @@ def main():
         print('\n— per-skin audit —')
         pg.evaluate("go('home')")
         pg.wait_for_timeout(900)
-        skins = pg.evaluate("Object.keys(ST.skins||{})")
-        for sk in skins:
-            pg.evaluate(f"ST.skin='{sk}';applyTheme(ST.theme)")
+        # worlds first (each locks its own palette), then the classic skins
+        looks = ([('world', w) for w in pg.evaluate("Object.keys(ST.worlds||{})")]
+                 + [('skin', s) for s in pg.evaluate("ST.classic_skins||[]")])
+        for kind, sk in looks:
+            if kind == 'world':
+                pg.evaluate(f"ST.world='{sk}';applyTheme(ST.theme)")
+            else:
+                pg.evaluate(f"ST.world='';ST.skin='{sk}';applyTheme(ST.theme)")
             pg.wait_for_timeout(500)
             bad = [ln for ln in pg.evaluate(OVERFLOW_JS) if 'clean' not in ln]
             heights = pg.evaluate(
@@ -152,7 +157,7 @@ def main():
                 ('OVERFLOW ' + '; '.join(bad)) if bad else f'RAGGED {heights}')
             print(f'  {sk:<10} {state}')
             pg.screenshot(path=os.path.join(OUT, f'_skin_{sk}.png'))
-        pg.evaluate("ST.skin='';applyTheme(ST.theme)")
+        pg.evaluate("ST.world='';ST.skin='';applyTheme(ST.theme)")
         br.close()
     srv.shutdown()
     print('\nJS errors:', errs if errs else 'none')

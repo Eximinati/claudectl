@@ -987,42 +987,6 @@ html.skin-hud .dash>.card{
     calc(100% - 9px) 100%,0 100%,0 9px)}
 html.skin-hud .tab.sel{box-shadow:inset 0 -2px 0 var(--cyan)}
 
-/* ── Sakura: soft anime ──
-   A gradient wash and a wide soft shadow. The pastel palettes carry the colour,
-   so the shape only has to stop being a rectangle with a hairline. */
-html.skin-sakura .card,html.skin-sakura .modal,html.skin-sakura .acct-card{
-  background-image:linear-gradient(160deg,
-    rgba(var(--cyan-rgb),.07),transparent 42%,rgba(var(--violet-rgb),.06));
-  box-shadow:0 6px 24px -8px rgba(0,0,0,.35)}
-html.skin-sakura .btn{border-radius:999px}
-html.skin-sakura .chip{border-radius:999px}
-html.skin-sakura .lbl::before{content:'\273F  ';color:var(--cyan);opacity:.75}
-html.skin-sakura .iread b{letter-spacing:-.2px}
-
-/* ── Mecha: NERV console ──
-   Hard panels, a heavy warning rule, hazard stripes on every section label, and
-   oversized numerals — what these consoles actually do with a readout. */
-html.skin-mecha .card,html.skin-mecha .modal{border-top:3px solid var(--warn)}
-html.skin-mecha .lbl,html.skin-mecha .icard .ihd{
-  background:repeating-linear-gradient(-45deg,
-    rgba(var(--warn-rgb),.15) 0 6px,transparent 6px 12px);
-  padding:4px 8px;border-left:3px solid var(--warn)}
-html.skin-mecha .iread b{font-size:25px;font-weight:800}
-html.skin-mecha .kpi .kv2{font-size:24px;font-weight:800}
-html.skin-mecha .tab.sel{background:var(--warn);color:var(--onacc)}
-html.skin-mecha .btn,html.skin-mecha .chip{border-radius:0}
-
-/* ── Neon City: cyberpunk ──
-   A scanline texture plus a 1px chromatic edge offset. Two static paints — no
-   blend mode, no readback. */
-html.skin-neon-city .card,html.skin-neon-city .modal{
-  background-image:repeating-linear-gradient(0deg,
-    rgba(var(--cyan-rgb),.04) 0 1px,transparent 1px 3px);
-  box-shadow:1px 0 0 rgba(var(--violet-rgb),.3),-1px 0 0 rgba(var(--cyan-rgb),.24),
-    0 0 18px -6px rgba(var(--cyan-rgb),.35)}
-html.skin-neon-city .lbl,html.skin-neon-city .icard .ihd{
-  text-shadow:1px 0 rgba(var(--violet-rgb),.45),-1px 0 rgba(var(--cyan-rgb),.35)}
-
 /* ── Terminal: retro CRT ──
    Phosphor glow, a double rule under headings, scanlines, and a block caret on
    the card title. The caret is the ONE looping thing allowed anywhere in this
@@ -1057,28 +1021,6 @@ html.skin-brutal .btn:active{box-shadow:0 0 0 var(--txt);transform:translate(3px
 html.skin-brutal .tab.sel{background:var(--txt);color:var(--bg)}
 html.skin-brutal .chip{border-radius:0;border-width:2px}
 
-/* ── Glass: layered translucency, NO blur ──
-   Real glassmorphism uses backdrop-filter: blur(), which forces QtWebEngine's
-   compositor to read back and reblur the framebuffer every composite — the exact
-   cause of this project's tearing, and rejected outright by
-   tests/test_gui_flicker.py. A translucent gradient + a 1px inset top highlight
-   + a hairline border gives the same read for zero readback. The second
-   background layer is the opaque panel, so text contrast is unaffected.
-   Do not add the blur. */
-html.skin-glass .card,html.skin-glass .modal,html.skin-glass .acct-card,
-html.skin-glass .pbox{
-  background-image:linear-gradient(rgba(255,255,255,.07),rgba(255,255,255,.02) 40%),
-    linear-gradient(var(--panel),var(--panel));
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 8px 26px -12px rgba(0,0,0,.5);
-  border-color:rgba(255,255,255,.13)}
-html.theme-light.skin-glass .card,html.theme-light.skin-glass .modal,
-html.theme-light.skin-glass .acct-card{
-  background-image:linear-gradient(rgba(255,255,255,.75),rgba(255,255,255,.4) 40%),
-    linear-gradient(var(--panel),var(--panel));
-  border-color:rgba(0,0,0,.09);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 8px 26px -14px rgba(0,0,0,.22)}
-html.skin-glass .btn{background-image:linear-gradient(rgba(255,255,255,.09),transparent)}
-
 /* ── one-shot signature effects (MO.burst) ──
    One overlay, pointer-transparent, removed the moment its animations finish. It
    can never affect layout and it never loops — see the rule in themes.py. */
@@ -1091,13 +1033,6 @@ html.skin-glass .btn{background-image:linear-gradient(rgba(255,255,255,.09),tran
 .b-brackets .bk1{top:0;right:0;border-left:0;border-bottom:0}
 .b-brackets .bk2{bottom:0;right:0;border-left:0;border-top:0}
 .b-brackets .bk3{bottom:0;left:0;border-right:0;border-top:0}
-/* Sakura: petals. --d scales each one so the drift is not uniform. */
-.b-petals .pt{top:0;width:calc(9px * var(--d,1));height:calc(9px * var(--d,1));
-  background:var(--cyan);opacity:0;
-  border-radius:100% 0 100% 0;box-shadow:0 0 6px rgba(var(--cyan-rgb),.5)}
-/* Mecha: hazard stripe sweep */
-.b-stripe .st{inset:0;background:repeating-linear-gradient(-45deg,
-  rgba(var(--warn-rgb),.5) 0 10px,transparent 10px 20px)}
 /* Neon City: a single scanline */
 .b-scan .sc{left:0;right:0;top:0;height:2px;
   background:linear-gradient(90deg,transparent,var(--cyan),transparent);
@@ -1107,10 +1042,32 @@ html.skin-glass .btn{background-image:linear-gradient(rgba(255,255,255,.09),tran
   background:var(--cyan);box-shadow:0 0 8px rgba(var(--cyan-rgb),.6)}
 /* Brutalist: the hard shadow snapping out */
 .b-snap .sn{inset:0;border:3px solid var(--txt)}
-/* Glass: a highlight sweeping the surface */
-.b-sheen .sh{top:0;bottom:0;width:38%;
-  background:linear-gradient(90deg,transparent,rgba(255,255,255,.16),transparent)}
 html.mo-off .burst,html.mo-subtle .burst{display:none}
+
+/* ── world picker (Settings → Appearance) ──
+   Above the palette gallery, and it disables that gallery when a world is on:
+   a world is all or nothing, so leaving the classic controls live would only be
+   a way to get half of one. */
+.wgal{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));
+  gap:10px;margin-bottom:6px}
+.wcard{cursor:pointer;border:1px solid var(--line);border-radius:var(--r);
+  padding:8px;background:var(--panel);
+  transition:border-color var(--t-f),transform var(--t-spring)}
+.wcard:hover{border-color:var(--cyan);transform:translateY(-2px)}
+.wcard.on{border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan)}
+.wmock{height:62px;border:1px solid var(--line);border-radius:4px;padding:7px;
+  display:flex;flex-direction:column;gap:5px;justify-content:flex-end}
+.wmock i{display:block;height:9px;width:38%;border-radius:3px}
+.wmock s{display:block;height:5px;width:76%;border-radius:3px;opacity:.65;
+  text-decoration:none}
+.wm-none i{background:var(--dim2)}
+.wm-none s{background:var(--dim2)}
+.wname{font-size:12px;font-weight:600;margin-top:6px;text-align:center}
+#classicBlock{transition:opacity var(--t-n)}
+/* opacity, never filter — see the compositor contract at the top of this file */
+#classicBlock.locked{opacity:.38;pointer-events:none}
+#classicBlock.locked::before{content:'A world is active — it owns the palette and the skin.';
+  display:block;color:var(--warn);font-size:12px;margin-bottom:8px}
 
 /* ══ chassis ══════════════════════════════════════════════════════════════════
    A skin used to be chrome. This is the half that makes switching one read as
@@ -1247,3 +1204,300 @@ html.tb-rail .top::after{content:'';position:absolute;left:0;right:0;bottom:-4px
   html.ch-brackets .main::before,html.ch-brackets .main::after{width:14px;height:14px}
 }
 
+
+/* ══ the compositor contract ══════════════════════════════════════════════════
+   Every look below obeys this, and it is not negotiable:
+
+     transform and opacity only in keyframes. No `filter`, no `backdrop-filter`,
+     no `mix-blend-mode`, anywhere, ever.
+
+   QtWebEngine composites this page through a GPU hardware surface on Windows,
+   and anything that makes the compositor read the framebuffer back tears the
+   surface swap. `backdrop-filter: blur()` was the original culprit.
+
+   The temptation moves around but the answer does not. It used to be Glass
+   wanting real glassmorphism; that skin is gone and the pull is now Cyberpunk
+   wanting a neon bloom. **Do not add the blur.** Layered translucent gradients,
+   a 1px inset highlight and `text-shadow`/`box-shadow` give the same read for
+   zero readback — and where a genuine bloom is wanted it happens in GL, on the
+   stage, which is precisely why that is affordable and this is not.
+   tests/test_skins.py and tests/test_gui_flicker.py both enforce it.
+
+   ══ component tokens ═════════════════════════════════════════════════════════
+   A look used to reach ~20 of ~130 component selectors, which is why every skin
+   still read as the same app in a different hue — the buttons, chips, inputs,
+   rows, tables, nav, meters, scrollbars and selection were identical under all
+   of them. "Devono cambiare tutta tutta, ogni piccola cosa."
+
+   Writing 7 looks x 130 selectors literally is unmaintainable, so components
+   read TOKENS and each look writes ~30 of them (applySkin in app.js) plus a
+   short signature block. Adding a look needs no new geometry rules; adding a
+   component needs no edit to any look.
+
+   Same compositor contract throughout: transform/opacity only in keyframes, no
+   filter, no backdrop-filter, no blend modes. */
+
+/* buttons & segmented controls */
+.btn{border-radius:var(--sk-btn-r,var(--sk-r,6px));
+  border-width:var(--sk-btn-bw,1px);
+  text-transform:var(--sk-btn-caps,none);
+  font-weight:var(--sk-btn-weight,600);
+  letter-spacing:var(--sk-btn-track,normal)}
+.seg,.seg button{border-radius:var(--sk-btn-r,var(--sk-r,6px))}
+.preset{border-radius:var(--sk-btn-r,var(--sk-r,6px))}
+/* chips, tags, pills */
+.chip,.tag,.hchip,.thopt{border-radius:var(--sk-pill-r,999px);
+  border-width:var(--sk-pill-bw,1px);border-style:solid;
+  text-transform:var(--sk-pill-caps,none)}
+/* inputs */
+.search input,.fld input,.fld textarea,.fld select,#oPath,#gq{
+  border-radius:var(--sk-in-r,var(--sk-r,6px));
+  border-width:var(--sk-in-bw,1px)}
+/* list rows — the marker on the leading edge is a look's cheapest signature */
+.sess,.proj,.hrow,.arow,.arow2,.jrow,.drow,.lrow,.urow,.qcard{
+  border-radius:var(--sk-row-r,var(--sk-r,6px));
+  border-left-width:var(--sk-row-lead,1px)}
+.sess::before,.hrow::before{content:var(--sk-row-mark,none);
+  color:var(--cyan);opacity:.7;margin-right:6px;font-family:var(--mono)}
+/* tables */
+.tbl td,.tbl th{padding:var(--sk-cell-pad,6px 8px)}
+.tbl th{text-transform:var(--sk-head-caps,none);
+  border-bottom:var(--sk-rule,1px solid var(--line))}
+/* nav & the icon plate — icons themselves are per-world glyphs (ICON_SETS) */
+.nav .it{border-radius:var(--sk-nav-r,var(--sk-r,6px))}
+.nav .it.sel::after{content:var(--sk-nav-mark,none);margin-left:auto;
+  color:var(--cyan);font-family:var(--mono);font-size:10px}
+.nav .it .ic,.btn .ic{border-radius:var(--sk-icon-plate,0)}
+/* meters & progress */
+.bar{border-radius:var(--sk-bar-r,999px)}
+.bar>i{border-radius:var(--sk-bar-r,999px)}
+.spin{border-radius:var(--sk-spin-r,50%)}
+/* scrollbars, selection, focus */
+::-webkit-scrollbar{width:var(--sk-sb-w,8px);height:var(--sk-sb-w,8px)}
+::-webkit-scrollbar-thumb{border-radius:var(--sk-sb-r,999px)}
+::selection{background:var(--sk-sel-bg,rgba(125,207,255,.2))}
+:focus-visible{outline:var(--sk-focus,2px solid var(--cyan));outline-offset:2px}
+/* modals, drawer, toasts, banners */
+.toast,.jban .perun,.membadge{border-radius:var(--sk-r,6px)}
+.drawer{border-radius:var(--sk-drawer-r,0)}
+
+/* ══ worlds ═══════════════════════════════════════════════════════════════════
+   A world owns its palette, skin, scene, icons, overlay, hover and cursor, and
+   cannot be mixed. That is the point: a skin that had to look sane under 29
+   palettes could commit to nothing, which is how Glass/Mecha/Sakura ended up as
+   loud wallpaper on weak chrome and were thrown out.
+
+   Classic mode (HUD / Terminal / Brutalist x 32 palettes) is untouched. */
+
+/* ── Anime — cel-shaded ──────────────────────────────────────────────────────
+   Hard ink outlines, flat fills, halftone shadow, no gradient anywhere. Per the
+   cel-shading reference: quantised levels, uniform line weight, silhouettes that
+   hold at small sizes. */
+html.skin-anime{--sk-btn-r:999px;--sk-btn-bw:3px;--sk-btn-weight:800;
+  --sk-pill-r:999px;--sk-pill-bw:2px;--sk-in-r:14px;--sk-in-bw:3px;
+  --sk-row-r:14px;--sk-row-lead:3px;--sk-cell-pad:8px 10px;
+  --sk-nav-r:999px;--sk-bar-r:999px;--sk-sb-w:12px;--sk-sb-r:999px;
+  --sk-focus:3px solid var(--cyan);--sk-drawer-r:20px 0 0 20px;
+  /* cel shading needs the outline to READ — near-black against the panel, not a
+     shade of it, or the whole look collapses into "dark card with a border" */
+  --ink:#05030a}
+html.skin-anime .card,html.skin-anime .modal,html.skin-anime .sess,
+html.skin-anime .qcard,html.skin-anime .acct-card,html.skin-anime .pbox{
+  border:3px solid var(--ink);
+  box-shadow:5px 5px 0 var(--ink)}
+html.skin-anime .btn{border-color:var(--ink);box-shadow:3px 3px 0 var(--ink)}
+html.skin-anime .btn:hover{transform:translate(-1px,-1px);
+  box-shadow:4px 4px 0 var(--ink)}
+html.skin-anime .btn:active{transform:translate(3px,3px);box-shadow:0 0 0 var(--ink)}
+html.skin-anime .btn.pri{background:var(--grad);color:var(--onacc)}
+/* halftone shadow under a card — dots, not a blur */
+html.skin-anime .dash>.card{background-image:
+  radial-gradient(circle at 1px 1px,rgba(var(--violet-rgb),.22) 1px,transparent 1.6px);
+  background-size:7px 7px}
+html.skin-anime .lbl{font-weight:800}
+html.skin-anime .lbl::before{content:'\2726  ';color:var(--cyan)}
+html.skin-anime .tab.sel{background:var(--cyan);color:var(--ink);font-weight:800}
+html.skin-anime .tag,html.skin-anime .chip{border-color:var(--ink);font-weight:700}
+html.skin-anime .spin{border-width:3px}
+html.skin-anime .kpi .kv2{-webkit-text-stroke:1px var(--ink)}
+/* speed lines on hover: two hard strokes, transform only */
+html.skin-anime .spot.hv::after{content:'';position:absolute;inset:0;
+  pointer-events:none;border-radius:inherit;
+  background:repeating-linear-gradient(105deg,
+    rgba(var(--cyan-rgb),.30) 0 2px,transparent 2px 9px);
+  animation:speedln .4s cubic-bezier(.2,.9,.3,1)}
+@keyframes speedln{from{opacity:0;transform:translateX(-14px)}
+  to{opacity:1;transform:none}}
+
+/* ── Cyberpunk ───────────────────────────────────────────────────────────────
+   Clipped corners via clip-path, chromatic edges, hazard tape, scanlines. The
+   glow is text-shadow/box-shadow — never `filter`, which is the readback that
+   tore the Qt surface. */
+html.skin-cyber{--sk-btn-r:0;--sk-btn-caps:uppercase;--sk-btn-track:.14em;
+  --sk-btn-weight:700;--sk-pill-r:0;--sk-pill-caps:uppercase;--sk-in-r:0;
+  --sk-row-r:0;--sk-row-lead:2px;--sk-row-mark:'\232A';--sk-head-caps:uppercase;
+  --sk-nav-r:0;--sk-bar-r:0;--sk-spin-r:0;--sk-sb-w:10px;--sk-sb-r:0;
+  --sk-rule:1px solid rgba(var(--cyan-rgb),.4);
+  --sk-focus:1px solid var(--cyan);--sk-drawer-r:0}
+html.skin-cyber .card,html.skin-cyber .modal,html.skin-cyber .qcard{
+  clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,
+    16px 100%,0 calc(100% - 16px));
+  box-shadow:1px 0 0 rgba(var(--violet-rgb),.55),-1px 0 0 rgba(var(--cyan-rgb),.45),
+    0 0 22px -8px rgba(var(--cyan-rgb),.5)}
+html.skin-cyber .btn{clip-path:polygon(0 0,calc(100% - 8px) 0,100% 8px,
+  100% 100%,8px 100%,0 calc(100% - 8px))}
+html.skin-cyber .btn.pri{text-shadow:0 0 7px rgba(var(--cyan-rgb),.9)}
+html.skin-cyber .lbl,html.skin-cyber .icard .ihd{
+  background:repeating-linear-gradient(-45deg,
+    rgba(var(--warn-rgb),.16) 0 7px,transparent 7px 14px);
+  padding:3px 8px;border-left:2px solid var(--warn);
+  text-shadow:1px 0 rgba(var(--violet-rgb),.55),-1px 0 rgba(var(--cyan-rgb),.45)}
+html.skin-cyber .kpi .kv2,html.skin-cyber .iread b{
+  text-shadow:0 0 9px rgba(var(--cyan-rgb),.55)}
+html.skin-cyber .sess,html.skin-cyber .hrow{
+  border-left:2px solid rgba(var(--cyan-rgb),.5)}
+html.skin-cyber .tab.sel{box-shadow:inset 0 -2px 0 var(--cyan);
+  text-shadow:0 0 8px rgba(var(--cyan-rgb),.8)}
+/* glitch on hover: a chromatic split, one shot, transform only */
+html.skin-cyber .spot.hv{animation:cyglitch .26s steps(4,end)}
+@keyframes cyglitch{0%{transform:translateX(0)}25%{transform:translateX(-3px)}
+  50%{transform:translateX(2px)}75%{transform:translateX(-1px)}
+  100%{transform:translateX(0)}}
+
+/* ── Deck — flight deck ──────────────────────────────────────────────────────
+   Hairlines on a visible grid, very dense rows, segmented meters, everything
+   tabular. It reads functional because the grid has consistent logic, which is
+   the FUI reference's actual argument. */
+html.skin-deck{--sk-btn-r:1px;--sk-btn-bw:1px;--sk-btn-caps:uppercase;
+  --sk-btn-track:.10em;--sk-btn-weight:600;--sk-pill-r:1px;--sk-pill-bw:1px;
+  --sk-pill-caps:uppercase;--sk-in-r:1px;--sk-row-r:1px;--sk-row-lead:1px;
+  --sk-row-mark:'\00B7';--sk-cell-pad:3px 8px;--sk-head-caps:uppercase;
+  --sk-nav-r:1px;--sk-nav-mark:'\25B8';--sk-bar-r:0;--sk-spin-r:0;
+  --sk-sb-w:6px;--sk-sb-r:0;--sk-rule:1px solid rgba(var(--cyan-rgb),.28);
+  --sk-focus:1px solid var(--cyan);--sk-drawer-r:0}
+html.skin-deck .card{background-image:
+  linear-gradient(rgba(var(--cyan-rgb),.05) 1px,transparent 1px),
+  linear-gradient(90deg,rgba(var(--cyan-rgb),.05) 1px,transparent 1px);
+  background-size:100% 18px,18px 100%}
+html.skin-deck .card h3{border-bottom:1px solid rgba(var(--cyan-rgb),.3);
+  padding-bottom:5px}
+html.skin-deck .num,html.skin-deck .kpi .kv2,html.skin-deck .iread b{
+  font-family:var(--mono);font-variant-numeric:tabular-nums}
+/* segmented meters instead of solid: the deck's signature readout */
+html.skin-deck .bar{background:repeating-linear-gradient(90deg,
+  var(--panel2) 0 5px,transparent 5px 7px)}
+html.skin-deck .bar>i{background:repeating-linear-gradient(90deg,
+  var(--cyan) 0 5px,transparent 5px 7px)}
+html.skin-deck .tab.sel{box-shadow:inset 0 -1px 0 var(--cyan)}
+html.skin-deck .sess,html.skin-deck .hrow{border-left:1px solid rgba(var(--cyan-rgb),.35)}
+/* bracket snap on hover */
+html.skin-deck .spot.hv{box-shadow:
+  inset 3px 3px 0 -2px var(--cyan),inset -3px -3px 0 -2px var(--cyan)}
+
+/* ── Graph — the memory graph, worn ──────────────────────────────────────────
+   Cards are nodes: a connector stub on the leading edge, hairline links between
+   rows, node-dot bullets, the sidebar as a tree. Colours come from the palette
+   lifted out of connections.TYPE_COLORS. */
+html.skin-graph{--sk-btn-r:999px;--sk-btn-bw:1px;--sk-pill-r:999px;
+  --sk-in-r:10px;--sk-row-r:10px;--sk-row-lead:1px;--sk-cell-pad:6px 10px;
+  --sk-nav-r:999px;--sk-bar-r:999px;--sk-sb-w:8px;--sk-sb-r:999px;
+  --sk-focus:2px solid var(--cyan);--sk-drawer-r:16px 0 0 16px}
+/* the node dot + its connector stub, on the card's leading edge */
+html.skin-graph .dash>.card,html.skin-graph .card{position:relative}
+html.skin-graph .card::before{content:'';position:absolute;left:-5px;top:18px;
+  width:9px;height:9px;border-radius:50%;background:var(--cyan);
+  box-shadow:0 0 0 3px var(--bg)}
+html.skin-graph .card::after{content:'';position:absolute;left:-1px;top:22px;
+  width:14px;height:1px;background:linear-gradient(90deg,var(--cyan),transparent)}
+/* rows link to each other with a hairline down the gutter */
+html.skin-graph .slist,html.skin-graph .dlist{position:relative}
+html.skin-graph .slist::before,html.skin-graph .dlist::before{
+  content:'';position:absolute;left:6px;top:8px;bottom:8px;width:1px;
+  background:linear-gradient(180deg,transparent,rgba(var(--cyan-rgb),.35),transparent)}
+html.skin-graph .sess,html.skin-graph .hrow{padding-left:22px}
+html.skin-graph .sess::before,html.skin-graph .hrow::before{
+  content:'';position:absolute;left:-13px;width:7px;height:7px;border-radius:50%;
+  background:var(--violet);margin:0}
+/* the sidebar becomes a tree */
+html.skin-graph .plist{position:relative}
+html.skin-graph .plist::before{content:'';position:absolute;left:14px;top:4px;
+  bottom:4px;width:1px;background:rgba(var(--cyan-rgb),.22)}
+html.skin-graph .proj{padding-left:26px;position:relative}
+html.skin-graph .proj::before{content:'';position:absolute;left:11px;top:50%;
+  width:7px;height:7px;border-radius:50%;margin-top:-3px;
+  background:var(--dim2)}
+html.skin-graph .proj.sel::before{background:var(--cyan)}
+html.skin-graph .nav .it{position:relative;padding-left:26px}
+html.skin-graph .nav .it.sel::before{content:'';position:absolute;left:9px;
+  top:50%;width:6px;height:6px;border-radius:50%;margin-top:-3px;
+  background:var(--cyan)}
+/* hovering a node lights its edges */
+html.skin-graph .spot.hv{box-shadow:0 0 0 1px rgba(var(--cyan-rgb),.5),
+  0 0 26px -6px rgba(var(--cyan-rgb),.55)}
+html.skin-graph .spot.hv::before{background:var(--violet)}
+
+/* ══ world overlays ═══════════════════════════════════════════════════════════
+   ONE element (#overlay), above the app, pointer-transparent. This is the
+   closest thing here to the ambient layer that was deleted, so the rules are
+   strict and tested: a single node, no keyframes except transform/opacity, and
+   `motion:off` removes it entirely. */
+.ovl-fx{position:fixed;inset:0;z-index:60;pointer-events:none}
+html.mo-off .ovl-fx{display:none!important}
+/* Each overlay drifts, and each one is SEAMLESS because the translate is
+   exactly one pattern period — 3px for a 3px scanline, 34px for a 34px grid. No
+   easing, no fade at the wrap, and it stays inside the compositor contract
+   (transform/opacity only, so this never invalidates paint).
+   `.ov-edges` breathes on opacity instead: its two gradients are at 52deg and
+   -38deg with different periods, so no single translate wraps both. */
+@keyframes ovscan{to{transform:translateY(3px)}}
+@keyframes ovgrid{to{transform:translate(34px,34px)}}
+@keyframes ovhalf{to{transform:translate(9px,9px)}}
+@keyframes ovedge{50%{opacity:.45}}
+.ov-scan{animation:ovscan 1.1s linear infinite}
+.ov-grid{animation:ovgrid 14s linear infinite}
+.ov-halftone{animation:ovhalf 7s linear infinite}
+.ov-edges{animation:ovedge 6s ease-in-out infinite}
+/* the drift moves the layer, so it has to overhang or an edge shows through */
+.ov-scan,.ov-grid,.ov-halftone{inset:-40px}
+/* Cyberpunk: scanlines + a vignette. Both static paints. */
+.ov-scan{background:
+  repeating-linear-gradient(0deg,rgba(0,0,0,.20) 0 1px,transparent 1px 3px),
+  radial-gradient(120% 100% at 50% 50%,transparent 58%,rgba(0,0,0,.42))}
+/* Anime: halftone at the EDGES only. The card surfaces already carry their own
+   dot texture, so a full-screen field on top of that was two halftones stacked
+   and the whole window read as noise. Masked hard to the outer frame. */
+.ov-halftone{background:
+  radial-gradient(circle at 1px 1px,rgba(var(--violet-rgb),.22) 1px,transparent 1.7px)
+    0 0/9px 9px;
+  -webkit-mask-image:radial-gradient(105% 88% at 50% 50%,transparent 72%,#000 96%);
+  mask-image:radial-gradient(105% 88% at 50% 50%,transparent 72%,#000 96%)}
+/* Deck: a hairline grid with corner registration marks */
+.ov-grid{background:
+  linear-gradient(rgba(var(--cyan-rgb),.045) 1px,transparent 1px) 0 0/100% 34px,
+  linear-gradient(90deg,rgba(var(--cyan-rgb),.045) 1px,transparent 1px) 0 0/34px 100%;
+  -webkit-mask-image:radial-gradient(130% 110% at 50% 50%,transparent 62%,#000);
+  mask-image:radial-gradient(130% 110% at 50% 50%,transparent 62%,#000)}
+/* Graph: faint edges drifting at the frame's edge */
+.ov-edges{background:
+  repeating-linear-gradient(52deg,rgba(var(--cyan-rgb),.10) 0 1px,transparent 1px 46px),
+  repeating-linear-gradient(-38deg,rgba(var(--violet-rgb),.08) 0 1px,transparent 1px 62px);
+  -webkit-mask-image:radial-gradient(115% 95% at 50% 50%,transparent 48%,#000);
+  mask-image:radial-gradient(115% 95% at 50% 50%,transparent 48%,#000)}
+
+/* ── world cursors ──
+   Inline data-URI SVG: not a webfont and not a CDN, so the offline rule holds. */
+html.world-cyber,html.world-cyber .btn{cursor:crosshair}
+html.world-deck,html.world-deck .btn{cursor:crosshair}
+html.world-graph .card,html.world-graph .sess{cursor:default}
+
+/* ── world burst effects ── */
+/* Anime: hard four-point stars, flat fill, no glow */
+.b-sparkle .sp{width:calc(11px * var(--d,1));height:calc(11px * var(--d,1));
+  background:var(--cyan);
+  clip-path:polygon(50% 0,58% 42%,100% 50%,58% 58%,50% 100%,42% 58%,0 50%,42% 42%)}
+/* Graph: an edge drawing itself across the node */
+.b-link .lk{left:8%;right:8%;height:1px;background:var(--cyan);
+  transform-origin:left center;box-shadow:0 0 8px rgba(var(--cyan-rgb),.7)}
+.b-link .lk0{top:26%}
+.b-link .lk1{top:52%}
+.b-link .lk2{top:78%}

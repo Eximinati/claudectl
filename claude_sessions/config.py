@@ -80,7 +80,20 @@ _DEFAULT_SETTINGS = {
     'default_max_thinking': '',    # MAX_THINKING_TOKENS env for launches ('' = unset)
     'default_subagent_model': '',  # CLAUDE_CODE_SUBAGENT_MODEL env ('' = unset)
     'ui_mode': 'tui',              # default interface: 'tui' | 'gui' (desktop app)
-    'gui_shell': 'auto',           # GUI window: 'auto' | 'qt' | 'edge' | 'browser'
+    'gui_shell': 'auto',
+    # ── GUI appearance ──
+    # These MUST be declared here, not just accepted by the POST handler.
+    # load_settings() drops any key it does not know, and /api/settings does
+    # load -> mutate -> save, so an undeclared key was written once and then
+    # wiped by the very next settings save. Symptom: "when i close and open the
+    # app it goes back to classic theme" — the world was saved, then deleted by
+    # the next POST. `theme` was declared and survived, which is exactly why it
+    # was the only one that appeared to work.
+    'motion': 'full',
+    'skin': '',
+    'stage': '',
+    'world': '',
+    'surface': 0,           # GUI window: 'auto' | 'qt' | 'edge' | 'browser'
     'auto_memory_interval': 3600,  # GUI background auto-memory re-check cadence (s)
     'omniroute_base_url':   'http://localhost:20128',  # local OmniRoute proxy
     'omniroute_api_key':    '',   # -> ANTHROPIC_AUTH_TOKEN for the exec session

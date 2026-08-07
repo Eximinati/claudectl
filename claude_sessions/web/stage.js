@@ -46,7 +46,18 @@
    land on the static CSS gradient (html.stage-off) with the app untouched. */
 
 const STAGE_SCALE = 0.75;      // render scale; scenes may raise it for crisp lines
-const STAGE_FPS_IDLE = 20;     // nothing is happening — a crawl is enough
+/* Idle fps. Two knobs govern the background and they are NOT the same thing:
+
+     calm  = how BRIGHT it is   (per skin, --sk-calm / u_calm)
+     flow  = how much it MOVES  (per skin, scales the scene clock)
+
+   Conflating them is a mistake worth documenting because it was made here. The
+   complaint was "overstimulating, confonde" — a brightness/contrast problem —
+   and the first fix turned both down, dropping idle to 12fps at 0.12x time. The
+   result was a background that had stopped being animated at all. Brightness
+   stays capped; motion is back. A dim field that moves is atmosphere, a dim
+   field that is frozen is just a gradient. */
+const STAGE_FPS_IDLE = 24;     // still smooth enough that motion reads as motion
 const STAGE_FPS_BUSY = 34;     // a job is running
 const STAGE_ENERGY_TAU = 0.9;  // seconds for energy to close ~63% of a change
 const STAGE_SHOCK_S = 1.15;    // launch shockwave decay
@@ -57,14 +68,18 @@ const STAGE_PULSE_S = 0.8;     // navigation ripple decay
    but each page tilts it. `d` is density/intensity, `c` biases the camera. */
 const STAGE_PAGES = {
   home:     {d: 1.00, c: 0.00},
-  sessions: {d: 0.82, c: 0.35},
-  usage:    {d: 0.70, c: -0.30},
-  memory:   {d: 0.55, c: 0.15},
-  plan:     {d: 0.90, c: 0.55},
-  settings: {d: 0.34, c: -0.55},
-  help:     {d: 0.30, c: -0.20},
+  sessions: {d: 0.92, c: 0.35},
+  usage:    {d: 0.86, c: -0.30},
+  memory:   {d: 0.80, c: 0.15},
+  plan:     {d: 0.95, c: 0.55},
+  settings: {d: 0.78, c: -0.55},
+  help:     {d: 0.76, c: -0.20},
 };
-function stagePage(name) { return STAGE_PAGES[name] || {d: 0.62, c: 0.1}; }
+// The floor is 0.72, not 0.3. The first cut dropped Settings to 0.34 and Help to
+// 0.30, which is most of why the background looked absent — you are usually ON
+// one of those pages when you go looking for it. A page may lean the scene back;
+// it may not switch it off.
+function stagePage(name) { return STAGE_PAGES[name] || {d: 0.82, c: 0.1}; }
 
 /* Shared vertex shader for the screen-filling backdrop each scene sits on.
    Writes clip space directly, so it fills the viewport whatever the camera is
@@ -221,6 +236,8 @@ const STAGE = {
   setSkin(name, skin) {
     const next = (skin && skin.stage) || 'hud';
     this.bloomOf = skin ? skin.bloom : 1;
+    this.calmOf = skin && skin.calm != null ? skin.calm : 0.3;
+    this.flowOf = skin && skin.flow != null ? skin.flow : 1;
     if (next === this.scene && this.ok) return;
     this.scene = next;
     if (this.ok) this.build();
@@ -289,14 +306,18 @@ const STAGE = {
     if (this._acc < 1 / fps) return true;
     const fdt = this._acc; this._acc = 0;
 
-    // scene time runs slow when idle and fast when busy — this, not opacity, is
-    // what makes "the workspace is working" legible at a glance
-    this._T += fdt * (0.3 + 1.7 * this._E + 1.2 * this._shock);
+    // Scene time: always moving, and clearly faster when the workspace is busy.
+    // The idle term is the baseline "this thing is alive"; the energy term is
+    // what makes "the workspace is working" legible at a glance. `flow` is the
+    // per-skin amplitude — Terminal drifts, Cyberpunk runs.
+    const flow = this.flowOf != null ? this.flowOf : 1;
+    this._T += fdt * flow * (0.55 + 1.7 * this._E + 1.2 * this._shock);
 
     const sc = this._sc;
     try {
       sc.update({t: this._T, dt: fdt, e: this._E, shock: this._shock,
-                 pulse: this._pulse, dens: this._dens, cam: this._cam});
+                 pulse: this._pulse, dens: this._dens, cam: this._cam,
+                 calm: this.calmOf != null ? this.calmOf : 0.3});
       if (this._post) this._post.render(fdt);
       else this._ren.render(sc.scene, sc.camera);
     } catch (e) { this._giveUp('render failed: ' + e.message); return false; }
@@ -395,6 +416,7 @@ function sU(TH, c) {
   return {
     u_t: {value: 0}, u_e: {value: 0}, u_shock: {value: 0}, u_pulse: {value: 0},
     u_dens: {value: 1}, u_res: {value: new TH.Vector2(1, 1)},
+    u_calm: {value: 0.3},
     u_acc: {value: c.acc}, u_acc2: {value: c.acc2}, u_glow: {value: c.glow},
     u_bg: {value: c.bg}, u_panel: {value: c.panel}, u_warn: {value: c.warn},
     u_light: {value: c.light ? 1 : 0},
@@ -402,8 +424,23 @@ function sU(TH, c) {
 }
 function sFeed(u, f) {
   u.u_t.value = f.t; u.u_e.value = f.e; u.u_shock.value = f.shock;
-  u.u_pulse.value = f.pulse; u.u_dens.value = f.dens;
+  u.u_pulse.value = f.pulse; u.u_dens.value = f.dens; u.u_calm.value = f.calm;
 }
+
+/* THE CEILING. Every scene's final colour passes through this before it leaves
+   the fragment shader, mixing back toward the page background by (1 - calm).
+
+   This exists because the first cut of the stage was correct and unusable:
+
+     "sto sfondo non mi fa impazzire, un po' overstimulating confonde"
+
+   …and both users then switched to the one skin that had no background at all.
+   The scenes are not the problem; their amplitude was. `calm` is per-skin
+   (themes.py) and none of them go above ~0.45, so the background is always a
+   ground for the interface rather than a competitor to it. A scene that wants
+   to be brighter should say so in its skin, not by skipping this call. */
+const SF_CALM = `
+vec3 calm(vec3 col, vec3 bg, float k){ return mix(bg, col, clamp(k, 0.0, 1.0)); }`;
 
 /* ── the seven scenes ─────────────────────────────────────────────────────── */
 
@@ -421,7 +458,9 @@ const STAGE_SCENES = {
 
     S.add(sBackdrop(TH, `
       ${SF_LIB}
-      varying vec2 vUv; uniform vec3 u_bg,u_acc,u_acc2; uniform float u_t,u_e,u_light;
+      ${SF_CALM}
+      varying vec2 vUv; uniform vec3 u_bg,u_acc,u_acc2;
+      uniform float u_t,u_e,u_light,u_calm;
       void main(){
         vec2 p = vUv - 0.5;
         float sky = smoothstep(-0.05, 0.55, vUv.y);
@@ -429,7 +468,7 @@ const STAGE_SCENES = {
         // horizon bloom, brighter when there is work happening
         col += u_acc * (0.14 + 0.22 * u_e) * exp(-abs(vUv.y - 0.5) * 9.0);
         col += u_acc2 * 0.05 * fbm(p * 3.0 + u_t * 0.03);
-        gl_FragColor = vec4(col, 1.0);
+        gl_FragColor = vec4(calm(col, u_bg, u_calm), 1.0);
       }`, u));
 
     // ground grid — one LineSegments, scrolled in the vertex shader
@@ -458,7 +497,7 @@ const STAGE_SCENES = {
         }`,
       fragmentShader: `
         varying float vF; varying vec3 vP;
-        uniform vec3 u_acc,u_acc2; uniform float u_e,u_shock;
+        uniform vec3 u_acc,u_acc2; uniform float u_e,u_shock,u_calm;
         void main(){
           float a = pow(vF, 2.2) * (0.42 + 0.3 * u_e);
           // the shockwave: a bright ring expanding out of the origin
@@ -513,179 +552,63 @@ const STAGE_SCENES = {
     return S;
   },
 
-  /* Sakura — a drifting petal field. Every petal's whole trajectory is a
-     function of its seed and the clock, computed in the vertex shader, so 1800
-     of them cost one uniform write per frame and no JS at all. */
-  sakura(TH, c) {
-    const cam = new TH.PerspectiveCamera(60, 1, 0.1, 60);
-    cam.position.set(0, 0, 10);
-    const S = sScene(TH, cam, 0.5, STAGE_SCALE);
+  /* Anime — a cel-shaded sky. Flat quantised bands, hard-edged halftone dots,
+     and ONE soft element (the bloom behind them) so the flatness reads as a
+     choice. No gradients inside the bands: cel shading quantises, it does not
+     blend, which the reference is explicit about. */
+  anime(TH, c) {
+    const cam = new TH.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const S = sScene(TH, cam, .35, STAGE_SCALE);
     const u = sU(TH, c);
-
     S.add(sBackdrop(TH, `
       ${SF_LIB}
-      varying vec2 vUv; uniform vec3 u_bg,u_acc,u_acc2; uniform float u_t,u_e,u_light;
+      ${SF_CALM}
+      varying vec2 vUv;
+      uniform vec3 u_bg,u_acc,u_acc2; uniform vec2 u_res;
+      uniform float u_t,u_e,u_shock,u_pulse,u_dens,u_calm;
       void main(){
-        vec2 p = vUv;
-        // two slow blooms crossing, the wash those soft dashboards sit on
-        float a = fbm(p * 1.7 + vec2(u_t * 0.035, u_t * 0.02));
-        float b = fbm(p * 2.3 - vec2(u_t * 0.025, u_t * 0.04) + 5.0);
-        vec3 col = u_bg;
-        col = mix(col, u_acc,  a * (0.20 + 0.14 * u_e));
-        col = mix(col, u_acc2, b * (0.16 + 0.12 * u_e));
-        col += u_acc * 0.10 * pow(1.0 - distance(p, vec2(0.5, 0.75)), 3.0);
-        gl_FragColor = vec4(col, 1.0);
+        float asp = u_res.x / max(1.0, u_res.y);
+        vec2 p = vec2(vUv.x * asp, vUv.y);
+        // quantised sky: three flat bands, edges that move but never blur
+        float band = fbm(vec2(p.x * 1.2, p.y * 2.2) + vec2(u_t * 0.05, 0.0));
+        float lvl = floor(band * 3.0) / 3.0;
+        vec3 col = mix(u_bg, u_acc2, lvl * 0.5);
+        // halftone: hard dots, radius by band level. The signature of the look.
+        vec2 g = p * 40.0;
+        float d = length(fract(g) - 0.5);
+        float r = 0.13 + 0.26 * (1.0 - lvl);
+        col = mix(col, u_acc, step(d, r) * 0.35);
+        // speed lines sweep once on a launch, never on idle
+        float sl = step(0.986, fract(p.y * 26.0 + u_t * 0.5));
+        col = mix(col, u_acc, sl * u_shock * 0.8);
+        col += u_acc2 * u_pulse * 0.12 * step(0.5, fract(p.x * 3.0 - u_t));
+        gl_FragColor = vec4(calm(col, u_bg, u_calm * u_dens), 1.0);
       }`, u));
-
-    const N = 1800;
-    const seed = new Float32Array(N * 4);
-    const pos = new Float32Array(N * 3);
-    for (let i = 0; i < N; i++) {
-      seed[i * 4] = Math.random();          // x lane
-      seed[i * 4 + 1] = Math.random();      // fall phase
-      seed[i * 4 + 2] = Math.random();      // sway rate
-      seed[i * 4 + 3] = 0.4 + Math.random() * 0.9;  // size
-      pos[i * 3 + 2] = -1 - Math.random() * 16;     // depth
-    }
-    const pg = new TH.BufferGeometry();
-    pg.setAttribute('position', new TH.BufferAttribute(pos, 3));
-    pg.setAttribute('seed', new TH.BufferAttribute(seed, 4));
-    const pts = new TH.Points(pg, new TH.ShaderMaterial({
-      uniforms: u, transparent: true, depthWrite: false,
-      blending: TH.AdditiveBlending,
-      vertexShader: `
-        attribute vec4 seed; varying float vA; varying float vS;
-        uniform float u_t,u_e,u_dens,u_shock; uniform vec2 u_res;
-        void main(){
-          float sp = 0.35 + 0.9 * u_e + 2.2 * u_shock;
-          float fall = fract(seed.y + u_t * sp * (0.05 + seed.z * 0.05));
-          float x = (seed.x - 0.5) * 26.0 + sin(u_t * seed.z * 0.7 + seed.x * 20.0) * 1.6;
-          float y = 9.0 - fall * 20.0;
-          vec3 p = vec3(x, y, position.z);
-          vec4 mv = modelViewMatrix * vec4(p, 1.0);
-          gl_Position = projectionMatrix * mv;
-          vS = seed.w;
-          gl_PointSize = seed.w * (140.0 / max(1.0, -mv.z)) * (u_res.y / 900.0 + 0.55);
-          // fade in at the top, out at the bottom — nothing pops
-          vA = smoothstep(0.0, 0.12, fall) * (1.0 - smoothstep(0.75, 1.0, fall)) * u_dens;
-        }`,
-      fragmentShader: `
-        varying float vA; varying float vS;
-        uniform vec3 u_acc,u_acc2;
-        void main(){
-          vec2 q = gl_PointCoord - 0.5;
-          // petal: a soft lens shape, not a round dot
-          float d = length(vec2(q.x * 1.5, q.y));
-          float m = smoothstep(0.5, 0.06, d);
-          if(m < 0.01) discard;
-          vec3 col = mix(u_acc, u_acc2, vS * 0.7);
-          gl_FragColor = vec4(col, m * vA * 0.55);
-        }`,
-    }));
-    S.add(pts);
-
-    S.update = f => {
-      sFeed(u, f);
-      cam.position.x = f.cam * 1.8;
-      cam.position.y = Math.sin(f.t * 0.06) * 0.4;
-      cam.lookAt(0, 0, 0);
-    };
-    S.resize = (w, h) => {
-      u.u_res.value.set(w, h); cam.aspect = w / h; cam.updateProjectionMatrix();
-    };
+    S.update = f => sFeed(u, f);
+    S.resize = (w, h) => u.u_res.value.set(w, h);
     return S;
   },
 
-  /* Mecha — a hexagonal panel wall that lights in hard blocks. No easing
-     anywhere: cells snap between states, which is the whole personality. */
-  mecha(TH, c) {
-    const cam = new TH.PerspectiveCamera(52, 1, 0.1, 70);
-    cam.position.set(0, 0, 13);
-    const S = sScene(TH, cam, 0.35, STAGE_SCALE);
-    const u = sU(TH, c);
-
-    S.add(sBackdrop(TH, `
-      varying vec2 vUv; uniform vec3 u_bg,u_warn; uniform float u_t,u_e,u_shock;
-      void main(){
-        vec2 p = vUv * vec2(2.4, 1.0);
-        // hazard stripes scrolling behind the wall, stepped not smooth
-        float s = step(0.5, fract((p.x + p.y) * 6.0 - u_t * (0.06 + 0.3 * u_e)));
-        vec3 col = mix(u_bg, mix(u_bg, u_warn, 0.10), s);
-        col = mix(col, u_warn, u_shock * 0.18 * s);
-        gl_FragColor = vec4(col, 1.0);
-      }`, u));
-
-    // hex-packed grid of flat hexagons, merged into one buffer
-    const COLS = 26, ROWS = 16, R = 0.62;
-    const tmpl = new TH.CircleGeometry(R * 0.92, 6);
-    const g = sMerge(TH, tmpl, COLS * ROWS, {cell: 2}, (i, o) => {
-      const cx = i % COLS, cy = (i / COLS) | 0;
-      o.p[0] = (cx - COLS / 2) * R * 1.74 + (cy % 2 ? R * 0.87 : 0);
-      o.p[1] = (cy - ROWS / 2) * R * 1.5;
-      o.p[2] = 0;
-      o.a.cell = [cx / COLS, cy / ROWS];
-    });
-    const wall = new TH.Mesh(g, new TH.ShaderMaterial({
-      uniforms: u, transparent: true, depthWrite: false,
-      vertexShader: `
-        attribute vec2 cell; varying vec2 vC;
-        void main(){ vC = cell;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-      fragmentShader: `
-        ${SF_LIB}
-        varying vec2 vC;
-        uniform vec3 u_acc,u_acc2,u_warn,u_panel;
-        uniform float u_t,u_e,u_shock,u_pulse,u_dens;
-        void main(){
-          float id = h21(floor(vC * vec2(26.0, 16.0)));
-          // hard stepped activation: a cell is on or off, never in between
-          float beat = step(0.62 - 0.32 * u_e, fract(id * 7.13 + floor(u_t * (0.9 + 2.4 * u_e)) * 0.37));
-          // a scan column marching across the wall
-          float col_ = step(0.93, fract(vC.x - u_t * 0.11));
-          float sh = u_shock * step(abs(distance(vC, vec2(0.5)) - (1.0 - u_shock) * 0.8), 0.06);
-          vec3 base = mix(u_panel, u_acc, 0.10);
-          vec3 col = mix(base, u_acc, beat * 0.55);
-          col = mix(col, u_acc2, col_ * 0.8);
-          col = mix(col, u_warn, sh);
-          // most cells sit near-dark so the lit ones read as an event; a wall
-          // where every cell is half-on is a texture, not a console
-          float a = (0.14 + 0.34 * beat + 0.45 * col_ + sh) * u_dens;
-          gl_FragColor = vec4(col, a);
-        }`,
-    }));
-    S.add(wall);
-
-    S.update = f => {
-      sFeed(u, f);
-      // the camera steps rather than glides — quantised to the beat
-      cam.position.x = Math.round(f.cam * 3.0 + Math.sin(f.t * 0.08) * 2.0);
-      cam.position.z = 13 - f.e * 1.5;
-      cam.lookAt(0, 0, 0);
-    };
-    S.resize = (w, h) => {
-      u.u_res.value.set(w, h); cam.aspect = w / h; cam.updateProjectionMatrix();
-    };
-    return S;
-  },
-
-  /* Neon City — an endless flythrough. Boxes are merged once and scrolled by
-     the vertex shader with a modulo, so the tunnel is infinite for free. */
-  'neon-city'(TH, c) {
+  /* Cyberpunk — the neon flythrough, rebuilt darker. Same infinite instanced
+     skyline as before (that part worked: the buildings read as buildings once
+     the faces stayed unlit), now under the calm ceiling with a scanline pass
+     and a chromatic split at the edges of the frame. */
+  cyber(TH, c) {
     const cam = new TH.PerspectiveCamera(72, 1, 0.1, 130);
-    const S = sScene(TH, cam, 1.35, STAGE_SCALE);
+    const S = sScene(TH, cam, .7, STAGE_SCALE);
     const u = sU(TH, c);
     const SPAN = 120;
-
     S.add(sBackdrop(TH, `
       ${SF_LIB}
-      varying vec2 vUv; uniform vec3 u_bg,u_acc,u_acc2; uniform float u_t,u_e;
+      ${SF_CALM}
+      varying vec2 vUv; uniform vec3 u_bg,u_acc,u_acc2;
+      uniform float u_t,u_e,u_calm; uniform vec2 u_res;
       void main(){
-        // deliberately dim: the sky is a backdrop for the skyline, not a light
-        // source. Everything bright in this scene should be geometry.
         vec3 col = mix(u_bg, mix(u_bg, u_acc2, 0.13), pow(vUv.y, 1.8));
         col += u_acc * 0.05 * exp(-abs(vUv.y - 0.42) * 9.0);
-        col += u_acc2 * 0.025 * fbm(vUv * 4.0 + vec2(0.0, -u_t * 0.05));
-        gl_FragColor = vec4(col, 1.0);
+        // scanlines, the cheapest honest cyberpunk tell
+        col *= 0.94 + 0.06 * sin(vUv.y * u_res.y * 1.2);
+        gl_FragColor = vec4(calm(col, u_bg, u_calm), 1.0);
       }`, u));
 
     const N = 260;
@@ -711,41 +634,353 @@ const STAGE_SCENES = {
           vec3 p = position;
           float sp = u_t * (3.0 + 14.0 * u_e + 26.0 * u_shock);
           p.z = mod(p.z + sp, ${SPAN}.0) - ${SPAN}.0 + 8.0;
-          vB = bx;
-          vL = position;                       // local, for the window rows
+          vB = bx; vL = position;
           vec4 mv = modelViewMatrix * vec4(p, 1.0);
           vFog = clamp(1.0 - (-mv.z) / ${SPAN}.0, 0.0, 1.0);
           gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: `
         ${SF_LIB}
+        ${SF_CALM}
         varying vec4 vB; varying vec3 vL; varying float vFog;
-        uniform vec3 u_acc,u_acc2,u_bg; uniform float u_t,u_e,u_dens;
+        uniform vec3 u_acc,u_acc2,u_bg; uniform float u_t,u_e,u_dens,u_calm;
         void main(){
-          // lit window rows up the face — what actually reads as a city
           float rows = step(0.55, fract(vL.y * 2.6));
           float cols = step(0.45, fract(vL.x * 3.1 + vB.x * 10.0));
           float lit = rows * cols * step(0.35, h11(floor(vL.y * 2.6) * 13.0 + vB.z * 91.0));
           vec3 neon = mix(u_acc, u_acc2, vB.w * 0.5 + 0.5);
-          // The face stays DARK. A city at night is mostly unlit concrete with
-          // bright windows punched through it — make the whole face glow and
-          // bloom turns the scene into one coloured smear with no buildings in
-          // it, which is exactly what the first cut looked like.
+          // faces stay dark; only windows and the rooftop rim carry light
           vec3 col = u_bg * 0.7;
           col = mix(col, neon, lit * (0.7 + 0.3 * u_e));
-          // rooftop edge: a thin bright rim, the one thing bloom should catch
           col += neon * smoothstep(0.46, 0.5, vL.y) * (0.9 + 0.7 * u_e);
-          float a = pow(vFog, 1.3) * u_dens;
-          gl_FragColor = vec4(col, a);
+          gl_FragColor = vec4(calm(col, u_bg, u_calm), pow(vFog, 1.3) * u_dens);
         }`,
     }));
     S.add(city);
-
     S.update = f => {
       sFeed(u, f);
       cam.position.set(f.cam * 3.0, 1.6 + Math.sin(f.t * 0.11) * 0.7, 6);
       cam.rotation.z = Math.sin(f.t * 0.07) * 0.03 + f.pulse * 0.05;
       cam.lookAt(f.cam * 1.2, 1.0, -40);
+    };
+    S.resize = (w, h) => {
+      u.u_res.value.set(w, h); cam.aspect = w / h; cam.updateProjectionMatrix();
+    };
+    return S;
+  },
+
+  /* Deck — a flight deck's substrate. A hairline grid on a visible rhythm plus
+     sparse telemetry ticks. The FUI reference's actual point: it reads
+     functional because the grid has consistent logic, not because anything is
+     ornamented. Almost nothing moves until the workspace is busy. */
+  deck(TH, c) {
+    const cam = new TH.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const S = sScene(TH, cam, .3, 1.0);
+    const u = sU(TH, c);
+    S.add(sBackdrop(TH, `
+      ${SF_LIB}
+      ${SF_CALM}
+      varying vec2 vUv;
+      uniform vec3 u_bg,u_acc,u_acc2; uniform vec2 u_res;
+      uniform float u_t,u_e,u_shock,u_pulse,u_dens,u_calm;
+      void main(){
+        float asp = u_res.x / max(1.0, u_res.y);
+        vec2 p = vec2(vUv.x * asp, vUv.y);
+        vec3 col = u_bg;
+        // two-level grid: fine cells inside coarse blocks
+        vec2 f1 = abs(fract(p * 26.0) - 0.5);
+        vec2 f2 = abs(fract(p * 6.5) - 0.5);
+        float fine   = 1.0 - smoothstep(0.0, 0.03, min(f1.x, f1.y));
+        float coarse = 1.0 - smoothstep(0.0, 0.012, min(f2.x, f2.y));
+        col += u_acc * fine * 0.06;
+        col += u_acc * coarse * 0.14;
+        // a sweep line: the only thing that moves, and it tracks energy
+        float sweep = fract(p.x * 0.5 - u_t * (0.02 + 0.12 * u_e));
+        col += u_acc2 * pow(1.0 - sweep, 24.0) * (0.10 + 0.35 * u_e);
+        // telemetry ticks along the bottom edge, stepped
+        float tick = step(0.7, fract(p.x * 60.0)) * step(p.y, 0.035);
+        col += u_acc * tick * 0.25;
+        col += u_acc2 * u_shock * 0.25 * coarse;
+        col += u_acc * u_pulse * 0.10 * fine;
+        gl_FragColor = vec4(calm(col, u_bg, u_calm * u_dens), 1.0);
+      }`, u));
+    S.update = f => sFeed(u, f);
+    S.resize = (w, h) => u.u_res.value.set(w, h);
+    return S;
+  },
+
+  /* Graph — the homage. A force-graph field: nodes at fixed solved positions
+     (deterministic, so it is stable to look at across reloads, the same reason
+     the flow-map instrument solves from the index) with edges between near
+     neighbours. Node colours come from the palette lifted out of
+     connections.TYPE_COLORS, so the background is drawn in the exact hues the
+     project's real architecture graph uses. */
+  /* Graph — THE homage. This is not "a graph-ish field": it is the same thing
+     connections.py draws for the real architecture view — wireframe dodecahedra
+     (20 vertices, 30 edges) rotating on two axes, joined by hairline links, with
+     a lit joint at every vertex. Even the rotation matches: drawDodec spins at
+     T*0.5 and T*0.37 with a per-node phase, and so does this.
+
+     Three draw calls, all merged, all animated in the vertex shader:
+       1. the solids' 30 edges each, rotated about their own centre
+       2. the links between centres
+       3. the vertex joints, as points
+
+     Node positions are a deterministic golden-angle spiral — no Math.random —
+     so the constellation is identical on every reload. Same reasoning as the
+     flow-map instrument: a layout that reshuffles reads as noise. */
+  graph(TH, c) {
+    const cam = new TH.PerspectiveCamera(55, 1, 0.1, 60);
+    const S = sScene(TH, cam, .5, 1.0);
+    const u = sU(TH, c);
+
+    // ── node field ──
+    const N = 40;
+    const nodes = [];
+    for (let i = 0; i < N; i++) {
+      const ang = i * 2.399963;                       // golden angle
+      const rad = 1.0 + 5.6 * Math.sqrt(i / N);
+      nodes.push({
+        x: Math.cos(ang) * rad * 1.85,
+        y: Math.sin(ang) * rad * 0.98,
+        z: -1.5 - ((i * 7) % 11) * 0.62,
+        r: 0.26 + ((i * 13) % 7) / 7 * 0.40,
+        ph: (i * 1.7) % 6.283,
+        tone: (i % 5) / 5,
+      });
+    }
+
+    /* ── the solids drift, and they bump into each other ────────────────────
+       Live positions in a uniform array, integrated on the CPU. This is the one
+       scene that does per-frame CPU work, and it is a deliberate exception to
+       the "uniforms only" rule at the top of this file: 40 bodies is 780 pair
+       checks, which is nothing, and the alternative — baking a canned path into
+       the shader — cannot produce a collision.
+
+       Deterministic seeding, no Math.random: the lattice must settle the same
+       way on every reload, for the same reason the layout does. */
+    const POS = new Float32Array(N * 3);
+    const VEL = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) {
+      POS[i * 3] = nodes[i].x; POS[i * 3 + 1] = nodes[i].y; POS[i * 3 + 2] = nodes[i].z;
+      // golden-ratio seeded drift — slow, and no two alike
+      const a = i * 2.399963, b = i * 0.7548777;
+      VEL[i * 3]     = Math.cos(a) * 0.22 + Math.sin(b) * 0.08;
+      VEL[i * 3 + 1] = Math.sin(a) * 0.16 + Math.cos(b) * 0.07;
+      VEL[i * 3 + 2] = Math.sin(b * 1.7) * 0.10;
+    }
+    u.u_np = {value: Array.from({length: N}, (_, i) =>
+      new TH.Vector3(POS[i * 3], POS[i * 3 + 1], POS[i * 3 + 2]))};
+
+    const BOUND = [11.5, 6.2, 5.0];     // the box they are kept inside
+    function physics(dt, e) {
+      const sp = 0.45 + 0.9 * e;        // busier workspace, livelier lattice
+      // pairwise soft collision: separate, then swap the normal velocity
+      for (let i = 0; i < N; i++) {
+        for (let j = i + 1; j < N; j++) {
+          const dx = POS[j * 3] - POS[i * 3];
+          const dy = POS[j * 3 + 1] - POS[i * 3 + 1];
+          const dz = POS[j * 3 + 2] - POS[i * 3 + 2];
+          const d2 = dx * dx + dy * dy + dz * dz;
+          const rr = (nodes[i].r + nodes[j].r) * 1.35;
+          if (d2 >= rr * rr || d2 < 1e-6) continue;
+          const d = Math.sqrt(d2), nx = dx / d, ny = dy / d, nz = dz / d;
+          const push = (rr - d) * 0.5;
+          POS[i * 3] -= nx * push; POS[i * 3 + 1] -= ny * push; POS[i * 3 + 2] -= nz * push;
+          POS[j * 3] += nx * push; POS[j * 3 + 1] += ny * push; POS[j * 3 + 2] += nz * push;
+          // elastic-ish exchange along the contact normal, damped so the field
+          // keeps jostling instead of heating up until everything flies apart
+          const vi = VEL[i * 3] * nx + VEL[i * 3 + 1] * ny + VEL[i * 3 + 2] * nz;
+          const vj = VEL[j * 3] * nx + VEL[j * 3 + 1] * ny + VEL[j * 3 + 2] * nz;
+          const t = (vj - vi) * 0.9;
+          VEL[i * 3] += nx * t; VEL[i * 3 + 1] += ny * t; VEL[i * 3 + 2] += nz * t;
+          VEL[j * 3] -= nx * t; VEL[j * 3 + 1] -= ny * t; VEL[j * 3 + 2] -= nz * t;
+        }
+      }
+      for (let i = 0; i < N; i++) {
+        for (let k = 0; k < 3; k++) {
+          const a = i * 3 + k;
+          POS[a] += VEL[a] * dt * sp;
+          // reflect at the wall, and clamp back inside so a body can never
+          // escape and drift off screen for the rest of the session
+          if (POS[a] > BOUND[k]) { POS[a] = BOUND[k]; VEL[a] = -Math.abs(VEL[a]); }
+          else if (POS[a] < -BOUND[k]) { POS[a] = -BOUND[k]; VEL[a] = Math.abs(VEL[a]); }
+          VEL[a] *= 0.9995;               // a whisper of drag
+        }
+        u.u_np.value[i].set(POS[i * 3], POS[i * 3 + 1], POS[i * 3 + 2] - 3.0);
+      }
+    }
+
+    /* rotate about the node's own centre, exactly as drawDodec does:
+         ay spins around Y, then ax around X. */
+    const SPIN = `
+      vec3 spin(vec3 local, float ph, float t){
+        float ax = t * 0.5 + ph, ay = t * 0.37 + ph * 1.7;
+        float ca = cos(ax), sa = sin(ax), cb = cos(ay), sb = sin(ay);
+        float x = local.x * cb + local.z * sb;
+        float z = -local.x * sb + local.z * cb;
+        float y2 = local.y * ca - z * sa;
+        float z2 = local.y * sa + z * ca;
+        return vec3(x, y2, z2);
+      }`;
+
+    // 1 ── the wireframe solids, one merged LineSegments
+    const solid = new TH.DodecahedronGeometry(1, 0);
+    const wire = new TH.EdgesGeometry(solid);
+    // Positions live in a uniform array so the CPU can move them; the geometry
+    // holds each vertex's LOCAL offset plus its node index. One buffer, one draw
+    // call, and drifting 40 solids costs 40 vec3 uniform writes a frame.
+    const gEdges = sMerge(TH, wire, N, {nd: 3}, (i, o) => {
+      const n = nodes[i];
+      o.p[0] = o.p[1] = o.p[2] = 0;              // local space
+      o.s[0] = o.s[1] = o.s[2] = n.r;
+      o.a.nd = [n.ph, n.tone, i];
+    });
+    solid.dispose(); wire.dispose();
+
+    const wireMat = new TH.ShaderMaterial({
+      uniforms: u, transparent: true, depthWrite: false,
+      vertexShader: `
+        attribute vec3 nd;
+        varying vec2 vN; varying float vD;
+        uniform float u_t; uniform vec3 u_np[${N}];
+        ${SPIN}
+        void main(){
+          vN = nd.xy;
+          vec3 p = u_np[int(nd.z)] + spin(position, nd.x, u_t);
+          vec4 mv = modelViewMatrix * vec4(p, 1.0);
+          vD = clamp(1.0 - (-mv.z) / 26.0, 0.0, 1.0);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `
+        ${SF_CALM}
+        varying vec2 vN; varying float vD;
+        uniform vec3 u_acc,u_acc2,u_bg;
+        uniform float u_e,u_dens,u_calm,u_shock;
+        void main(){
+          vec3 col = mix(u_acc, u_acc2, vN.y);
+          col += vec3(u_shock * 0.6);
+          float a = (0.50 + 0.55 * vD) * u_dens * (0.75 + 0.35 * u_e);
+          gl_FragColor = vec4(calm(col, u_bg, u_calm + 0.35), a);
+        }`,
+    });
+    const mEdges = new TH.LineSegments(gEdges, wireMat);
+    /* Every one of the three objects below is placed by u_np in the vertex
+       shader, so its `position` attribute is a LOCAL offset and the bounding
+       sphere three derives from it describes nothing. Frustum culling has to be
+       off or the renderer discards them based on geometry that is not where they
+       are — and the links go first, because with every position at (0,0,0) their
+       bounding sphere has radius ZERO. That is why the connecting lines
+       disappeared the moment the solids started moving. sBackdrop does the same
+       thing for the same reason. */
+    mEdges.frustumCulled = false;
+    S.add(mEdges);
+
+    // 2 ── links between neighbouring centres
+    // Three near neighbours plus one long chord each: a spiral linked only to
+    // i+1/i+2 reads as a chain, not a graph.
+    //
+    // `position` is a placeholder — every endpoint is placed by u_np[li] in the
+    // vertex shader so the links follow their solids as those drift. Both
+    // attributes are REQUIRED: a declared-but-absent attribute reads as 0, which
+    // pins every segment to node 0 and gives it zero length, so the lines vanish
+    // without a single error anywhere. That is exactly what happened here.
+    const lp = [], la = [], li = [];
+    for (let i = 0; i < N; i++) {
+      for (const k of [1, 2, 3, 8]) {
+        const j = i + k;
+        if (j >= N) continue;
+        lp.push(0, 0, 0, 0, 0, 0);
+        la.push(0, 1);
+        li.push(i, j);
+      }
+    }
+    const gLink = new TH.BufferGeometry();
+    gLink.setAttribute('position', new TH.Float32BufferAttribute(lp, 3));
+    gLink.setAttribute('lt', new TH.Float32BufferAttribute(la, 1));
+    gLink.setAttribute('li', new TH.Float32BufferAttribute(li, 1));
+    const mLink = new TH.LineSegments(gLink, new TH.ShaderMaterial({
+      uniforms: u, transparent: true, depthWrite: false,
+      vertexShader: `
+        attribute float lt; attribute float li;
+        varying float vT; varying float vD;
+        uniform vec3 u_np[${N}];
+        void main(){ vT = lt;
+          vec4 mv = modelViewMatrix * vec4(u_np[int(li)], 1.0);
+          vD = clamp(1.0 - (-mv.z) / 26.0, 0.0, 1.0);
+          gl_Position = projectionMatrix * mv; }`,
+      fragmentShader: `
+        ${SF_CALM}
+        varying float vT; varying float vD;
+        uniform vec3 u_acc,u_bg; uniform float u_t,u_e,u_pulse,u_dens,u_calm;
+        void main(){
+          // a pulse runs along the link when you navigate
+          float trav = pow(1.0 - abs(fract(u_t * 0.2) - vT), 26.0) * u_pulse;
+          float a = (0.20 + 0.26 * vD + 0.6 * trav) * u_dens;
+          gl_FragColor = vec4(calm(u_acc, u_bg, u_calm + 0.3), a);
+        }`,
+    }));
+    mLink.frustumCulled = false;
+    S.add(mLink);
+
+    // 3 ── the lit joint at every vertex, as drawDodec draws them
+    const dv = new TH.DodecahedronGeometry(1, 0);
+    const dvPos = dv.getAttribute('position');
+    const jp = [], jc = [], jn = [];
+    for (let i = 0; i < N; i++) {
+      const n = nodes[i];
+      for (let v = 0; v < dvPos.count; v++) {
+        jp.push(dvPos.getX(v) * n.r, dvPos.getY(v) * n.r, dvPos.getZ(v) * n.r);
+        jc.push(0, 0, 0);
+        jn.push(n.ph, n.tone, i);
+      }
+    }
+    dv.dispose();
+    const gJoint = new TH.BufferGeometry();
+    gJoint.setAttribute('position', new TH.Float32BufferAttribute(jp, 3));
+    gJoint.setAttribute('ctr', new TH.Float32BufferAttribute(jc, 3));
+    gJoint.setAttribute('nd', new TH.Float32BufferAttribute(jn, 3));
+    const mJoint = new TH.Points(gJoint, new TH.ShaderMaterial({
+      uniforms: u, transparent: true, depthWrite: false,
+      blending: TH.AdditiveBlending,
+      vertexShader: `
+        attribute vec3 nd;
+        varying vec2 vN; varying float vD;
+        uniform float u_t; uniform vec2 u_res; uniform vec3 u_np[${N}];
+        ${SPIN}
+        void main(){
+          vN = nd.xy;
+          vec3 p = u_np[int(nd.z)] + spin(position, nd.x, u_t);
+          vec4 mv = modelViewMatrix * vec4(p, 1.0);
+          vD = clamp(1.0 - (-mv.z) / 26.0, 0.0, 1.0);
+          gl_Position = projectionMatrix * mv;
+          gl_PointSize = (1.6 + 2.0 * vD) * (u_res.y / 900.0 + 0.6);
+        }`,
+      fragmentShader: `
+        ${SF_CALM}
+        varying vec2 vN; varying float vD;
+        uniform vec3 u_acc,u_acc2,u_bg; uniform float u_dens,u_calm;
+        void main(){
+          float d = length(gl_PointCoord - 0.5);
+          if(d > 0.5) discard;
+          vec3 col = mix(u_acc, u_acc2, vN.y);
+          // the white highlight drawDodec puts in the middle of each joint
+          col = mix(col, vec3(1.0), smoothstep(0.28, 0.0, d) * 0.4);
+          float a = (1.0 - smoothstep(0.32, 0.5, d)) * (0.16 + 0.26 * vD) * u_dens;
+          gl_FragColor = vec4(calm(col, u_bg, u_calm + 0.4), a);
+        }`,
+    }));
+    mJoint.frustumCulled = false;
+    S.add(mJoint);
+
+    S.update = f => {
+      sFeed(u, f);
+      physics(Math.min(0.05, f.dt), f.e);
+      // a slow orbit, so the solids are seen turning against a moving camera
+      cam.position.set(Math.sin(f.t * 0.06) * 2.2 + f.cam * 2.0,
+                       Math.cos(f.t * 0.045) * 1.2,
+                       11 - f.e * 1.2);
+      cam.lookAt(0, 0, -2);
     };
     S.resize = (w, h) => {
       u.u_res.value.set(w, h); cam.aspect = w / h; cam.updateProjectionMatrix();
@@ -762,9 +997,10 @@ const STAGE_SCENES = {
     const u = sU(TH, c);
     S.add(sBackdrop(TH, `
       ${SF_LIB}
+      ${SF_CALM}
       varying vec2 vUv;
       uniform vec3 u_bg,u_acc,u_acc2; uniform vec2 u_res;
-      uniform float u_t,u_e,u_shock,u_pulse,u_dens,u_light;
+      uniform float u_t,u_e,u_shock,u_pulse,u_dens,u_light,u_calm;
       void main(){
         // barrel: the glass is curved, so the raster is too
         vec2 p = vUv * 2.0 - 1.0;
@@ -796,7 +1032,7 @@ const STAGE_SCENES = {
         // grain + vignette
         col += (h21(uv * u_res + fract(u_t) * 300.0) - 0.5) * 0.05;
         col *= 1.0 - 0.45 * pow(length(p) * 0.62, 3.0);
-        gl_FragColor = vec4(col, 1.0);
+        gl_FragColor = vec4(calm(col, u_bg, u_calm), 1.0);
       }`, u));
     S.update = f => sFeed(u, f);
     S.resize = (w, h) => u.u_res.value.set(w, h);
@@ -810,9 +1046,10 @@ const STAGE_SCENES = {
     const S = sScene(TH, cam, 0, 1.0);
     const u = sU(TH, c);
     S.add(sBackdrop(TH, `
+      ${SF_CALM}
       varying vec2 vUv;
       uniform vec3 u_bg,u_acc; uniform vec2 u_res;
-      uniform float u_t,u_e,u_shock,u_pulse,u_dens,u_light;
+      uniform float u_t,u_e,u_shock,u_pulse,u_dens,u_light,u_calm;
       void main(){
         float asp = u_res.x / max(1.0, u_res.y);
         vec2 p = vec2(vUv.x * asp, vUv.y);
@@ -833,79 +1070,11 @@ const STAGE_SCENES = {
         // hard two-tone at real contrast: brutalism is not a whisper. No
         // gradient, no antialiasing on the dot edge, one ink colour.
         vec3 ink = mix(u_acc, vec3(1.0) - u_bg, 0.35);
-        gl_FragColor = vec4(mix(u_bg, ink, dot_ * 0.62), 1.0);
+        gl_FragColor = vec4(calm(mix(u_bg, ink, dot_ * 0.62), u_bg,
+                                 0.35 + 0.65 * u_calm), 1.0);
       }`, u));
     S.update = f => sFeed(u, f);
     S.resize = (w, h) => u.u_res.value.set(w, h);
-    return S;
-  },
-
-  /* Glass — flowing caustics and thin-film iridescence on a displaced plane.
-     Note what is NOT here: backdrop-filter. The refraction is computed in the
-     fragment shader, so there is no framebuffer readback and nothing for the Qt
-     compositor to tear on. See the Glass note in themes.py. */
-  glass(TH, c) {
-    const cam = new TH.PerspectiveCamera(48, 1, 0.1, 40);
-    cam.position.set(0, 0, 6.2);
-    const S = sScene(TH, cam, 0.75, STAGE_SCALE);
-    const u = sU(TH, c);
-
-    S.add(sBackdrop(TH, `
-      ${SF_LIB}
-      varying vec2 vUv; uniform vec3 u_bg,u_acc,u_acc2; uniform float u_t,u_e;
-      void main(){
-        float a = fbm(vUv * 2.1 + u_t * 0.02);
-        vec3 col = mix(u_bg, mix(u_acc, u_acc2, a), 0.10 + 0.06 * u_e);
-        gl_FragColor = vec4(col, 1.0);
-      }`, u));
-
-    const plane = new TH.Mesh(new TH.PlaneGeometry(16, 10, 120, 80),
-      new TH.ShaderMaterial({
-        uniforms: u, transparent: true, depthWrite: false,
-        vertexShader: `
-          ${SF_LIB}
-          varying vec2 vUv; varying float vH;
-          uniform float u_t,u_e,u_shock;
-          void main(){
-            vUv = uv;
-            vec3 p = position;
-            float w = fbm(uv * 3.0 + vec2(u_t * 0.06, -u_t * 0.04));
-            float w2 = sin(uv.x * 9.0 + u_t * 0.5) * cos(uv.y * 7.0 - u_t * 0.4);
-            vH = w + w2 * 0.15;
-            p.z += vH * (0.5 + 0.5 * u_e) + u_shock * sin(length(uv - 0.5) * 22.0 - u_t * 6.0);
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
-          }`,
-        fragmentShader: `
-          ${SF_LIB}
-          varying vec2 vUv; varying float vH;
-          uniform vec3 u_acc,u_acc2,u_glow; uniform float u_t,u_e,u_dens,u_light;
-          void main(){
-            // caustics: the sharp bright creases where the surface focuses
-            float c1 = fbm(vUv * 5.0 + vec2(u_t * 0.05, u_t * 0.03));
-            float c2 = fbm(vUv * 5.0 + vec2(u_t * 0.05, u_t * 0.03) + vec2(0.06));
-            float caus = pow(1.0 - abs(c1 - c2) * 26.0, 4.0);
-            caus = clamp(caus, 0.0, 1.0);
-            // thin-film: hue shifts with the surface slope, the way an oil film does
-            float film = fract(vH * 0.8 + u_t * 0.02);
-            vec3 iri = 0.5 + 0.5 * cos(6.28318 * (film + vec3(0.0, 0.33, 0.67)));
-            vec3 col = mix(u_acc, u_acc2, film);
-            col = mix(col, iri * u_glow, 0.35);
-            float a = (0.05 + caus * 0.5 + smoothstep(0.2, 1.0, vH) * 0.12) * u_dens;
-            gl_FragColor = vec4(col, a * (0.55 + 0.45 * u_e));
-          }`,
-      }));
-    plane.rotation.x = -0.55;
-    S.add(plane);
-
-    S.update = f => {
-      sFeed(u, f);
-      cam.position.x = f.cam * 1.4;
-      cam.position.y = -0.6 + Math.sin(f.t * 0.05) * 0.3;
-      cam.lookAt(0, -0.4, 0);
-    };
-    S.resize = (w, h) => {
-      u.u_res.value.set(w, h); cam.aspect = w / h; cam.updateProjectionMatrix();
-    };
     return S;
   },
 };
