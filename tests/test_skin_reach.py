@@ -106,7 +106,9 @@ def test_overlays_cannot_swallow_clicks_or_survive_motion_off():
     compositor-only (the global keyframes audit in test_gui_flicker.py already
     rejects any property outside transform/opacity)."""
     assert PAGE.count('id="overlay"') == 1
-    assert '.ovl-fx{position:fixed;inset:0;z-index:60;pointer-events:none}' in _CSS
+    # BEHIND the app (negative z), never over it: on top, the scanlines crossed
+    # the body text, the logo and the TUI/GUI toggle and read as a broken screen
+    assert '.ovl-fx{position:fixed;inset:0;z-index:-1;pointer-events:none}' in _CSS
     assert 'html.mo-off .ovl-fx{display:none!important}' in _CSS
     for name in {w['overlay'] for w in WORLDS.values()}:
         assert re.search(r'\.ov-%s\{' % re.escape(name), _CSS), name
@@ -151,3 +153,54 @@ def test_world_palettes_and_skins_stay_out_of_the_classic_pickers():
         assert PALETTES[w['palette']].get('hidden'), w['palette']
     # and the classic three are all still offered
     assert set(CLASSIC_SKINS) == {'hud', 'crt', 'brutal'}
+
+
+def test_no_look_puts_an_effect_on_the_type_itself():
+    """Effects belong on the chrome. Text renders flat.
+
+        "ci può stare sugli elementi grafici come il coso nero su cui stanno i
+         testi, ma i testi stessi, il logo, TUI e GUI no … un dislessico
+         potrebbe fare fatica a leggerlo … non dovrebbe esistere il caso in cui
+         l'utente possa usarlo così"
+
+    That last clause is why this is a test and not a default: a chromatic split
+    or a glow on glyphs is not a preference to dial back, it is a state the app
+    should not be able to reach. Terminal's phosphor is the single documented
+    exception — it is one soft halo in the skin both users chose, not a
+    per-channel split, and it was never the complaint."""
+    import re
+    bad = []
+    for m in re.finditer(r'html\.skin-([\w-]+)([^{]*)\{([^}]*)\}', _CSS):
+        skin, sel, body = m.group(1), m.group(2), m.group(3)
+        if skin == 'crt':
+            continue
+        if 'text-shadow' in body:
+            bad.append(f'{skin}:{sel.strip() or "(root)"}')
+    assert not bad, f'effects applied to text: {bad}'
+    # and the hover glitch must move an edge, not the element the text is in
+    assert 'html.skin-cyber .spot.hv::after' in _CSS
+    assert 'html.skin-cyber .spot.hv{animation' not in _CSS
+
+
+def test_no_look_may_change_how_big_the_ui_is():
+    """A look changes what the app LOOKS like, never how big it is.
+
+        "non mi fa impazzire che cambiano le forme delle cose con i vari temi …
+         tecnicamente le dimensioni della UI dovrebbero essere fisse perché
+         anche quelle hanno una influenza sul design … magari di certi temi non
+         è lo sfondo che non ti piace, ma inconsciamente la UI è strutturata un
+         po' peggio e ti dà fastidio a livello di subconscio"
+
+    Exactly right, and the reason this is enforced rather than merely fixed: the
+    spacing and type scales were tuned once for legibility, so a per-theme
+    multiplier does not make a theme *different*, it makes some themes *worse* —
+    felt without being nameable. One canonical geometry, seven appearances."""
+    for dead in ('--sk-scale', '--sk-dens'):
+        assert dead not in _CSS, f'{dead} is back — a look can resize the UI'
+        assert dead not in PAGE, f'{dead} is back in the JS'
+    for name, sk in SKINS.items():
+        for dead in ('scale', 'density'):
+            assert dead not in sk, f'{name} declares {dead}'
+    # the sizes themselves must still be declared in exactly one place
+    assert '.card h3{font-size:14px}' in _CSS
+    assert '.kpi .kv2{font-size:20px}' in _CSS

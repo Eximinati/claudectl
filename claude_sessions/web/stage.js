@@ -881,7 +881,7 @@ const STAGE_SCENES = {
         void main(){
           vec3 col = mix(u_acc, u_acc2, vN.y);
           col += vec3(u_shock * 0.6);
-          float a = (0.50 + 0.55 * vD) * u_dens * (0.75 + 0.35 * u_e);
+          float a = (0.40 + 0.44 * vD) * u_dens * (0.75 + 0.35 * u_e);
           gl_FragColor = vec4(calm(col, u_bg, u_calm + 0.35), a);
         }`,
     });
@@ -962,7 +962,7 @@ const STAGE_SCENES = {
           // …plus the one-shot surge when you navigate
           float surge = pow(1.0 - abs(fract(u_t * 0.2) - vT), 26.0) * u_pulse;
           vec3 col = mix(u_acc, mix(u_acc2, vec3(1.0), 0.45), clamp(data, 0.0, 1.0));
-          float a = (0.34 + 0.30 * vD + 0.85 * data + 0.6 * surge) * u_dens;
+          float a = (0.26 + 0.23 * vD + 0.78 * data + 0.6 * surge) * u_dens;
           gl_FragColor = vec4(calm(col, u_bg, u_calm + 0.34), a);
         }`,
     }));
@@ -1012,7 +1012,7 @@ const STAGE_SCENES = {
           vec3 col = mix(u_acc, u_acc2, vN.y);
           // the white highlight drawDodec puts in the middle of each joint
           col = mix(col, vec3(1.0), smoothstep(0.28, 0.0, d) * 0.4);
-          float a = (1.0 - smoothstep(0.32, 0.5, d)) * (0.16 + 0.26 * vD) * u_dens;
+          float a = (1.0 - smoothstep(0.32, 0.5, d)) * (0.13 + 0.21 * vD) * u_dens;
           gl_FragColor = vec4(calm(col, u_bg, u_calm + 0.4), a);
         }`,
     }));

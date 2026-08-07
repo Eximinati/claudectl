@@ -1114,19 +1114,19 @@ html.stage-on body{background:transparent}
    One multiplier, applied where size actually carries the skin's voice:
    headings, section labels, the big readouts. Body copy is left alone — a skin
    may shout, but it may not make the transcript hard to read. */
-.card h3{font-size:calc(14px * var(--sk-scale,1))}
-.top h1{font-size:calc(16px * var(--sk-scale,1))}
-.lbl{font-size:calc(11px * var(--sk-scale,1))}
-.kpi .kv2{font-size:calc(20px * var(--sk-scale,1))}
-.iread b{font-size:calc(17px * var(--sk-scale,1))}
-.dhd,.thname{font-size:calc(13px * var(--sk-scale,1))}
+.card h3{font-size:14px}
+.top h1{font-size:16px}
+.lbl{font-size:11px}
+.kpi .kv2{font-size:20px}
+.iread b{font-size:17px}
+.dhd,.thname{font-size:13px}
 
 /* ── density ── */
-.card{padding:calc(16px * var(--sk-dens,1)) calc(18px * var(--sk-dens,1));
-  margin-bottom:calc(12px * var(--sk-dens,1))}
-.sess{padding:calc(11px * var(--sk-dens,1)) calc(16px * var(--sk-dens,1))}
-.content{padding:calc(20px * var(--sk-dens,1)) calc(26px * var(--sk-dens,1))}
-.dash{gap:calc(var(--sp-3) * var(--sk-dens,1))}
+.card{padding:16px 18px;
+  margin-bottom:12px}
+.sess{padding:11px 16px}
+.content{padding:20px 26px}
+.dash{gap:var(--sp-3)}
 
 /* ── chassis: brackets (HUD, Neon City) ──
    Corner rules on the VIEWPORT, not on each card — an instrument housing the
@@ -1153,7 +1153,7 @@ html.ch-console .content{
   background-image:repeating-linear-gradient(180deg,
     var(--warn) 0 14px,transparent 14px 34px);
   background-repeat:no-repeat;background-size:3px 100%;background-position:0 0;
-  padding-left:calc(26px * var(--sk-dens,1) + 10px)}
+  padding-left:36px}
 html.ch-console .card{border-left:3px solid rgba(var(--warn-rgb),.5)}
 
 /* ── chassis: bezel (Terminal) ──
@@ -1346,23 +1346,48 @@ html.skin-cyber .card,html.skin-cyber .modal,html.skin-cyber .qcard{
     0 0 22px -8px rgba(var(--cyan-rgb),.5)}
 html.skin-cyber .btn{clip-path:polygon(0 0,calc(100% - 8px) 0,100% 8px,
   100% 100%,8px 100%,0 calc(100% - 8px))}
-html.skin-cyber .btn.pri{text-shadow:0 0 7px rgba(var(--cyan-rgb),.9)}
+/* ── THE RULE FOR THIS SKIN: the effect goes on the CHROME, never on the type.
+   Every glyph renders flat and unmodified.
+
+   The first cut put a chromatic split on section labels, a phosphor glow on
+   every big numeral and a hazard stripe *behind* small uppercase text. The
+   verdict:
+
+     "questo effetto non va bene, sempre leggibilità, fastidio agli occhi sul
+      testo … ci può stare sugli elementi grafici come il coso nero su cui
+      stanno i testi, ma i testi stessi, il logo, TUI e GUI no — dovrebbero
+      essere lisci normali … un dislessico potrebbe fare fatica a leggerlo …
+      non dovrebbe esistere il caso in cui l'utente possa usarlo così"
+
+   That last clause is the important one: it is not a taste setting to be dialled
+   back with the transparency slider, it is a state the app should not be able to
+   reach. So there is no text-shadow anywhere in this skin, and the hazard stripe
+   sits in a block BESIDE the label rather than underneath it. The chromatic edge
+   survives on the card itself, which is a graphic element and reads as intended. */
 html.skin-cyber .lbl,html.skin-cyber .icard .ihd{
+  padding:3px 8px 3px 0;
+  border-left:3px solid var(--warn);
+  /* the stripes live in a fixed block on the rule, clear of the glyphs */
   background:repeating-linear-gradient(-45deg,
-    rgba(var(--warn-rgb),.16) 0 7px,transparent 7px 14px);
-  padding:3px 8px;border-left:2px solid var(--warn);
-  text-shadow:1px 0 rgba(var(--violet-rgb),.55),-1px 0 rgba(var(--cyan-rgb),.45)}
-html.skin-cyber .kpi .kv2,html.skin-cyber .iread b{
-  text-shadow:0 0 9px rgba(var(--cyan-rgb),.55)}
+    rgba(var(--warn-rgb),.55) 0 4px,transparent 4px 8px) left center/14px 100% no-repeat;
+  padding-left:22px}
 html.skin-cyber .sess,html.skin-cyber .hrow{
   border-left:2px solid rgba(var(--cyan-rgb),.5)}
-html.skin-cyber .tab.sel{box-shadow:inset 0 -2px 0 var(--cyan);
-  text-shadow:0 0 8px rgba(var(--cyan-rgb),.8)}
-/* glitch on hover: a chromatic split, one shot, transform only */
-html.skin-cyber .spot.hv{animation:cyglitch .26s steps(4,end)}
-@keyframes cyglitch{0%{transform:translateX(0)}25%{transform:translateX(-3px)}
-  50%{transform:translateX(2px)}75%{transform:translateX(-1px)}
-  100%{transform:translateX(0)}}
+html.skin-cyber .tab.sel{box-shadow:inset 0 -2px 0 var(--cyan)}
+/* Glitch on hover: the CARD EDGE tears, the content does not move. Displacing
+   the whole element jittered the text inside it, which is the same legibility
+   problem in motion form. */
+html.skin-cyber .spot{position:relative}
+html.skin-cyber .spot.hv::after{content:'';position:absolute;inset:-1px;
+  pointer-events:none;border-radius:inherit;
+  border-left:2px solid rgba(var(--cyan-rgb),.9);
+  border-right:2px solid rgba(var(--violet-rgb),.9);
+  animation:cyglitch .26s steps(4,end)}
+@keyframes cyglitch{0%{transform:translateX(0);opacity:0}
+  25%{transform:translateX(-3px);opacity:1}
+  50%{transform:translateX(2px);opacity:1}
+  75%{transform:translateX(-1px);opacity:1}
+  100%{transform:translateX(0);opacity:0}}
 
 /* ── Deck — flight deck ──────────────────────────────────────────────────────
    Hairlines on a visible grid, very dense rows, segmented meters, everything
@@ -1441,7 +1466,13 @@ html.skin-graph .spot.hv::before{background:var(--violet)}
    closest thing here to the ambient layer that was deleted, so the rules are
    strict and tested: a single node, no keyframes except transform/opacity, and
    `motion:off` removes it entirely. */
-.ovl-fx{position:fixed;inset:0;z-index:60;pointer-events:none}
+/* BEHIND the app, not over it. At z-index:60 this sat on top of everything —
+   scanlines ran across the body text, the logo and the TUI/GUI toggle, and the
+   result read as a fault rather than a texture ("sembra rotto lo schermo").
+   Between the stage (-2) and the app, it textures the ground the interface
+   stands on and never crosses a glyph, which is exactly the line drawn:
+   effects on the graphics, never on the type. */
+.ovl-fx{position:fixed;inset:0;z-index:-1;pointer-events:none}
 html.mo-off .ovl-fx{display:none!important}
 /* Each overlay drifts, and each one is SEAMLESS because the translate is
    exactly one pattern period — 3px for a 3px scanline, 34px for a 34px grid. No
@@ -1460,9 +1491,13 @@ html.mo-off .ovl-fx{display:none!important}
 /* the drift moves the layer, so it has to overhang or an edge shows through */
 .ov-scan,.ov-grid,.ov-halftone{inset:-40px}
 /* Cyberpunk: scanlines + a vignette. Both static paints. */
+/* Denser scanlines and a tighter vignette than when this sat on top of the app:
+   up there it was dimming the entire viewport as a side effect, which is part of
+   why the scene read as calm. Behind the panels it only darkens the ground, so
+   it has to do that job deliberately instead of by accident. */
 .ov-scan{background:
-  repeating-linear-gradient(0deg,rgba(0,0,0,.20) 0 1px,transparent 1px 3px),
-  radial-gradient(120% 100% at 50% 50%,transparent 58%,rgba(0,0,0,.42))}
+  repeating-linear-gradient(0deg,rgba(0,0,0,.40) 0 1px,transparent 1px 3px),
+  radial-gradient(90% 80% at 50% 45%,transparent 30%,rgba(0,0,0,.72))}
 /* Anime: halftone at the EDGES only. The card surfaces already carry their own
    dot texture, so a full-screen field on top of that was two halftones stacked
    and the whole window read as noise. Masked hard to the outer frame. */

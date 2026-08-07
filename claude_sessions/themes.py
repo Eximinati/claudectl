@@ -546,10 +546,21 @@ Keys — chassis
                  status rail), 'console' (hard bar + left indicator column),
                  'bezel' (rounded screen inside a vignette), 'float' (panels
                  hovering clear of the edges), 'none'
-  scale          type-scale multiplier. This is most of why one skin reads as a
-                 different application from another — Brutalist's headings are
-                 20% larger than Terminal's, not merely a different family.
-  density        row/padding multiplier. Airy Sakura vs tight Mecha.
+                 NOTE: there is deliberately NO type-scale or density key.
+                 A look may change what things LOOK like; it may not change how
+                 BIG they are. Those multipliers existed and were removed:
+
+                   "non mi fa impazzire che cambiano le forme delle cose con i
+                    vari temi, non ha molto senso … tecnicamente le dimensioni
+                    della UI dovrebbero essere fisse perché anche quelle hanno
+                    una influenza sul design … magari di certi temi non è lo
+                    sfondo che non ti piace, ma inconsciamente la UI è
+                    strutturata un po' peggio e ti dà fastidio"
+
+                 Which is right: the spacing scale and type scale were tuned
+                 once for legibility, and letting a theme scale them by 0.78x or
+                 1.2x makes some themes quietly worse laid out than others, felt
+                 rather than seen. One canonical geometry, seven appearances.
   topbar         'flat' | 'notch' (clipped corner) | 'rail' (tick ruler beneath)
   arrive         page-arrival timeline, keyed in SKIN_ARRIVE (motion.js). The
                  whole page is choreographed, not each card independently.
@@ -595,8 +606,8 @@ SKINS = {
         'ease': 'cubic-bezier(.2,.9,.3,1)',
         'enter': 'wipe', 'burst': 'brackets',
         'gauge': {'tick': 'line', 'cap': 'round', 'lw': 1.0, 'glow': .35},
-        'chassis': 'brackets', 'scale': 1.0, 'density': .90, 'topbar': 'rail',
-        'arrive': 'boot', 'op': .74, 'stage': 'hud', 'bloom': .25, 'calm': .25, 'flow': 0.55,
+        'chassis': 'brackets', 'topbar': 'rail',
+        'arrive': 'boot', 'op': .74, 'stage': 'hud', 'bloom': .25, 'calm': .21, 'flow': 0.55,
     },
     # ── world skins ──────────────────────────────────────────
     # These are not offered in the skin picker (`world: True`). Each belongs to
@@ -615,8 +626,8 @@ SKINS = {
         'enter': 'bloom', 'burst': 'sparkle',
         # no gradients anywhere: cel shading quantises to flat levels
         'gauge': {'tick': 'dot', 'cap': 'round', 'lw': 2.4, 'glow': 0},
-        'chassis': 'float', 'scale': 1.16, 'density': 1.12, 'topbar': 'flat',
-        'arrive': 'bloom', 'op': .82, 'stage': 'anime', 'bloom': .35, 'calm': .45, 'flow': 1.0,
+        'chassis': 'float', 'topbar': 'flat',
+        'arrive': 'bloom', 'op': .82, 'stage': 'anime', 'bloom': .35, 'calm': .38, 'flow': 1.0,
     },
     'cyber': {
         'label': 'Cyberpunk', 'world': True,
@@ -627,8 +638,8 @@ SKINS = {
         'ease': 'cubic-bezier(.16,1,.3,1)',
         'enter': 'glitch', 'burst': 'scan',
         'gauge': {'tick': 'line', 'cap': 'butt', 'lw': 1.15, 'glow': .8},
-        'chassis': 'brackets', 'scale': 1.04, 'density': .92, 'topbar': 'notch',
-        'arrive': 'glitch', 'op': .70, 'stage': 'cyber', 'bloom': .7, 'calm': .4, 'flow': 1.15,
+        'chassis': 'brackets', 'topbar': 'notch',
+        'arrive': 'glitch', 'op': .70, 'stage': 'cyber', 'bloom': .7, 'calm': .20, 'flow': 1.15,
     },
     'deck': {
         'label': 'Deck', 'world': True,
@@ -639,8 +650,8 @@ SKINS = {
         'ease': 'cubic-bezier(.2,.9,.3,1)',
         'enter': 'wipe', 'burst': 'brackets',
         'gauge': {'tick': 'line', 'cap': 'butt', 'lw': .8, 'glow': .2},
-        'chassis': 'brackets', 'scale': .96, 'density': .78, 'topbar': 'rail',
-        'arrive': 'boot', 'op': .76, 'stage': 'deck', 'bloom': .3, 'calm': .3, 'flow': 0.7,
+        'chassis': 'brackets', 'topbar': 'rail',
+        'arrive': 'boot', 'op': .76, 'stage': 'deck', 'bloom': .3, 'calm': .26, 'flow': 0.7,
     },
     'graph': {
         # Homage to this project's own architecture graph — the thing in the
@@ -655,8 +666,8 @@ SKINS = {
         'ease': 'cubic-bezier(.22,1,.36,1)',
         'enter': 'lift', 'burst': 'link',
         'gauge': {'tick': 'dot', 'cap': 'round', 'lw': 1.1, 'glow': .5},
-        'chassis': 'float', 'scale': 1.0, 'density': 1.06, 'topbar': 'flat',
-        'arrive': 'lift', 'op': .58, 'stage': 'graph', 'bloom': .5, 'calm': .5, 'flow': 0.85,
+        'chassis': 'float', 'topbar': 'flat',
+        'arrive': 'lift', 'op': .58, 'stage': 'graph', 'bloom': .5, 'calm': .40, 'flow': 0.85,
     },
     'crt': {
         'label': 'Terminal', 'blurb': 'Retro CRT in a bezel. Curved raster, rolling refresh, phosphor glow.',
@@ -668,8 +679,8 @@ SKINS = {
         'gauge': {'tick': 'block', 'cap': 'butt', 'lw': 1.0, 'glow': .7},
         # bloom 0: the tube's glow is drawn in the scene shader itself, so the
         # composer would only cost two render targets to duplicate it
-        'chassis': 'bezel', 'scale': .98, 'density': .92, 'topbar': 'flat',
-        'arrive': 'type', 'op': .78, 'stage': 'crt', 'bloom': 0, 'calm': .2, 'flow': 0.5,
+        'chassis': 'bezel', 'topbar': 'flat',
+        'arrive': 'type', 'op': .78, 'stage': 'crt', 'bloom': 0, 'calm': .18, 'flow': 0.5,
     },
     'brutal': {
         'label': 'Brutalist', 'blurb': 'Halftone dot field, thick borders, hard offset shadows, zero easing.',
@@ -682,8 +693,8 @@ SKINS = {
         'gauge': {'tick': 'block', 'cap': 'butt', 'lw': 2.0, 'glow': 0},
         # op 1.0 and bloom 0 on purpose: brutalism does not do translucency and
         # it does not do glow. The stage shows in the gutters, and that is all.
-        'chassis': 'none', 'scale': 1.20, 'density': 1.0, 'topbar': 'flat',
-        'arrive': 'slam', 'op': .88, 'stage': 'brutal', 'bloom': 0, 'calm': .3, 'flow': 0.6,
+        'chassis': 'none', 'topbar': 'flat',
+        'arrive': 'slam', 'op': .88, 'stage': 'brutal', 'bloom': 0, 'calm': .26, 'flow': 0.6,
     },
 }
 
@@ -697,7 +708,7 @@ CLASSIC_SKINS = [n for n, s in SKINS.items() if not s.get('world')]
 #: because a missing token silently falls back and the skin becomes a no-op
 SKIN_KEYS = ('label', 'blurb', 'radius', 'border', 'shadow', 'surface', 'edge',
              'font', 'track', 'caps', 'ease', 'enter', 'burst', 'gauge',
-             'chassis', 'scale', 'density', 'topbar', 'arrive', 'op',
+             'chassis', 'topbar', 'arrive', 'op',
              'stage', 'bloom', 'calm', 'flow')
 
 #: the background scenes stage.js implements, one per skin. Kept here so

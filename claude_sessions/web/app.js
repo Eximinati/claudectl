@@ -307,12 +307,13 @@ function applySkin(name){
   st.setProperty('--sk-track',sk.track);
   st.setProperty('--sk-caps',sk.caps);
   st.setProperty('--sk-ease',sk.ease);
-  // ── chassis. These four are why switching skin now reads as switching app
-  // rather than restyling one: the type scale, the row density, how translucent
-  // every surface is, and the frame the whole viewport sits in. Geometry rules
-  // read the tokens, so a new skin still needs no new geometry CSS.
-  st.setProperty('--sk-scale',sk.scale!=null?sk.scale:1);
-  st.setProperty('--sk-dens',sk.density!=null?sk.density:1);
+  // ── chassis. What makes switching a look read as switching app: surface
+  // translucency, the frame the viewport sits in, and the signature treatments.
+  //
+  // Deliberately NOT here: type scale and row density. Those multipliers were
+  // removed — a look may change what the app looks like, never how big it is.
+  // The spacing and type scales were tuned once for legibility, and letting a
+  // theme stretch them made some themes quietly worse laid out than others.
   // How much of the scene shows through every surface. The look proposes a
   // value; the user's slider, if they have moved it, wins for every look —
   // taste, and monitor, vary more than a designer can guess.
