@@ -245,6 +245,14 @@ def _omni_saved(usage_by_model):
     return total
 
 
+#: A session whose transcript was touched inside this window counts as live.
+#: Ten minutes is deliberately generous — Claude Code writes the transcript per
+#: turn, so a session where you are reading a long answer or typing a prompt has
+#: a stale mtime while very much being in use. Too tight and the Activity card
+#: flickers to zero mid-conversation, which is the failure it exists to avoid.
+LIVE_WINDOW = 600
+
+
 def assemble_breakdown(entries, days=14, silent=True, recent=6):
     """Everything the home dashboard shows, from ONE transcript scan:
     per-day tokens split by account (oldest→newest, exactly `days` entries),
@@ -259,6 +267,18 @@ def assemble_breakdown(entries, days=14, silent=True, recent=6):
     acct_of = {d: n for n, d in all_config_dirs()}
     day_b = {d: {'tokens': 0, 'sessions': 0, 'ubm': {}, 'accounts': {}} for d in win}
     acct_b, proj_b, recent_b = {}, {}, []
+
+    # ── live activity, across every account ──
+    # What the dashboard's Activity card should have been reading all along. It
+    # was wired to claudectl's own background-job count, which is ~always zero,
+    # so the card reported the tool's idleness on a dashboard simultaneously
+    # showing hundreds of millions of tokens.
+    #
+    # Both of these are free: the loop below already has every session's mtime,
+    # account and message count. No extra scan, no deeper parse.
+    now_ts = now.timestamp()
+    hour_b = [0] * 24                       # sessions touched, per hour, last 24h
+    live_by_acct = {}                       # sessions touched within LIVE_WINDOW
 
     for item in iter_all_sessions(entries, 'DASHBOARD', silent=silent):
         if item is None:
@@ -292,6 +312,15 @@ def assemble_breakdown(entries, days=14, silent=True, recent=6):
                              'account': acct, 'mtime': mtime, 'msgs': stats.get('count', 0),
                              'title': stats.get('title') or _sid[:8],
                              'omni': _used_omni(stats)})
+            # same `count > 3` gate as above, and for the same reason: claudectl's
+            # own headless one-shots (lesson distilling, graph building, title
+            # extraction) land in this transcript store and would otherwise read
+            # as "you are working" every time memory refreshed itself
+            age = now_ts - mtime
+            if 0 <= age < 86400:
+                hour_b[min(23, int(age // 3600))] += 1
+            if 0 <= age < LIVE_WINDOW:
+                live_by_acct[acct] = live_by_acct.get(acct, 0) + 1
 
         day = _day_of(stats, mtime)
         if day not in day_b:
@@ -337,6 +366,12 @@ def assemble_breakdown(entries, days=14, silent=True, recent=6):
     recent_b.sort(key=lambda r: r['mtime'], reverse=True)
     return {'days': day_rows, 'accounts': acct_rows, 'projects': proj_rows,
             'recent': recent_b[:recent],
+            # oldest→newest, so the sparkline reads left-to-right like every
+            # other series in the app
+            'hours': list(reversed(hour_b)),
+            'live': {'total': sum(live_by_acct.values()),
+                     'by_account': live_by_acct,
+                     'window': LIVE_WINDOW},
             'totals': {'tokens': sum(r['tokens'] for r in day_rows),
                        'cost': round(estimate_cost(all_ubm)[0], 2),
                        'sessions': sum(r['sessions'] for r in acct_rows),

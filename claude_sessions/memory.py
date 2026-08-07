@@ -777,6 +777,75 @@ def _module_graph(project_path, proj_folder, units):
     return edges, rank
 
 
+def auto_cycle(project_path, proj_folder, project_name, auto_cap=6):
+    """EVERYTHING memory-related, in one pass. The auto path's single entry point.
+
+    Auto-memory used to refresh the semantic graph and nothing else, so on a
+    project with it enabled the graph stayed current while lessons silently
+    stopped accruing — `lessons.scan_sessions` was reachable only from the
+    manual GUI job and the TUI review screen:
+
+        "se abilitato auto memory, tutte le cose riguardanti memoria devono
+         essere aggiornate automaticamente"
+
+    Order matters. The graph refresh writes the CLAUDE.md digest, and that digest
+    COUNTS LESSONS — so mining lessons afterwards leaves the block stale by
+    exactly the number just learned. Hence the re-sync at the end, and only when
+    something actually changed.
+
+    What this must never do is touch anything a person wrote. Every write below
+    goes through a namespaced writer:
+      · claude_md.write_memory_block  — replaces only the region between the
+        CLAUDECTL:MEMORY sentinels, leaving prose, AUTOGEN and SESSIONS intact
+      · memrules.sync_rules           — owns `claudectl-mem-*.md` and nothing
+        else in .claude/rules/
+      · lessons.apply_decay           — never evicts a pinned lesson
+    tests/test_memauto.py holds that line byte-for-byte.
+
+    Returns a dict describing what it did — the caller stamps it for the UI.
+    """
+    from .config import load_settings
+    st = load_settings()
+    out = {'graph': False, 'lessons': 0, 'scanned': 0}
+
+    mem = refresh_memory(project_path, proj_folder, project_name, auto_cap=auto_cap)
+    out['graph'] = not mem.get('auto_skipped')
+
+    # 'off' is a real answer and is honoured; 'prompt' still mines here, because
+    # the prompt is about REVIEWING lessons, not about whether to notice them.
+    # merge_lessons applies memory_lessons_autoapprove, so a low-confidence
+    # lesson still lands as pending and waits for a human.
+    if st.get('memory_lessons', 'prompt') != 'off':
+        try:
+            from . import lessons as _lessons
+            mem = load_memory(project_path, proj_folder)
+            sids = _lessons.pending_sids(proj_folder, mem)
+            if sids:
+                added, scanned = _lessons.scan_sessions(project_path, proj_folder, sids)
+                out['lessons'], out['scanned'] = added, scanned
+        except Exception:
+            _c.log.exception('memory: auto lesson scan failed')
+
+    if out['lessons']:
+        # the digest counts lessons, so it is now short by exactly `added`
+        try:
+            mem = load_memory(project_path, proj_folder)
+            sync_to_claudemd(project_path, proj_folder, mem)
+            from .memrules import sync_rules
+            sync_rules(project_path, proj_folder, mem)
+        except Exception:
+            _c.log.exception('memory: post-lesson sync failed')
+
+    try:
+        mem = load_memory(project_path, proj_folder)
+        mem['auto_updated'] = _iso()
+        mem['auto_last'] = out
+        save_memory(project_path, proj_folder, mem)
+    except Exception:
+        pass
+    return out
+
+
 def start_background_refresh(project_path, proj_folder, project_name, auto_cap=6):
     """Refresh memory in a daemon thread so the TUI stays responsive — the user
     works while memory updates. No-op if memory doesn't exist yet, if a refresh

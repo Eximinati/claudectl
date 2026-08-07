@@ -150,7 +150,18 @@ def test_spawn_skipped_while_worker_lock_live(monkeypatch, tmp_path):
 
 # ── worker CLI ───────────────────────────────────────────────
 
-def test_bg_scan_cli_runs_lessons_then_refresh(monkeypatch, tmp_path):
+def test_bg_scan_cli_runs_the_whole_memory_cycle(monkeypatch, tmp_path):
+    """Order is refresh -> lessons -> re-sync, not lessons -> refresh.
+
+    The old order relied on the graph refresh happening last so its digest write
+    would pick up the lessons just mined. That works only when the refresh
+    actually runs: refresh_memory returns early when nothing changed on disk (and
+    when auto_cap is exceeded) WITHOUT writing the digest — so on a project whose
+    code was untouched but whose sessions taught something, the lesson count in
+    CLAUDE.md silently went stale.
+
+    memory.auto_cycle re-syncs explicitly whenever lessons landed, which is
+    correct in both cases at the cost of one extra write."""
     sb = Sandbox(monkeypatch, tmp_path)
     actual, enc, folder, _ = sb.add_project('alpha', n_sessions=0)
     _mk_transcript(folder, 'sid-one')
@@ -166,7 +177,7 @@ def test_bg_scan_cli_runs_lessons_then_refresh(monkeypatch, tmp_path):
     monkeypatch.setattr(memory, 'refresh_memory',
                         lambda *a, **k: order.append('refresh') or seed)
     main_mod._bg_scan_cli(actual, folder)
-    assert order == ['lessons', 'refresh']                   # serialized, in order
+    assert order == ['refresh', 'lessons'], order            # serialized, in order
     assert memory.scan_lock_status(actual) is None           # lock released
 
 

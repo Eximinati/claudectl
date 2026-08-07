@@ -80,7 +80,7 @@ _DEFAULT_SETTINGS = {
     'default_max_thinking': '',    # MAX_THINKING_TOKENS env for launches ('' = unset)
     'default_subagent_model': '',  # CLAUDE_CODE_SUBAGENT_MODEL env ('' = unset)
     'ui_mode': 'tui',              # default interface: 'tui' | 'gui' (desktop app)
-    'gui_shell': 'auto',
+    'gui_shell': 'auto',          # GUI window: 'auto' | 'qt' | 'edge' | 'browser'
     # ── GUI appearance ──
     # These MUST be declared here, not just accepted by the POST handler.
     # load_settings() drops any key it does not know, and /api/settings does
@@ -93,7 +93,15 @@ _DEFAULT_SETTINGS = {
     'skin': '',
     'stage': '',
     'world': '',
-    'surface': 0,           # GUI window: 'auto' | 'qt' | 'edge' | 'browser'
+    'surface': 0,
+    # ── OpenTelemetry export (team observability) ──
+    # Declared here for the same reason the appearance keys are: load_settings
+    # drops anything it does not know, and /api/settings does load->mutate->save,
+    # so an undeclared key is written once and deleted by the next save.
+    'otel_enabled': False,
+    'otel_endpoint': '',
+    'otel_protocol': 'http/protobuf',
+    'otel_headers': '',           # e.g. "Authorization=Bearer <token>"
     'auto_memory_interval': 3600,  # GUI background auto-memory re-check cadence (s)
     'omniroute_base_url':   'http://localhost:20128',  # local OmniRoute proxy
     'omniroute_api_key':    '',   # -> ANTHROPIC_AUTH_TOKEN for the exec session
@@ -418,6 +426,40 @@ def advise(model, effort):
         'claude-fable-5':   'Maximum capability for the hardest, longest-horizon work.',
     }
     return ('ok', good.get(model, ''))
+
+
+def otel_env(s=None):
+    """Claude Code's OpenTelemetry export vars, or {} when it is off.
+
+    Claude Code emits metrics and events over OTLP when
+    CLAUDE_CODE_ENABLE_TELEMETRY=1 and the standard OTEL_* variables are set.
+    claudectl already assembles the launch environment per project and account,
+    so wiring it here means one toggle covers every session it starts.
+
+    PRIVACY, because it is the first thing anyone asks: prompt CONTENT is not
+    exported. Claude Code records prompt length only, unless
+    OTEL_LOG_USER_PROMPTS=1 — which is deliberately not settable from here. If
+    someone wants that they can put it in their own environment, having decided
+    to; it is not a checkbox claudectl should offer casually.
+
+    Pure mapping, no I/O — same contract as omniroute_env, so tests can call it.
+    """
+    s = load_settings() if s is None else s
+    endpoint = (s.get('otel_endpoint') or '').strip()
+    if not s.get('otel_enabled') or not endpoint:
+        return {}
+    proto = (s.get('otel_protocol') or 'http/protobuf').strip()
+    env = {
+        'CLAUDE_CODE_ENABLE_TELEMETRY': '1',
+        'OTEL_EXPORTER_OTLP_ENDPOINT': endpoint,
+        'OTEL_EXPORTER_OTLP_PROTOCOL': proto,
+        'OTEL_METRICS_EXPORTER': 'otlp',
+        'OTEL_LOGS_EXPORTER': 'otlp',
+    }
+    headers = (s.get('otel_headers') or '').strip()
+    if headers:                      # e.g. "Authorization=Bearer xyz"
+        env['OTEL_EXPORTER_OTLP_HEADERS'] = headers
+    return env
 
 
 def omniroute_env(s=None, model=None):

@@ -58,13 +58,16 @@ def _bg_scan_cli(project_path, proj_folder):
     try:
         st = load_settings()
         mem = memory.load_memory(project_path, proj_folder)
-        if st.get('memory_lessons', 'prompt') == 'auto':
+        if st.get('memory_auto_refresh') == 'open' and mem.get('entities'):
+            # one call now does the graph, the CLAUDE.md block, the rules AND
+            # the lessons — see memory.auto_cycle
+            name = os.path.basename(project_path.rstrip('\\/')) or project_path
+            memory.auto_cycle(project_path, proj_folder, name, auto_cap=6)
+        elif st.get('memory_lessons', 'prompt') == 'auto':
+            # refresh is off but lesson learning is on — mine them on their own
             sids = lessons.pending_sids(proj_folder, mem)
             if sids:
                 lessons.scan_sessions(project_path, proj_folder, sids)
-        if st.get('memory_auto_refresh') == 'open' and mem.get('entities'):
-            name = os.path.basename(project_path.rstrip('\\/')) or project_path
-            memory.refresh_memory(project_path, proj_folder, name, auto_cap=6)
     except Exception:
         log.exception('bg-scan worker failed')
     finally:
@@ -80,6 +83,12 @@ def run():
     if len(sys.argv) >= 3 and sys.argv[1] == 'recall':
         _recall_cli(' '.join(sys.argv[2:]))
         return
+    # `claudectl statusline` — Claude Code's statusLine command. Reads one JSON
+    # payload on stdin, prints one line. Runs on every conversation turn, so it
+    # is dispatched FIRST-ish and must never touch the TUI.
+    if len(sys.argv) >= 2 and sys.argv[1] == 'statusline':
+        from .statusline import main as _sl
+        sys.exit(_sl(sys.argv[2:]))
     # `claudectl review [--staged|--branch BASE] [--min-confidence N] [path]`
     if len(sys.argv) >= 2 and sys.argv[1] == 'review':
         from .review import review_cli
@@ -582,6 +591,11 @@ def build_launch_command(path, encoded_name, choice, opts):
         env['MAX_THINKING_TOKENS'] = str(opts['max_thinking'])
     if opts.get('subagent_model'):
         env['CLAUDE_CODE_SUBAGENT_MODEL'] = opts['subagent_model']
+    # OpenTelemetry export, if configured. claudectl already owns the launch
+    # environment, so this is the natural place for it — and it is the step from
+    # a personal tool to one a team can point at a shared backend.
+    from .config import otel_env
+    env.update(otel_env())
     extra = read_extra_paths(proj_folder)
     if extra:
         env['PATH'] = ';'.join(extra) + ';' + env.get('PATH', '')

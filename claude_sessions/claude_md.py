@@ -31,7 +31,14 @@ def write_memory_block(project_path, digest):
     if _MEMORY_START in old and _MEMORY_END in old:
         pre = old[:old.index(_MEMORY_START)]
         post = old[old.index(_MEMORY_END) + len(_MEMORY_END):]
-        new = pre + section + post
+        # Normalise the seam instead of concatenating it. `section` already ends
+        # in a newline and `post` began with the one that followed the old
+        # sentinel, so a plain join added a blank line on EVERY rewrite — a slow
+        # leak that only showed once auto-memory started running unattended on a
+        # timer, by which point the file had grown dozens of trailing blanks.
+        # This makes the write idempotent: same digest in, same bytes out.
+        tail = post.lstrip('\n')
+        new = pre + section + ('\n' + tail if tail else '')
     elif old.strip():
         new = old.rstrip('\n') + '\n\n' + section
     else:

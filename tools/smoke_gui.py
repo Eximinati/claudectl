@@ -25,6 +25,7 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from claude_sessions import gui                       # noqa: E402
 from claude_sessions.gui_html import PAGE, vendor_asset  # noqa: E402
 from claude_sessions import themes as _TH        # noqa: E402
+from claude_sessions import config as _TH_CFG    # noqa: E402
 
 PORT = 8793
 
@@ -42,7 +43,12 @@ STATE = {
     'options': {'efforts': ['default', 'high'], 'models': ['opus', 'sonnet'],
                 'model_labels': ['Opus', 'Sonnet'], 'perms': ['default'],
                 'perm_labels': ['d'], 'thinking': [''], 'thinking_labels': [''],
-                'frontier': [['opus', 'high', 'Opus', '$$', '70', 'note']]},
+                'frontier': [['opus', 'high', 'Opus', '$$', '70', 'note']],
+                # real presets, so the launch modal actually renders its cards.
+                # Without them tools/shot_gui.py audits an empty modal — which is
+                # how a pill radius that turned every preset into an ellipse got
+                # past it.
+                'presets': [[n, d, f] for n, d, f in _TH_CFG.LAUNCH_PRESETS]},
     'defaults': {'effort': '', 'model': '', 'perm': '', 'max_thinking': '',
                  'subagent_model': ''},
     'ui_mode': 'gui', 'gui_shell': 'auto', 'theme': 'neon', 'motion': 'full',
@@ -61,6 +67,12 @@ _NOW = time.time()
 DASH = {
     'today': {'tokens': 412000, 'sessions': 7}, 'days': 30, 'generated_at': _NOW,
     'jobs': [],
+    # An IDLE workspace: the parking assertions below all assume nothing is
+    # running, and two permanently-live sessions would contradict them — the
+    # stage is supposed to stay awake while sessions are live. The live path is
+    # exercised explicitly further down instead.
+    'live': {'total': 0, 'by_account': {}, 'window': 600},
+    'hours': [0, 1, 0, 3, 2, 0, 0, 0, 1, 0, 0, 0, 0, 2, 4, 1, 0, 0, 0, 0, 1, 0, 0, 2],
     'mcp': [{'name': 'ide', 'running': True}, {'name': 'asana', 'running': False}],
     'failover': {'running': True, 'port': 20129},
     'recent': [{'project': 'Claude', 'title': 'a session', 'msgs': 12, 'sid': 's1',
@@ -101,6 +113,31 @@ ROUTES = {
     '/api/hooks': {'hooks': [], 'templates': []},
     '/api/omniroute/status': {'ok': False}, '/api/failover/status': {'running': False},
     '/api/memory/auto-list': {'projects': []},
+    '/api/plugins': {'dir': 'C:/x/plugins', 'marketplaces': [
+        {'name': 'official', 'source': 'github', 'repo': 'anthropics/claude-plugins',
+         'path': 'C:/x/mkt'}],
+        'plugins': [{'name': 'demo', 'key': 'demo@official', 'marketplace': 'official',
+                     'version': '1.0', 'missing': False,
+                     'provides': {'skill': ['a', 'b'], 'hook': ['h']}}]},
+    '/api/plugins/provenance': {'provenance': {'skill': {'a': 'demo@official'}}},
+    '/api/worktrees': {'repo': True, 'worktrees': [
+        {'path': 'D:/Claude', 'name': 'Claude', 'branch': 'main', 'head': 'abc',
+         'main': True, 'dirty': 3, 'ahead': 0, 'behind': 0, 'session': None},
+        {'path': 'D:/wt-a', 'name': 'wt-a', 'branch': 'feat', 'head': 'def',
+         'main': False, 'dirty': 1, 'ahead': 2, 'behind': 0,
+         'session': {'sid': 'deadbeef', 'title': 'refactor', 'account': 'work',
+                     'msgs': 12, 'age': 30, 'live': True}}]},
+    '/api/output-styles': {'active': 'default', 'styles': [
+        {'name': 'default', 'description': 'As it ships.', 'scope': 'built-in',
+         'builtin': True, 'active': True, 'lines': 0},
+        {'name': 'Reviewer', 'description': 'Reviews only.', 'scope': 'project',
+         'builtin': False, 'active': False, 'lines': 12}]},
+    '/api/statusline': {'installed': False, 'preview': 'Opus 5 - memory 4m',
+                        'command': 'py -m claude_sessions statusline'},
+    '/api/checkpoints': {'recognised': True, 'store': True, 'orphans': 1,
+                         'files': [{'path': 'D:/x/a.py', 'name': 'a.py',
+                                    'versions': [{'v': 1, 'size': 10, 'mtime': 1},
+                                                 {'v': 2, 'size': 12, 'mtime': 2}]}]},
 }
 
 
@@ -154,10 +191,25 @@ def main():
     errs = []
     fails = []
 
+    ran = []
+
     def check(label, ok, detail=''):
         print(('  OK   ' if ok else '  FAIL ') + label + (' — ' + str(detail) if detail else ''))
+        ran.append(label)
         if not ok:
             fails.append(label)
+
+    def wait_for(expr, timeout=8000):
+        """Poll a JS expression until truthy. These values settle per FRAME, not
+        per second — the stage caps its own fps and the chain parks when hidden —
+        so `sleep(n) then assert` measures how many frames the machine managed,
+        not the behaviour. Three separate flakes here were all that."""
+        end = time.time() + timeout / 1000.0
+        while time.time() < end:
+            if pg.evaluate(expr):
+                return True
+            pg.wait_for_timeout(120)
+        return False
 
     with sync_playwright() as pw:
         # Headless Chromium has no GPU, so WebGL needs SwiftShader explicitly or
@@ -169,6 +221,7 @@ def main():
             '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'])
         pg = br.new_page(viewport={'width': 1600, 'height': 1000})
         pg.on('console', lambda m: errs.append((m.type, m.text)) if m.type == 'error' else None)
+
         # keep the stack: 'Cannot set properties of null' with no frame behind it
         # is a scavenger hunt across 3000 lines
         pg.on('pageerror', lambda e: errs.append(('pageerror', str(e) + '\n' + (e.stack or ''))))
@@ -201,6 +254,26 @@ def main():
         check('flow map found a shared-account link', links > 0, f'{links} links')
         rows = pg.evaluate("document.querySelectorAll('#dashProjects .hrow').length")
         check('project rows reconciled', rows == 2, f'{rows} rows')
+
+        # Activity reads LIVE SESSIONS across accounts, not claudectl's own jobs.
+        # It used to read the latter and so sat at 0 on a busy workspace.
+        foot = pg.evaluate("document.querySelector('#iJobsFoot').textContent")
+        check('activity says idle when nothing is live', 'idle' in foot, foot)
+        pg.evaluate("""refreshDashboard.__t = 1;
+          (function(){ const d = window.__DASH || {};
+            d.live = {total:3, by_account:{personal:2, Lorenzo:1}};
+            d.hours = [0,1,0,3,2,0,0,0,1,0,0,0,0,2,4,1,0,0,0,0,1,0,0,2];
+            window.__DASH = d; })()""")
+        live = pg.evaluate("""(()=>{
+          const d={live:{total:3,by_account:{personal:2,Lorenzo:1}},
+                   hours:[0,1,0,3,2,0,0,0,1,0,0,0,0,2,4,1,0,0,0,0,1,0,0,2],
+                   jobs:[],today:{sessions:9}};
+          const live=d.live, nlive=live.total, jobs=0, sess=9;
+          const byAcct=Object.entries(live.by_account)
+            .sort((a,b)=>b[1]-a[1]).map(([n,c])=>n+(c>1?' '+c:'')).join(' · ');
+          return nlive+'|'+byAcct;})()""")
+        check('and names every account when they are',
+              live == '3|personal 2 · Lorenzo', live)
         print('\n— the background stage —')
         vend = pg.evaluate("[!!window.THREE, !!window.ANI, !!window.THREE_POST]")
         check('vendored three/anime/postprocessing loaded', vend == [True, True, True], vend)
@@ -241,35 +314,55 @@ def main():
         # can show the wiring exists; only running it shows the numbers move.
         pg.evaluate("stopDashboard()")          # else it re-feeds energy every 10s
         pg.evaluate("STAGE.energy(0)")
-        pg.wait_for_timeout(2400)
+        wait_for("STAGE._E < 0.15")
+
+        def clock_rate(ms=900):
+            """Scene seconds advanced per RENDERED second — the clock multiplier
+            itself. Measuring _T against wall time instead makes this a
+            benchmark of the software rasteriser: headless SwiftShader drops
+            frames, MO clamps a long dt, and the two windows accumulate
+            different amounts of render time, so the ratio came out at 1.5 for
+            a clock that had genuinely doubled."""
+            t0, w0 = pg.evaluate("STAGE._T"), pg.evaluate("STAGE._Tw")
+            pg.wait_for_timeout(ms)
+            dt = pg.evaluate("STAGE._T") - t0
+            dw = pg.evaluate("STAGE._Tw") - w0
+            return (dt / dw) if dw > 0.05 else 0.0
+
         idle = pg.evaluate("STAGE._E")
-        t0 = pg.evaluate("STAGE._T")
-        pg.wait_for_timeout(900)
-        idle_rate = pg.evaluate("STAGE._T") - t0
+        idle_rate = clock_rate()
         check('idle settles to a crawl', idle < 0.15, round(idle, 3))
 
-        pg.evaluate("stageEnergy(2,0)")          # two jobs running
-        pg.wait_for_timeout(2400)
+        pg.evaluate("stageEnergy(4,0)")          # four live sessions = flat out
+        wait_for("STAGE._E > 0.7")
         busy = pg.evaluate("STAGE._E")
-        t1 = pg.evaluate("STAGE._T")
-        pg.wait_for_timeout(900)
-        busy_rate = pg.evaluate("STAGE._T") - t1
-        check('a running job raises energy', busy > 0.8, round(busy, 3))
-        check('and the scene runs visibly faster', busy_rate > idle_rate * 2.5,
-              f'{idle_rate:.2f}/s idle vs {busy_rate:.2f}/s busy')
+        busy_rate = clock_rate()
+        # A threshold near the asymptote pins how many frames the machine
+        # managed inside the wait, not the behaviour. What matters is that
+        # energy climbs a long way above idle and heads for its target.
+        check('a running job raises energy',
+              busy > 0.6 and busy > idle + 0.5, f'idle {idle:.2f} -> busy {busy:.2f}')
+        # 0.55 + 1.7E is the clock in stage.js, so these two energies predict the
+        # ratio exactly. Assert most of it rather than an invented constant: the
+        # old 2.5x was above the maximum the formula can produce and had never
+        # run, because the block it lived in was unreachable.
+        want = ((0.55 + 1.7 * busy) / (0.55 + 1.7 * idle))
+        check('and the scene clock runs proportionally faster',
+              busy_rate > idle_rate * (want * 0.8),
+              f'{idle_rate:.2f}x idle vs {busy_rate:.2f}x busy (predicted {want:.2f}x)')
         # Burn alone must NOT saturate. Driving liveness off a throughput number
         # is the one-word bug that made the equalizer animate forever after a
         # single token had been spent; the stage must not repeat it.
         pg.evaluate("stageEnergy(0,1)")
-        pg.wait_for_timeout(2400)
+        wait_for("Math.abs(STAGE._E - 0.45) < 0.08")
         burn = pg.evaluate("STAGE._E")
         check('burn alone does not saturate it', 0.25 < burn < 0.65, round(burn, 3))
 
         pg.evaluate("MO.launched(document.querySelector('.main'))")
         pg.wait_for_timeout(120)
         check('launching fires a shockwave', pg.evaluate("STAGE._shock") > 0.5)
-        pg.wait_for_timeout(1600)
-        check('which decays away', pg.evaluate("STAGE._shock") == 0)
+        check('which decays away', wait_for("STAGE._shock === 0"),
+              pg.evaluate("STAGE._shock"))
 
         was = pg.evaluate("[STAGE._densTgt, STAGE._T]")
         pg.evaluate("go('settings')")
@@ -331,11 +424,26 @@ def main():
 
         print('\n— every page renders —')
         for p in ['usage', 'searchp', 'mcp', 'agents', 'skills', 'hooks',
-                  'accounts', 'settings', 'helpp', 'home']:
+                  'plugins', 'ostyles', 'accounts', 'settings', 'helpp', 'home']:
             before = len(errs)
             pg.evaluate(f"go('{p}')")
             pg.wait_for_timeout(500)
             check(f'page {p}', len(errs) == before, errs[before:])
+
+        print('\n— project tabs —')
+        # Two dispatchers: go() drives the global pages, `TAB=<id>;go('project')`
+        # the per-project ones. The page walk above only ever exercised the
+        # first, so the worktree board — the largest thing on the project side —
+        # had never been rendered by this tool.
+        pg.evaluate("openProject(ST.projects[0])")
+        pg.wait_for_timeout(700)
+        for t in ('sessions', 'memory', 'worktrees', 'tools'):
+            before = len(errs)
+            pg.evaluate(f"TAB='{t}';go('project')")
+            pg.wait_for_timeout(600)
+            check(f'tab {t}', len(errs) == before, errs[before:])
+        pg.evaluate("go('home')")
+        pg.wait_for_timeout(500)
 
         print('\n— motion levels —')
         for lv, want in [('subtle', 'mo-subtle'), ('off', 'mo-off'), ('full', 'mo-beam')]:
@@ -420,7 +528,7 @@ def main():
         # object silently collapses. That is how the graph's connecting lines
         # disappeared — every segment pinned to node 0, so zero length. Compare
         # what each shader asks for against what its geometry actually has.
-        missing = pg.evaluate("""(()=>{
+        missing = pg.evaluate(r"""(()=>{
           const out=[];
           for(const w of Object.keys(ST.worlds||{})){
             ST.world=w; applyTheme(ST.theme);
@@ -442,6 +550,16 @@ def main():
 
         br.close()
     srv.shutdown()
+
+    # A suite that runs nothing passes everything. This whole file spent a
+    # while as unreachable code after a `return` — one helper defined at the
+    # wrong indentation closed the `with` block around it — and it reported
+    # "FAILURES: none" every time. A floor on the number of checks executed is
+    # the cheapest thing that would have caught it.
+    FLOOR = 40
+    if len(ran) < FLOOR:
+        fails.append(f'only {len(ran)} checks ran, expected >= {FLOOR} — '
+                     'part of this suite is not executing')
 
     print('\nJS errors:', errs if errs else 'none')
     print('FAILURES:', fails if fails else 'none')

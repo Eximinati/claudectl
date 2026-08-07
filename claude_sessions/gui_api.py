@@ -314,7 +314,9 @@ def _refresh_project(path, folder, auto_cap=6):
     memory._tls.silent = True
     try:
         name = os.path.basename(path.rstrip('\\/')) or path
-        memory.refresh_memory(path, folder, name, auto_cap=auto_cap)
+        # auto_cycle, not refresh_memory: "auto memory" means every memory
+        # surface, lessons included. See memory.auto_cycle.
+        memory.auto_cycle(path, folder, name, auto_cap=auto_cap)
     except Exception:
         _c.log.exception('gui: memory refresh failed for %s', path)
     finally:
@@ -639,6 +641,11 @@ def api_dashboard(q, body):
 
     _dash_cache = {'today': {'tokens': tk, 'cost': tc, 'sessions': ts},
                    'week': week, 'breakdown': bd, 'days': _DASH_DAYS,
+                   # cross-account live sessions + the last 24 HOURS of activity.
+                   # Hoisted out of the breakdown so the Activity card does not
+                   # have to know where in the payload they live.
+                   'live': bd.get('live') or {'total': 0, 'by_account': {}},
+                   'hours': bd.get('hours') or [],
                    'jobs': jobs, 'mcp': mcp_rows,
                    'recent': recent,
                    'failover': {'running': f_running, 'port': f_port},
@@ -761,7 +768,7 @@ def api_hooks_get(q, body):
     for event, block in (d.get('hooks') or {}).items():
         for i, entry in enumerate(block if isinstance(block, list) else []):
             out.append({'event': event, 'index': i,
-                        'label': hooks._hook_label(entry),
+                        'label': hooks._hook_label(entry, event),
                         'matcher': entry.get('matcher', '')})
     active = {h['label'] for h in out}
     return {'hooks': out,
@@ -778,6 +785,15 @@ def api_hooks_template(q, body):
     d = hooks._load()
     hooks_d = d.setdefault('hooks', {})
     block = hooks_d.setdefault(t['event'], [])
+    # Installing the same template twice is never what anyone means, and it is
+    # exactly what a row stuck on "Install" invites you to do. Two copies of a
+    # guard fire the same block twice; two copies of a memory hook inject the
+    # context twice. Comparison is interpreter-independent (see _cmd_keys), so
+    # a hook installed from the GUI is recognised by the console and vice versa.
+    want = hooks._cmd_keys(t['entry'])
+    if any(hooks._cmd_keys(e) == want for e in block):
+        return {'ok': True, 'message': f'{body["key"]} is already installed',
+                'already': True}
     block.append(t['entry'])
     hooks._save(d)
     return {'ok': True}
@@ -1828,6 +1844,183 @@ def api_plan_edit(q, body):
 
 # ── dispatch table (method, path) → handler(q, body) ─────────
 
+# ── plugins & worktrees ──────────────────────────────────────
+
+def api_plugins(q, body):
+    """Marketplaces, installed plugins, and what each one ships."""
+    from . import plugins
+    return plugins.summary()
+
+
+def api_provenance(q, body):
+    """{kind: {name: plugin_key}} — which rows in the skill/agent/hook managers
+    came from a bundle rather than from the user. The flat lists those managers
+    show are otherwise unreadable after a couple of marketplace installs, and
+    the obvious action on an unrecognised entry — delete it — can break a
+    plugin."""
+    from . import plugins
+    return {'provenance': plugins.provenance_index()}
+
+
+def api_plugin_marketplace_add(q, body):
+    from . import plugins
+    ok, msg = plugins.add_marketplace((body or {}).get('source', ''))
+    return {'ok': ok, 'message': msg}
+
+
+def api_plugin_marketplace_remove(q, body):
+    from . import plugins
+    ok, msg = plugins.remove_marketplace((body or {}).get('name', ''))
+    return {'ok': ok, 'message': msg}
+
+
+def api_plugin_remove(q, body):
+    from . import plugins
+    ok, msg = plugins.remove_plugin((body or {}).get('key', ''))
+    return {'ok': ok, 'message': msg}
+
+
+def api_worktrees(q, body):
+    """The board: every worktree of this project, and the session working in it."""
+    from . import worktrees
+    path = q.get('path', '')
+    if not path:
+        return {'worktrees': [], 'repo': False}
+    enc = q.get('enc', '')
+    return worktrees.board(path, _folder(q.get('cfgdir'), enc) if enc else None)
+
+
+def api_worktree_merge(q, body):
+    """Merge a worktree branch, behind the standard approval gate.
+
+    The diff is shown through diffview.confirm — the same path every other
+    destructive write in claudectl takes — so a merge is never something this
+    endpoint decides on its own.
+    """
+    from . import worktrees, diffview
+    path = (body or {}).get('path', '')
+    branch = (body or {}).get('branch', '')
+    if not path or not branch:
+        return {'ok': False, 'message': 'path and branch required'}
+    preview = worktrees.diff(path) or f'(no uncommitted diff in {path})'
+    head = (f'Merge {branch} into the checked-out branch of '
+            f'{os.path.basename(path)}?\n\n')
+    if not diffview.confirm('', head + preview[:20000], f'Merge {branch}'):
+        return {'ok': False, 'message': 'Cancelled'}
+    ok, msg = worktrees.merge_into_main(path, branch)
+    return {'ok': ok, 'message': msg}
+
+
+def api_worktree_diff(q, body):
+    from . import worktrees
+    return {'diff': worktrees.diff(q.get('wt', ''))}
+
+
+def _cfg(d):
+    """The account config dir a request names, or the active one."""
+    return (d or {}).get('cfgdir') or _c.config_dir
+
+
+def api_output_styles(q, body):
+    from . import outputstyles
+    path = q.get('path') or None
+    return {'styles': outputstyles.listing(path, _cfg(q)),
+            'active': outputstyles.current(path, _cfg(q))}
+
+
+def api_output_style_read(q, body):
+    from . import outputstyles
+    return {'body': outputstyles.read(q.get('name', ''), q.get('path') or None,
+                                      _cfg(q))}
+
+
+def api_output_style_select(q, body):
+    from . import outputstyles
+    b = body or {}
+    scope_project = b.get('scope') == 'project'
+    ok, msg = outputstyles.select(b.get('name', 'default'),
+                                  b.get('path') if scope_project else None,
+                                  _cfg(b))
+    return {'ok': ok, 'message': msg}
+
+
+def api_output_style_save(q, body):
+    from . import outputstyles
+    b = body or {}
+    ok, msg = outputstyles.save(b.get('name', ''), b.get('description', ''),
+                                b.get('body', ''),
+                                b.get('path') if b.get('scope') == 'project'
+                                else None, _cfg(b))
+    return {'ok': ok, 'message': msg}
+
+
+def api_output_style_delete(q, body):
+    from . import outputstyles
+    b = body or {}
+    ok, msg = outputstyles.delete(b.get('name', ''), b.get('path') or None,
+                                  _cfg(b))
+    return {'ok': ok, 'message': msg}
+
+
+def api_checkpoints(q, body):
+    """Read-only snapshot index for one session.
+
+    Defensive by construction: the store's naming scheme is undocumented, so
+    `recognised` comes back False the moment nothing resolves and the UI hides
+    the panel instead of showing a guess. See checkpoints.py.
+    """
+    from . import checkpoints
+    folder = _folder(q.get('cfgdir'), q['enc'])
+    jsonl = os.path.join(folder, f"{q['sid']}.jsonl")
+    cfgdir = os.path.dirname(os.path.dirname(folder))
+    try:
+        return checkpoints.history(q['sid'], jsonl, cfgdir)
+    except Exception as e:
+        return {'recognised': False, 'files': [], 'orphans': 0,
+                'store': False, 'error': str(e)}
+
+
+def api_checkpoint_diff(q, body):
+    from . import checkpoints
+    folder = _folder(q.get('cfgdir'), q['enc'])
+    cfgdir = os.path.dirname(os.path.dirname(folder))
+    try:
+        a, b = int(q.get('a', 1)), int(q.get('b', 2))
+        return {'diff': checkpoints.diff_versions(q['sid'], q.get('file', ''),
+                                                  a, b, cfgdir)}
+    except Exception as e:
+        return {'diff': '', 'error': str(e)}
+
+
+def api_statusline(q, body):
+    """Install state plus a live preview rendered from real numbers.
+
+    The preview matters: a statusline is judged by what it looks like, and
+    asking someone to install one sight-unseen into a file Claude Code owns is
+    the wrong order. It is built from this project's actual memory age, pending
+    lessons and today's spend, so what you see is what the session will show.
+    """
+    from . import statusline
+    payload = {'model': {'display_name': 'Opus 5'},
+               'workspace': {'current_dir': q.get('path') or os.getcwd()},
+               'output_style': {'name': 'default'}}
+    try:
+        preview = statusline.plain(statusline.render(payload))
+    except Exception as e:
+        preview = f'(preview failed: {e})'
+    return {'installed': statusline.is_installed(), 'preview': preview,
+            'command': statusline._command()}
+
+
+def api_statusline_set(q, body):
+    from . import statusline
+    act = (body or {}).get('action', '')
+    ok, msg = (statusline.install() if act == 'install' else
+               statusline.remove() if act == 'remove' else
+               (False, 'unknown action'))
+    return {'ok': ok, 'message': msg}
+
+
 GET_ROUTES = {
     '/api/transcript': api_transcript,
     '/api/session/meta': api_session_meta,
@@ -1840,6 +2033,15 @@ GET_ROUTES = {
     '/api/usage/plan': api_usage_plan,
     '/api/search-index': api_search_index,
     '/api/dashboard': api_dashboard,
+    '/api/plugins': api_plugins,
+    '/api/plugins/provenance': api_provenance,
+    '/api/worktrees': api_worktrees,
+    '/api/output-styles': api_output_styles,
+    '/api/statusline': api_statusline,
+    '/api/output-style/read': api_output_style_read,
+    '/api/checkpoints': api_checkpoints,
+    '/api/checkpoint/diff': api_checkpoint_diff,
+    '/api/worktree/diff': api_worktree_diff,
     '/api/graph-lite': api_graph_lite,
     '/api/hooks': api_hooks_get,
     '/api/agents/library': api_agents_library,
@@ -1879,6 +2081,14 @@ POST_ROUTES = {
     '/api/session/tags': api_tags_set,
     '/api/memory/autoscan': api_memory_autoscan,
     '/api/memory/auto': api_memory_auto_set,
+    '/api/plugins/marketplace/add': api_plugin_marketplace_add,
+    '/api/plugins/marketplace/remove': api_plugin_marketplace_remove,
+    '/api/plugins/remove': api_plugin_remove,
+    '/api/worktree/merge': api_worktree_merge,
+    '/api/statusline': api_statusline_set,
+    '/api/output-style/select': api_output_style_select,
+    '/api/output-style/save': api_output_style_save,
+    '/api/output-style/delete': api_output_style_delete,
     '/api/hooks/template': api_hooks_template,
     '/api/hooks/remove': api_hooks_remove,
     '/api/hooks/purge': api_hooks_purge,

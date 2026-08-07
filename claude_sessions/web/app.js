@@ -405,7 +405,11 @@ function jobHost(J){
    activity equalizer animate forever after a single token had been spent. */
 function stageEnergy(jobs,burn){
   if(!window.STAGE)return;
-  const j=Math.min(1,(jobs||0)/2);
+  // /4, not /2: the input used to be claudectl's background jobs, where one was
+  // already remarkable. It is now live Claude Code sessions, and two of those
+  // is an ordinary Tuesday — at /2 the background would sit pinned at full
+  // energy all day and stop meaning anything.
+  const j=Math.min(1,(jobs||0)/4);
   const b=Math.min(1,Math.max(0,burn||0));
   STAGE.energy(Math.max(j,b*0.45));
 }
@@ -553,7 +557,9 @@ function modalGate(J,gate){
 
 /* ── sidebar ── */
 const NAV=[['usage','chart','Usage'],['searchp','search','Search'],['mcp','plug','MCP servers'],
-  ['agents','robot','Agents'],['skills','ai','Skills'],['hooks','link','Hooks'],['accounts','group','Accounts'],
+  ['agents','robot','Agents'],['skills','ai','Skills'],['hooks','link','Hooks'],
+  ['plugins','folder','Plugins'],['ostyles','palette','Output styles'],
+  ['accounts','group','Accounts'],
   ['settings','settings','Settings'],['helpp','help','Help']];
 /* Nav rows carry no gauge. They used to each own an animated canvas, which put
    ~10 looping surfaces in the chrome to encode numbers about pages you weren't
@@ -762,7 +768,7 @@ function drawHome(){
       <div class="ifoot" id="iMcpFoot">—</div></section>
     <section class="card icard d-i4 spot lift">
       <div class="ihd">${ic('history')}<span>activity</span></div>
-      ${inst('eq','jobs',{fmt:'int',sub:'running'})}
+      ${inst('eq','jobs',{fmt:'int',sub:'live now'})}
       <div class="joblist" id="dashJobs"></div>
       <div class="ifoot" id="iJobsFoot">—</div></section>
 
@@ -801,7 +807,9 @@ function stopDashboard(){
 /* QtWebEngine keeps the page 'visible' while minimized — guard on blur too.
    MO.vis mirrors _VIS because motion.js is concatenated ahead of this file and
    cannot reach forward into a `let` that has not initialised yet. */
-function setVis(v){_VIS=v;MO.vis=v;if(v)MO.kick();else MO.stop();}
+function setVis(v){_VIS=v;MO.vis=v;if(v)MO.kick();else MO.stop();
+  // and take the GL surface down while we are not drawing to it — see STAGE.blur
+  if(window.STAGE)STAGE.blur(!v);}
 document.addEventListener('visibilitychange',()=>{setVis(!document.hidden);
   if(_VIS&&PAGE_==='home')refreshDashboard();});
 window.addEventListener('blur',()=>{setVis(false);stopDashboard();});
@@ -964,20 +972,41 @@ function feedDashboard(d,plan){
   setV($('#iMcpFoot'),`mcp <b>${up}/${mcp.length}</b> · failover `
     +(fo?`<b style="color:var(--ok)">on</b>`:'off'));
 
+  /* ── Activity ──────────────────────────────────────────────────────────
+     Reads LIVE CLAUDE CODE SESSIONS across every account, not claudectl's own
+     background jobs. It used to read the latter, which are almost never
+     running, so the card sat at "0 RUNNING" and flat while the same dashboard
+     reported hundreds of millions of tokens that day — it was reporting the
+     tool's idleness, not the workspace's.
+
+     Sessions are the right feed for a *liveness* gauge because they are
+     genuinely intermittent: non-zero while you work, zero when you stop. That
+     is the same property that made `beats` the right input and throughput the
+     wrong one — throughput stays non-zero all day after one token is spent, so
+     the equalizer never stopped moving. Tokens live on the burn dial next door.
+
+     Bars are the last 24 HOURS. They used to be `days.slice(-24)` — the last 24
+     *days* out of a 14-day window, i.e. a sparse trend chart in a card called
+     Activity. */
+  const live=d.live||{total:0,by_account:{}};
+  const nlive=live.total||0;
   const jobs=(d.jobs||[]).length;
-  INST.set('jobs',{v:Math.min(1,burn/peakHr),beats:jobs,
-    series:days.slice(-24).map(x=>x.tokens||0)});
-  // Feed the background. Running work dominates; today's burn is a floor, so an
-  // active-but-unbusy workspace drifts rather than crawling. Same discipline as
-  // INST.set — the stage never fetches anything of its own, it is handed the
-  // numbers this renderer already had.
-  stageEnergy(jobs,burn/peakHr);
-  setRead('jobs',jobs);
+  INST.set('jobs',{v:Math.min(1,nlive/3),beats:nlive,series:d.hours||[]});
+  // Feed the background: live sessions dominate, claudectl's own jobs also
+  // count (a memory build IS the workspace working), burn is a floor.
+  stageEnergy(Math.max(nlive,jobs),burn/peakHr);
+  setRead('jobs',nlive);
   setV($('#dashJobs'),jobsHtml(d));
   const sess=(d.today||{}).sessions||0;
-  setV($('#iJobsFoot'),jobs
-    ?`<b>${jobs}</b> job${jobs>1?'s':''} running · ${sess} session${sess===1?'':'s'} today`
-    :`idle · <b>${sess}</b> session${sess===1?'':'s'} today`);
+  // name the accounts — "for all accounts" is only meaningful if you can see
+  // WHICH one is busy when you have three
+  const byAcct=Object.entries(live.by_account||{})
+    .sort((a,b)=>b[1]-a[1])
+    .map(([n,c])=>`${esc(n)}${c>1?` <b>${c}</b>`:''}`).join(' · ');
+  setV($('#iJobsFoot'),nlive
+    ?`<b>${nlive}</b> live${byAcct?' · '+byAcct:''} · ${sess} today`
+    :(jobs?`<b>${jobs}</b> claudectl job${jobs>1?'s':''} · ${sess} today`
+          :`idle · <b>${sess}</b> session${sess===1?'':'s'} today`));
 
   // flow map: one node per project, dashed links where two share a non-default
   // account. Positions are solved from the index, so the same set always lands
@@ -1198,7 +1227,8 @@ function goToFullSearch(){PENDING_SEARCH_Q=($('#hqSearch').value||'');go('search
 
 /* ── project view + tabs ── */
 const TABS=[['sessions','Sessions'],['memory','Memory'],['claudemd','CLAUDE.md'],
-  ['review','Review'],['audit','Audit'],['pusage','Usage'],['planexec','Plan → Execute'],['tools','Tools']];
+  ['review','Review'],['audit','Audit'],['pusage','Usage'],['planexec','Plan → Execute'],
+  ['worktrees','Worktrees'],['tools','Tools']];
 async function openProject(p){CUR=p;PAGE_='project';TAB='sessions';REVIEW=null;
   render();
   // kick off the same background memory update the TUI does on open, then
@@ -1243,7 +1273,8 @@ function drawProject(){
     `<div class="tab${TAB===id?' sel':''}" onclick="TAB='${id}';drawProject()">${l}</div>`).join('')
     +`<div class="tab" onclick="window.open('/graph?${qs({path:CUR.path,enc:CUR.encoded})}','_blank')">Graph ${ic('ext')}</div>`;
   ({sessions:drawSessions,memory:drawMemory,claudemd:drawClaudeMd,review:drawReview,
-    audit:drawAudit,pusage:drawProjUsage,planexec:drawPlanExec,tools:drawTools}[TAB])();
+    audit:drawAudit,pusage:drawProjUsage,planexec:drawPlanExec,
+    worktrees:drawWorktrees,tools:drawTools}[TAB])();
 }
 
 /* review tab — confidence-scored review of the working diff */
@@ -1322,6 +1353,7 @@ async function drawSessions(archived){
         <button class="btn sm" onclick="viewS(${i})" title="Transcript">${ic('doc')}</button>
         <button class="btn sm" onclick="exportS(${i})" title="Export markdown">${ic('download')}</button>
         <button class="btn sm" onclick="filesS(${i})" title="Changed files">${ic('folder')}</button>
+        <button class="btn sm" onclick="ckptS(${i})" title="File checkpoints">${ic('history')}</button>
         <button class="btn sm" onclick="tagS(${i})" title="Tags">${ic('label')}</button>
         <button class="btn sm" onclick="renameS(${i})">Rename</button>
         <button class="btn sm" onclick="archiveS(${i})">Archive</button>
@@ -2053,13 +2085,16 @@ async function applyAgents(){
 /* ── manager pages ── */
 async function drawPage(id){
   $('#ttl').textContent=({usage:'Usage',searchp:'Search all sessions',mcp:'MCP servers',
-    agents:'Agents',skills:'Skills',hooks:'Hooks',accounts:'Accounts',settings:'Settings',helpp:'Help'})[id]||id;
+    agents:'Agents',skills:'Skills',hooks:'Hooks',plugins:'Plugins',
+    ostyles:'Output styles',accounts:'Accounts',settings:'Settings',
+    helpp:'Help'})[id]||id;
   $('#tpath').textContent='';
   // the token is taken BEFORE the fetches start; each page function drops its
   // write if navigation moved on while it was waiting
   const nav=paintNow(LOADING);
   await ({usage:pgUsage,searchp:pgSearch,mcp:pgMcp,agents:pgAgents,skills:pgSkills,
-          hooks:pgHooks,accounts:pgAccounts,settings:pgSettings,helpp:pgHelp}[id])(nav);
+          hooks:pgHooks,plugins:pgPlugins,ostyles:pgOStyles,
+          accounts:pgAccounts,settings:pgSettings,helpp:pgHelp}[id])(nav);
 }
 
 async function pgUsage(nav){
@@ -2169,10 +2204,11 @@ async function mcpRemove(name){
 }
 
 async function pgAgents(nav){
+  await loadProv();
   const d=await api('/api/agents/library');
   const own=(d.own||[]).map(a=>`
     <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
-      <b style="min-width:160px">${esc(a.name)}</b>
+      <b style="min-width:160px">${esc(a.name)}</b>${provTag('agent',a.name)}
       <span class="tag">${esc(a.scope)}</span>
       <span style="flex:1;color:var(--dim);font-size:12px">${esc(a.desc)}</span>
       <button class="btn sm" onclick='agView(${JSON.stringify(a.path)})'>view</button>
@@ -2222,20 +2258,239 @@ async function agDel(path){
   toast(r.ok?'Deleted':'Failed: '+(r.error||''),r.ok?'ok':'err');drawPage('agents');
 }
 
+/* ── Plugins ────────────────────────────────────────────────────────────────
+   A plugin is the canonical unit of distribution now — a versioned bundle of
+   skills, subagents, commands, hooks and MCP servers. claudectl managed every
+   one of those individually and could not see the bundle around them.
+
+   The listing is table stakes; `/plugin` already does it. The part worth
+   building is PROVENANCE, which is why every row states what it contributed —
+   and why the skill/agent/hook managers now badge entries that came from here.
+   Without it those lists are unreadable after two marketplace installs, and the
+   obvious action on something unrecognised (delete it) can break a plugin. */
+async function pgPlugins(nav){
+  const d=await api('/api/plugins');
+  const mkts=(d.marketplaces||[]).map(m=>`
+    <div class="hrow">
+      <b style="min-width:200px">${esc(m.name)}</b>
+      <span class="tag">${esc(m.source||'?')}</span>
+      <span style="flex:1;color:var(--dim);font-size:12px">${esc(m.repo||m.path)}</span>
+      <button class="btn sm danger" onclick='mktRemove(${JSON.stringify(m.name)})'>${ic('del')}</button>
+    </div>`).join('');
+  const plugs=(d.plugins||[]).map(p=>{
+    const gives=Object.entries(p.provides||{})
+      .map(([k,v])=>`<span class="tag">${esc(k)} ${v.length}</span>`).join(' ');
+    return `<div class="hrow">
+      <b style="min-width:200px">${esc(p.name)}</b>
+      <span class="tag">${esc(p.marketplace)}</span>
+      <span class="num" style="color:var(--dim2)">${esc(p.version)}</span>
+      ${p.missing?'<span class="tag warn">files missing</span>':''}
+      <span style="flex:1">${gives||'<span style="color:var(--dim2);font-size:12px">ships nothing claudectl reads</span>'}</span>
+      <button class="btn sm danger" onclick='pluginRemove(${JSON.stringify(p.key)})'>${ic('del')}</button>
+    </div>`;}).join('');
+  paint(nav,`
+    <div class="card"><h3>${ic('folder')} Installed plugins</h3>
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">A plugin bundles skills, subagents, commands, hooks and MCP servers together. The tags say what each one actually placed on disk — the same information the Skills, Agents and Hooks pages now use to mark which of their rows came from a bundle rather than from you.</p>
+      ${plugs||'<div style="color:var(--dim)">No plugins installed.</div>'}</div>
+    <div class="card"><h3>Marketplaces <span class="sp"></span>
+      <button class="btn sm pri" onclick="mktAdd()">${ic('add')} Add marketplace</button></h3>
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">A repo, a URL or a local path. Adding, installing and removing are delegated to the <code>claude</code> CLI: these files belong to Claude Code, the format has already changed once, and writing them directly would corrupt the state of the tool claudectl exists to support.</p>
+      ${mkts||'<div style="color:var(--dim)">No marketplaces registered.</div>'}</div>
+    <div class="card"><h3>Where they live</h3>
+      <div class="kv"><span>plugins dir</span><code>${esc(d.dir||'')}</code></div></div>`);
+}
+async function mktAdd(){
+  const v=await ask('Add marketplace',[{k:'src',label:'Repo, URL or path',ph:'owner/repo'}],
+    'Claude Code fetches and validates the manifest.');
+  if(!v||!v[0])return;
+  const r=await post('/api/plugins/marketplace/add',{source:v[0]});
+  toast(r.message||(r.ok?'Added':'Failed'),r.ok?'ok':'err');drawPage('plugins');
+}
+async function mktRemove(name){
+  if(!await confirmBox('Remove marketplace '+name+'?'))return;
+  const r=await post('/api/plugins/marketplace/remove',{name});
+  toast(r.message||'',r.ok?'ok':'err');drawPage('plugins');
+}
+async function pluginRemove(key){
+  if(!await confirmBox('Uninstall '+key+'? Anything it contributed goes with it.'))return;
+  const r=await post('/api/plugins/remove',{key});
+  toast(r.message||'',r.ok?'ok':'err');drawPage('plugins');
+}
+
+/* Provenance badge. Fetched once and cached: each manager renders a flat list,
+   and "did I install this or did a bundle?" is the one question that list
+   cannot otherwise answer. */
+let PROV=null;
+async function loadProv(){
+  if(PROV)return PROV;
+  try{PROV=(await api('/api/plugins/provenance')).provenance||{};}catch(e){PROV={};}
+  return PROV;
+}
+function provTag(kind,name){
+  const src=((PROV||{})[kind]||{})[name];
+  return src?`<span class="tag" title="Installed by the ${esc(src)} plugin — removing it here may break that plugin">${esc(src.split('@')[0])}</span>`:'';
+}
+
+/* ── Worktrees ──────────────────────────────────────────────────────────────
+   Which agent is working where. claudectl could already launch into a worktree
+   and had no idea what happened next; every tool in this category is built on
+   the view that was missing.
+
+   The join is the bit nobody else can make: a session's transcript records its
+   cwd, a worktree is a path, so claudectl — which owns both — can say which
+   SESSION is in which tree. And every one of them reads the same semantic
+   memory, so they are not each rediscovering the codebase. */
+async function drawWorktrees(){
+  const nav=paintNow(LOADING);
+  const d=await api('/api/worktrees?'+qs({path:CUR.path,enc:CUR.encoded,cfgdir:CUR.primary_cfgdir}));
+  if(!d.repo){
+    paint(nav,`<div class="card"><h3>Worktrees</h3>
+      <div style="color:var(--dim)">Not a git repository — nothing to show.</div></div>`);
+    return;
+  }
+  const rows=(d.worktrees||[]).map(w=>{
+    const s=w.session;
+    const live=s&&s.live;
+    return `<div class="hrow">
+      <span class="dot${live?' pip':''}" style="background:${live?'var(--ok)':'var(--dim2)'};color:var(--ok)"></span>
+      <b style="min-width:190px">${esc(w.name)}${w.main?' <span class="tag">main</span>':''}</b>
+      <code style="min-width:190px;color:var(--dim)">${esc(w.branch)}</code>
+      ${w.dirty?`<span class="tag warn">${w.dirty} uncommitted</span>`:'<span class="tag ok">clean</span>'}
+      ${w.ahead?`<span class="tag">+${w.ahead}</span>`:''}
+      ${w.behind?`<span class="tag warn">-${w.behind}</span>`:''}
+      <span style="flex:1;color:var(--dim);font-size:12px">${
+        s?`${esc(s.title||s.sid.slice(0,8))} · ${esc(s.account)} · ${s.msgs} msgs · ${live?'live now':fmtAge(s.age)}`
+         :'<span style="color:var(--dim2)">no session here</span>'}</span>
+      ${w.dirty?`<button class="btn sm" onclick='wtDiff(${JSON.stringify(w.path)})'>${ic('eye')} Diff</button>`:''}
+      ${w.main?'':`<button class="btn sm" onclick='wtMerge(${JSON.stringify(w.branch)})'>Merge</button>`}
+    </div>`;}).join('');
+  const nlive=(d.worktrees||[]).filter(w=>w.session&&w.session.live).length;
+  paint(nav,`
+    <div class="card"><h3>${ic('fork')} Worktrees <span class="sp"></span>
+      <span class="tag${nlive?' ok':''}">${nlive} live</span></h3>
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">Every worktree of this project and the session working in it. All of them read the same project memory, so parallel agents are not each rediscovering the codebase.</p>
+      ${rows}</div>`);
+}
+function fmtAge(sec){
+  if(sec<90)return 'just now';
+  if(sec<5400)return Math.round(sec/60)+'m ago';
+  if(sec<172800)return Math.round(sec/3600)+'h ago';
+  return Math.round(sec/86400)+'d ago';
+}
+async function wtDiff(path){
+  const d=await api('/api/worktree/diff?'+qs({wt:path}));
+  await ask('Uncommitted changes',[],(d.diff||'(no diff)').slice(0,20000));
+}
+async function wtMerge(branch){
+  if(!await confirmBox('Merge '+branch+' into the checked-out branch?'))return;
+  const r=await post('/api/worktree/merge',{path:CUR.path,branch});
+  toast(r.message||'',r.ok?'ok':'err');drawWorktrees();
+}
+
+/* ── Output styles ──────────────────────────────────────────────────────────
+   The last Claude Code config surface claudectl did not manage. A style swaps
+   the "how to behave" half of the system prompt — same tools, same permissions,
+   different job — and it is set per project OR per account, which is precisely
+   the pair claudectl already knows at launch. Clicking a card writes the
+   `outputStyle` key and leaves every other key in that settings.json alone. */
+async function pgOStyles(nav){
+  const path=CUR?CUR.path:'';
+  const d=await api('/api/output-styles?'+qs({path,cfgdir:CUR?CUR.primary_cfgdir:''}));
+  const cards=(d.styles||[]).map(st=>`
+    <div class="preset${st.active?' on':''}" onclick='osPick(${JSON.stringify(st.name)})'>
+      <b>${esc(st.name)}</b>
+      <span>${esc(st.description||'No description.')}</span>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:6px">
+        <span class="tag">${esc(st.scope)}</span>
+        ${st.active?'<span class="tag ok">active</span>':''}
+        ${st.builtin?'':`<button class="btn sm danger" onclick='event.stopPropagation();osDel(${JSON.stringify(st.name)})'>${ic('del')}</button>`}
+      </div></div>`).join('');
+  paint(nav,`
+    <div class="card"><h3>${ic('palette')} Output styles <span class="sp"></span>
+      <button class="btn sm pri" onclick="osNew()">${ic('add')} New style</button></h3>
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 10px">A style replaces the behavioural half of Claude Code's system prompt — the tools and permissions are untouched. Clicking one writes <code>outputStyle</code> into this project's <code>.claude/settings.json</code>; everything else in that file is preserved, and <b>default</b> removes the key rather than pinning a value that really means "no override".</p>
+      <div class="presetrow">${cards}</div></div>`);
+}
+async function osPick(name){
+  const r=await post('/api/output-style/select',
+    {name,scope:'project',path:CUR.path,cfgdir:CUR.primary_cfgdir});
+  toast(r.message||'',r.ok?'ok':'err');drawPage('ostyles');
+}
+async function osNew(){
+  const v=await ask('New output style',[
+    {label:'Name',ph:'code-review'},
+    {label:'One-line description'},
+    {label:'Instructions',type:'textarea'}],
+    'Saved as a markdown file with YAML frontmatter — the format Claude Code reads.');
+  if(!v||!v[0])return;
+  const r=await post('/api/output-style/save',{name:v[0],description:v[1],body:v[2],
+    scope:'project',path:CUR.path,cfgdir:CUR.primary_cfgdir});
+  toast(r.message||'',r.ok?'ok':'err');drawPage('ostyles');
+}
+async function osDel(name){
+  if(!await confirmBox('Delete output style '+name+'?'))return;
+  const r=await post('/api/output-style/delete',{name,path:CUR.path,cfgdir:CUR.primary_cfgdir});
+  toast(r.message||'',r.ok?'ok':'err');drawPage('ostyles');
+}
+
+/* ── Checkpoints (READ-ONLY) ────────────────────────────────────────────────
+   Claude Code snapshots a file before editing it so /rewind can restore it.
+   The store's naming scheme is NOT documented, so the backend proves it holds
+   on every call by hashing the paths this session actually edited; if nothing
+   resolves it reports recognised:false and we say so instead of rendering a
+   guess. Restoring stays with /rewind — claudectl only ever reads here. */
+async function ckptS(i){
+  const s=SESS[i];
+  $('#dTitle').textContent='Checkpoints — '+(s.title||s.sid.slice(0,8));
+  $('#dBody').innerHTML=LOADING;$('#drawer').classList.add('show');
+  const d=await api('/api/checkpoints?'+qs({enc:CUR.encoded,
+    cfgdir:s.cfgdir||CUR.primary_cfgdir,sid:s.sid}));
+  const body=$('#dBody');if(!body)return;
+  if(!d.store){body.innerHTML='<div class="empty">Claude Code kept no snapshots for this session.</div>';return;}
+  if(!d.recognised){
+    body.innerHTML=`<div class="card"><h3>Format not recognised</h3>
+      <p style="color:var(--dim);font-size:13px">Snapshots exist for this session, but none of the files it edited match them. Claude Code's checkpoint layout is undocumented and appears to have changed, so claudectl is showing nothing rather than guessing which snapshot belongs to which file. <code>/rewind</code> inside the session still works.</p></div>`;
+    return;
+  }
+  body.innerHTML='<div class="card"><h3>'+ic('history')+' Snapshots before each edit</h3>'
+    +'<p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">Read-only. Restoring is <code>/rewind</code> inside the session — claudectl never writes to this store.</p>'
+    +(d.files||[]).map(f=>{
+      const vs=f.versions;
+      const chain=vs.map((v,n)=>{
+        const prev=n?vs[n-1].v:0;
+        return prev?`<button class="btn sm" onclick='ckptDiff(${JSON.stringify(s.sid)},${JSON.stringify(f.path)},${prev},${v.v},${JSON.stringify(s.cfgdir||"")})'>v${prev}→v${v.v}</button>`
+                   :`<span class="tag">v${v.v}</span>`;}).join(' ');
+      return `<div class="hrow">
+        <b style="min-width:220px" title="${esc(f.path)}">${esc(f.name)}</b>
+        <span class="tag">${vs.length} version${vs.length>1?'s':''}</span>
+        <span style="flex:1;color:var(--dim);font-size:12px">${esc(f.path)}</span>
+        ${chain}</div>`;}).join('')
+    +(d.orphans?`<div style="color:var(--dim2);font-size:12px;margin-top:8px">${d.orphans} snapshot${d.orphans>1?'s':''} could not be matched to a file this session edited — most likely written before the part of the transcript that survives. Counted, not guessed at.</div>`:'')
+    +'</div>';
+}
+async function ckptDiff(sid,file,a,b,cfgdir){
+  const d=await api('/api/checkpoint/diff?'+qs({enc:CUR.encoded,
+    cfgdir:cfgdir||CUR.primary_cfgdir,sid,file,a,b}));
+  await ask(`v${a} → v${b}`,
+    [{label:file,type:'textarea',value:(d.diff||'(identical)').slice(0,20000)}],
+    'Read-only. Restoring is /rewind inside the session.');
+}
+
 /* ── Skills ── */
 async function pgSkills(nav){
+  await loadProv();          // badge rows a plugin brought in — see provTag
   const path=CUR?CUR.path:'';
   const d=await api('/api/skills'+(path?'?'+qs({path}):''));
   const proj=(d.project||[]).map(s=>`
     <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
-      <b style="min-width:170px">${esc(s.name)}</b>
+      <b style="min-width:170px">${esc(s.name)}</b>${provTag('skill',s.name)}
       <span style="flex:1;color:var(--dim);font-size:12px">${esc(s.desc)}</span>
       <button class="btn sm" onclick='skView(${JSON.stringify(s.dir)})'>view</button>
       <button class="btn sm" onclick='post("/api/open-editor",{file:${JSON.stringify(s.dir+"\\\\SKILL.md")}})'>edit</button>
       <button class="btn sm danger" onclick='skRemove(${JSON.stringify(s.dir)})'>${ic('del')}</button></div>`).join('');
   const tmpl=(d.templates||[]).map(s=>`
     <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
-      <b style="min-width:170px">${esc(s.name)}</b>
+      <b style="min-width:170px">${esc(s.name)}</b>${provTag('skill',s.name)}
       <span class="tag">${esc(s.source)}</span>
       <span style="flex:1;color:var(--dim);font-size:12px">${esc(s.desc)}</span>
       <button class="btn sm" onclick='skView(${JSON.stringify(s.dir)})'>view</button>
@@ -2300,6 +2555,7 @@ async function skAI(){
 }
 
 async function pgHooks(nav){
+  await loadProv();
   const d=await api('/api/hooks');
   const active=(d.hooks||[]).map(h=>`
     <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
@@ -2475,6 +2731,21 @@ async function pgSettings(nav){
       <div style="color:var(--dim2);font-size:12px;margin-top:6px">
         One animated scene behind the whole app, chosen by the skin and driven by what the workspace is actually doing — idle crawls, a running job speeds it up, launching a session sends a shockwave through it.
         It stops entirely when the window is hidden, minimised or blurred, and <b>motion: off<\b> turns it off with everything else.</div></div></div>
+  <div class="card"><h3>${ic('doc')} Statusline <span class="sp"></span>
+      <span class="tag" id="slDot">checking…</span></h3>
+    <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Claude Code renders one line at the bottom of every session. claudectl can be that line — and it puts things there nobody else can compute: how stale this project's memory is, how many sessions are still unmined for lessons, which account you are on, and today's burn. It refuses to replace a statusline you wrote yourself.</p>
+    <div class="kv"><span>preview</span><code id="slPrev" style="color:var(--dim)">—</code></div>
+    <div class="mrow"><button class="btn" id="slBtn" onclick="slToggle()">…</button></div></div>
+  <div class="card"><h3>${ic('chart')} OpenTelemetry export</h3>
+    <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Claude Code exports metrics and events over OTLP. claudectl already owns the launch environment, so it can switch this on per account without you exporting variables by hand. <b>Prompt text is never collected</b> unless you also set <code>OTEL_LOG_USER_PROMPTS=1</code> — this toggle does not.</p>
+    <div class="fld"><label>Enabled</label><div class="chips" id="sOtel"></div></div>
+    <div class="grid2">
+      <div class="fld"><label>Endpoint</label><input id="sOtelUrl" placeholder="http://localhost:4318"></div>
+      <div class="fld"><label>Protocol</label><div class="chips" id="sOtelProto"></div></div>
+    </div>
+    <div class="fld"><label>Headers <span style="color:var(--dim2)">— comma-separated, e.g. Authorization=Bearer xyz</span></label>
+      <input id="sOtelHdr" placeholder="leave blank for none"></div>
+    <div class="mrow"><button class="btn pri" onclick="setOtelSave()">Save</button></div></div>
   <div class="card"><h3>Economy model</h3>
     <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Model used for claudectl's <b>own</b> internal Claude calls — memory extraction, lessons, CLAUDE.md / agent / hook / skill generation. Defaults to Haiku to cut cost. Your actual coding sessions are unaffected. <i>default</i> = your account's model.</p>
     ${fld('sExtract','Economy model')}
@@ -2550,6 +2821,13 @@ async function pgSettings(nav){
   chipsFill($('#sPerm'),o.perms,o.perm_labels,ST.defaults.perm);
   chipsFill($('#sThink'),o.thinking,o.thinking_labels,ST.defaults.max_thinking);
   chipsFill($('#sSub'),o.models,o.model_labels,ST.defaults.subagent_model);
+  chipsFill($('#sOtel'),['off','on'],['off','on'],
+    ST.otel_enabled?'on':'off');
+  chipsFill($('#sOtelProto'),['http/protobuf','grpc'],['http/protobuf','grpc'],
+    ST.otel_protocol||'http/protobuf');
+  if($('#sOtelUrl'))$('#sOtelUrl').value=ST.otel_endpoint||'';
+  if($('#sOtelHdr'))$('#sOtelHdr').value=ST.otel_headers||'';
+  slRefresh();
   chipsFill($('#sExtract'),o.models,o.model_labels,ST.extract_model||'');
   chipsFill($('#sShell'),['auto','qt','edge','browser'],
     ['auto (Qt → Edge → browser)','Qt native window','Edge app window','browser tab'],
@@ -3025,6 +3303,28 @@ async function setSave(){
     theme:chipVal($('#sTheme'))});
   ST=await api('/api/state');applyTheme(ST.theme);
   localStorage.setItem('ctl_theme',chipVal($('#sTheme')));toast('Settings saved','ok');
+}
+async function setOtelSave(){
+  await post('/api/settings',{otel_enabled:chipVal($('#sOtel'))==='on',
+    otel_endpoint:($('#sOtelUrl')||{}).value||'',
+    otel_protocol:chipVal($('#sOtelProto')),
+    otel_headers:($('#sOtelHdr')||{}).value||''});
+  ST=await api('/api/state');toast('OTEL settings saved','ok');
+}
+async function slRefresh(){
+  const d=await api('/api/statusline');
+  const dot=$('#slDot'),btn=$('#slBtn'),prev=$('#slPrev');
+  if(!dot||!btn)return;
+  dot.textContent=d.installed?'installed':'not installed';
+  dot.className='tag'+(d.installed?' ok':'');
+  btn.textContent=d.installed?'Remove from settings.json':'Install as my statusline';
+  btn.className='btn'+(d.installed?' danger':' pri');
+  if(prev)prev.textContent=d.preview||'—';
+}
+async function slToggle(){
+  const d=await api('/api/statusline');
+  const r=await post('/api/statusline',{action:d.installed?'remove':'install'});
+  toast(r.message||'',r.ok?'ok':'err');slRefresh();
 }
 async function setExtractSave(){
   await post('/api/settings',{extract_model:chipVal($('#sExtract'))});

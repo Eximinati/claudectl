@@ -67,6 +67,13 @@ html,body{height:100%}
   pointer-events:none;display:block;opacity:0;transition:opacity .5s ease}
 html.stage-on #stage{opacity:1}
 html.stage-off #stage{display:none}
+/* Unfocused: the canvas comes OUT of the composite, and the static wash returns.
+   Not merely "stop drawing" — a visible-but-unrendered WebGL surface is what
+   tears when Qt recomposites a background window. `visibility` rather than
+   `display` so the drawing buffer is not resized on every alt-tab. */
+html.stage-blur #stage{visibility:hidden}
+html.stage-blur.stage-on body::before,
+html.stage-blur.stage-on body::after{opacity:.12}
 
 /* ambient depth: two very faint corner washes and a hairline grid, the way the
    reference dashboards ground their panels. STATIC — it used to drift on a
@@ -1244,7 +1251,13 @@ html.tb-rail .top::after{content:'';position:absolute;left:0;right:0;bottom:-4px
   font-weight:var(--sk-btn-weight,600);
   letter-spacing:var(--sk-btn-track,normal)}
 .seg,.seg button{border-radius:var(--sk-btn-r,var(--sk-r,6px))}
-.preset{border-radius:var(--sk-btn-r,var(--sk-r,6px))}
+/* NOT --sk-btn-r. A pill radius (999px) is right for a control that is one line
+   tall and wrong for anything that is not: `.preset` is a
+   `flex-direction:column` card ~130px high, and 999px turned every launch
+   preset into an ELLIPSE with its own text outside the shape. Multi-line blocks
+   take the CARD radius; the pill tokens belong to chips, tags and single-row
+   controls only. */
+.preset,.mcard{border-radius:var(--sk-r,6px)}
 /* chips, tags, pills */
 .chip,.tag,.hchip,.thopt{border-radius:var(--sk-pill-r,999px);
   border-width:var(--sk-pill-bw,1px);border-style:solid;

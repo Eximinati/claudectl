@@ -8,6 +8,7 @@ Stop, ...). This edits the `hooks` block; disabled hooks are parked under
 
 import json
 import os
+import re
 
 from .config import W, config_dir
 from .ui import menu, text_input, flash, pause, confirm, _cls
@@ -17,8 +18,18 @@ from . import render
 settings_path = os.path.join(config_dir, 'settings.json')
 
 # Valid Claude Code hook events (for AI-generation validation).
+#: Claude Code exposes 32 lifecycle events. This set is what claudectl's manager
+#: knows how to place and toggle — not all 32, but every one claudectl has a
+#: reason to use. The ones added beyond the original nine are the ones a
+#: WORKSPACE manager specifically wants: it launches worktrees, it sells a
+#: permission-fatigue killer, it manages a subagent library, and it sells
+#: context-loss insurance after /compact.
 EVENTS = {'PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SubagentStop',
-          'SessionStart', 'SessionEnd', 'Notification', 'PreCompact'}
+          'SessionStart', 'SessionEnd', 'Notification', 'PreCompact',
+          # newly covered
+          'PostCompact', 'SubagentStart', 'PermissionRequest', 'PermissionDenied',
+          'WorktreeCreate', 'WorktreeRemove', 'TaskCreated', 'TaskCompleted',
+          'FileChanged'}
 
 def _py_hook(script):
     """Absolute `"<python>" "<claude_sessions/script>"` — runs regardless of the
@@ -161,6 +172,47 @@ TEMPLATES = {
         'entry': {'matcher': 'Bash',
                   'hooks': [{'type': 'command', 'command': _py_hook('testfilter_hook.py')}]},
         'desc': 'Pipe pytest/npm test/go test output through a failures-only filter (saves tokens)',
+    },
+    # ── lifecycle events claudectl has a specific reason to want ──────
+    # Two of these replace approximations with the real signal.
+    'reinject-after-compact': {
+        # THE one worth having. claudectl already advertises "context-loss
+        # insurance after /compact", but until PostCompact existed the only
+        # available moment was SessionStart — i.e. before the loss, not after
+        # it. This fires on the far side of a compaction, when the context has
+        # actually been thrown away and re-injecting memory is the whole point.
+        'event': 'PostCompact',
+        'entry': {'hooks': [{'type': 'command', 'command': _py_hook('recall_hook.py')}]},
+        'desc': 'Re-inject project memory right after /compact discards the context',
+    },
+    'memory-stale-on-change': {
+        # The scheduler polls every auto_memory_interval seconds and hashes to
+        # decide whether anything changed. FileChanged says so directly, so the
+        # poll stops being the mechanism and becomes the fallback.
+        'event': 'FileChanged',
+        'entry': {'hooks': [{'type': 'command',
+                             'command': _py_hook('worklog_hook.py')}]},
+        'desc': 'Mark project memory stale the moment a file changes (instead of polling)',
+    },
+    'log-permission-denials': {
+        # feeds the permission-fatigue work: what actually gets denied, rather
+        # than what someone guessed would be
+        'event': 'PermissionDenied',
+        'entry': {'hooks': [{'type': 'command', 'command': _py_hook('logbash_hook.py')}]},
+        'desc': 'Record every denied permission so the deny-rule generator learns from real ones',
+    },
+    'notify-on-subagent-finish': {
+        'event': 'SubagentStop',
+        'entry': {'hooks': [{'type': 'command',
+                             'command': 'echo "subagent finished"'}]},
+        'desc': 'Print a line when a subagent finishes (swap the command for your notifier)',
+    },
+    'learn-on-session-end': {
+        # the natural trigger for the auto-memory cycle: a session that just
+        # ended is a session worth mining
+        'event': 'SessionEnd',
+        'entry': {'hooks': [{'type': 'command', 'command': _py_hook('worklog_hook.py')}]},
+        'desc': 'Record the session on exit so auto-memory has it to learn from',
     },
 }
 
@@ -330,20 +382,54 @@ _SCRIPT_LABELS = {
 }
 
 
-def _hook_label(entry):
+#: `_py_hook` bakes `sys.executable` into the command, and that is
+#: `pythonw.exe` when claudectl runs as a GUI but `python.exe` from a console.
+#: The same template installed from the two shells therefore produced two
+#: strings that were not equal — two entries in settings.json, and a row that
+#: never went "installed" because the running process had generated the other
+#: spelling. What identifies a hook is the script and its arguments, not which
+#: interpreter happens to launch it.
+_PYEXE = re.compile(r'^"?[^"]*?python(w)?(\.exe)?"?\s+', re.I)
+
+
+def _cmd_keys(entry):
+    """A hook's commands reduced to their identity, interpreter-independent."""
+    return [_PYEXE.sub('', (c or '').strip()) for c in _entry_commands(entry)]
+
+
+def _hook_label(entry, event=None):
     """Identify what a configured hook actually is: its template name if the
     command matches a known template/bundled script, else a short command
-    snippet — so several hooks on the same event/matcher are distinguishable."""
-    cmds = _entry_commands(entry)
-    joined = ' '.join(cmds)
+    snippet — so several hooks on the same event/matcher are distinguishable.
+
+    ORDER MATTERS, and it used to be wrong. The per-script table was consulted
+    first, so every template built on a shared bundled script answered with the
+    script's name instead of its own key: all seven block-*/protect-* hooks came
+    back as 'guard/block', reinject-after-compact as 'recall (project memory)',
+    learn-on-session-end as 'recent-work memory'. The manager decides whether a
+    template is installed by looking for its key among these labels, so eleven
+    templates could never show as installed no matter how many times you
+    installed them. The template match is strictly more specific and now runs
+    first; the script table is the fallback for hooks the user wrote by hand.
+
+    `event` disambiguates the case the command alone cannot: two templates that
+    run the same script at different moments. Without it a match is only
+    accepted when exactly one template owns that command.
+    """
+    cmds = _cmd_keys(entry)
+    if cmds:
+        same = [k for k, t in TEMPLATES.items()
+                if _cmd_keys(t['entry']) == cmds]
+        if event is not None:
+            same = [k for k in same if TEMPLATES[k]['event'] == event] or same
+        if len(same) == 1:
+            return same[0]
+    raw = _entry_commands(entry)
+    joined = ' '.join(raw)
     for script, name in _SCRIPT_LABELS.items():
         if script in joined:
             return name
-    for key, tpl in TEMPLATES.items():
-        tpl_cmds = _entry_commands(tpl['entry'])
-        if tpl_cmds and tpl_cmds == cmds:
-            return key
-    snippet = (cmds[0] if cmds else '').strip()
+    snippet = (raw[0] if raw else '').strip()
     return (snippet[:44] + '…') if len(snippet) > 45 else (snippet or '(empty)')
 
 
@@ -357,14 +443,14 @@ def hooks_menu(scope=None):
         for event, entries in hooks.items():
             for i, e in enumerate(entries if isinstance(entries, list) else []):
                 m = e.get('matcher', '(any)')
-                label = _hook_label(e)
+                label = _hook_label(e, event)
                 items.append((f"{_c.C_OK}●{_c.C_RESET} {event}  {_c.C_DIM}{m}{_c.C_RESET}"
                               f"  {_c.C_NAME}{label}{_c.C_RESET}",
                               f'on:{event}:{i}'))
         for event, entries in disabled.items():
             for i, e in enumerate(entries if isinstance(entries, list) else []):
                 m = e.get('matcher', '(any)')
-                label = _hook_label(e)
+                label = _hook_label(e, event)
                 items.append((f"{_c.C_DIM}○ {event}  {m}  {label} (disabled){_c.C_RESET}",
                               f'off:{event}:{i}'))
         if not items:

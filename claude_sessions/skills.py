@@ -177,24 +177,53 @@ def install_from_git(repo_url, project_path, exec_model=''):
         if r.returncode != 0:
             return False, f'git clone failed: {(r.stderr or "").strip()[:200]}'
 
-        installed = []
+        # ── review gate ──────────────────────────────────────────────────
+        # Build the full plan BEFORE writing anything, so the user is shown the
+        # real operation rather than a description of it, and so a rejection
+        # leaves the disk untouched. See skillscan for why this exists and,
+        # more importantly, what it does not promise.
         skills_src = os.path.join(tmp, 'skills')
-        if os.path.isdir(skills_src):
-            for name in os.listdir(skills_src):
-                d = os.path.join(skills_src, name)
-                if os.path.isfile(skill_md(d)):
-                    dest = install_skill(d, project_path) if project_path else save_to_library(d)
-                    if dest:
-                        installed.append(name)
-
-        agent_count = 0
         agents_src = os.path.join(tmp, 'agents')
+        agents_dest_dir = os.path.join(_c.config_dir, 'agents')
+        plan, skill_dirs, agent_files = [], [], []
+        if os.path.isdir(skills_src):
+            for name in sorted(os.listdir(skills_src)):
+                d = os.path.join(skills_src, name)
+                if not os.path.isfile(skill_md(d)):
+                    continue
+                skill_dirs.append((name, d))
+                dest_root = (os.path.join(project_path, '.claude', 'skills', name)
+                             if project_path else os.path.join(library_dir(), name))
+                for base, _dirs, files in os.walk(d):
+                    for fn in sorted(files):
+                        full = os.path.join(base, fn)
+                        rel = os.path.relpath(full, tmp).replace('\\', '/')
+                        sub = os.path.relpath(full, d)
+                        plan.append((rel, os.path.join(dest_root, sub), 'skill'))
         if os.path.isdir(agents_src):
-            agents_dest = os.path.join(_c.config_dir, 'agents')
-            os.makedirs(agents_dest, exist_ok=True)
-            for fn in os.listdir(agents_src):
+            for fn in sorted(os.listdir(agents_src)):
                 if not fn.endswith('.md'):
                     continue
+                agent_files.append(fn)
+                plan.append((f'agents/{fn}', os.path.join(agents_dest_dir, fn), 'agent'))
+
+        if not plan:
+            return False, 'No skills/ or agents/ folder found in that repo'
+        from . import skillscan
+        if not skillscan.review_gate(tmp, plan, source=repo_url):
+            return False, 'Cancelled — nothing was installed'
+
+        installed = []
+        for name, d in skill_dirs:
+            dest = install_skill(d, project_path) if project_path else save_to_library(d)
+            if dest:
+                installed.append(name)
+
+        agent_count = 0
+        if agent_files:
+            agents_dest = agents_dest_dir
+            os.makedirs(agents_dest, exist_ok=True)
+            for fn in agent_files:
                 with open(os.path.join(agents_src, fn), encoding='utf-8') as f:
                     text = f.read()
                 if exec_model:

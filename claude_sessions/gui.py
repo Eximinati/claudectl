@@ -174,6 +174,10 @@ def state_payload():
         'stage': _stage_tier(s),
         # 0 = follow whatever the look asks for; 40..100 = an explicit override
         'surface': _surface(s),
+        'otel': {'enabled': bool(s.get('otel_enabled')),
+                 'endpoint': s.get('otel_endpoint', ''),
+                 'protocol': s.get('otel_protocol', 'http/protobuf'),
+                 'headers': s.get('otel_headers', '')},
         'themes': theme_palettes(),
         'skins': {n: dict(v) for n, v in _themes.SKINS.items()},
         'worlds': {n: dict(v) for n, v in _themes.WORLDS.items()},
@@ -412,6 +416,8 @@ class _Handler(BaseHTTPRequestHandler):
                       # but never written again, so they age out of settings.json
                       'gui_shell', 'theme', 'motion', 'skin', 'stage', 'world',
                       'surface',
+                      'otel_enabled', 'otel_endpoint', 'otel_protocol',
+                      'otel_headers',
                       'editor', 'claude_exe',
                       'plan_model', 'exec_model', 'omniroute_base_url',
                       'omniroute_exec_model', 'failover_port', 'failover_quiet'):

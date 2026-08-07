@@ -52,6 +52,22 @@ Routes from `claude_sessions/gui_api.py` (HTTP endpoints served by the GUI):
 | `/api/global-search` | GET — global search | Full-text search across all sessions |
 | `/api/account-folders` | GET — account project folders | List folders for account |
 | `/api/preview-suggestions` | POST — path suggestions | Path completion for open-by-path |
+| `/api/plugins` | GET — marketplaces + installed plugins | Bundle listing with what each contributed |
+| `/api/plugins/provenance` | GET — name → plugin index | Badges the skill/agent/hook rows a bundle installed |
+| `/api/plugins/marketplace/add` | POST — register a marketplace | Delegates to the `claude` CLI |
+| `/api/plugins/marketplace/remove` | POST — drop a marketplace | Delegates to the `claude` CLI |
+| `/api/plugins/remove` | POST — uninstall a plugin | Delegates to the `claude` CLI |
+| `/api/worktrees` | GET — the worktree board | Every worktree joined to the session running in it |
+| `/api/worktree/diff` | GET — uncommitted diff of one tree | Review before merging |
+| `/api/worktree/merge` | POST — merge a branch | Gated by `diffview.confirm` |
+| `/api/output-styles` | GET — built-in + custom styles | Marks the active one |
+| `/api/output-style/read` | GET — one style's markdown | Custom styles only |
+| `/api/output-style/select` | POST — set `outputStyle` | Read-modify-write; other keys preserved |
+| `/api/output-style/save` | POST — create/overwrite a style | Writes the frontmatter format |
+| `/api/output-style/delete` | POST — delete a custom style | Built-ins refused |
+| `/api/checkpoints` | GET — file snapshots for a session | **Read-only**; `recognised:false` when the undocumented store's naming changes |
+| `/api/checkpoint/diff` | GET — diff two snapshots | Read-only viewer |
+| `/api/statusline` | GET/POST — install state + preview / install / remove | Refuses to replace a statusline you wrote |
 
 ## Theme mechanism
 Themes live in `config.py` settings. On page load, JS function `applyTheme(name)` reads `ST.themes[name]` (a dict of CSS variable values) and sets them on `document.documentElement.style`. Theme names come via the main `/api/settings` response (which includes `ST.theme` and `ST.themes`). User can toggle themes via settings page. No localStorage persistence — theme resets on reload.

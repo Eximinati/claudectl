@@ -115,7 +115,10 @@ const STAGE = {
 
   _pal: null, _pageKey: 'home',
   _E: 0, _Etgt: 0, _shock: 0, _pulse: 0, _dens: 1, _densTgt: 1, _cam: 0, _camTgt: 0,
-  _T: 0, _acc: 0, _job: null,
+  // _T is scene time; _Tw is the rendered time it was advanced over, so
+  // _T/_Tw is the clock multiplier itself — observable without counting
+  // frames, which is what a software rasteriser makes meaningless.
+  _T: 0, _Tw: 0, _acc: 0, _job: null,
   _th: null, _ren: null, _post: null, _sc: null, _canvas: null,
 
   /* ── lifecycle ────────────────────────────────────────────────────────── */
@@ -288,6 +291,28 @@ const STAGE = {
     if (this._job) { MO.unframe(this._job); this._job = null; }
   },
 
+  /* ── unfocused: take the surface DOWN, do not just stop drawing to it ──────
+     The tearing you see when claudectl is in the background comes from exactly
+     that distinction. On blur the frame chain stops (setVis -> MO.stop), which
+     is right — but the canvas stayed *visible* while no longer being redrawn,
+     and with preserveDrawingBuffer:false the WebGL backbuffer is undefined
+     after it has been presented. Qt then recomposites an unfocused window
+     against a surface with nothing valid in it, and you get artefacts.
+
+     Hiding it removes the surface from the composite entirely, which also means
+     zero GPU for the app while you are working in another one — strictly better
+     than a paused-but-present canvas. The static CSS wash takes over, so the
+     window still looks like itself if you glance at it.
+
+     `preserveDrawingBuffer: true` would also fix it, and was rejected: it costs
+     a buffer copy on every single frame to repair a state nobody is looking at. */
+  blur(on) {
+    if (!this._canvas) return;
+    document.documentElement.classList.toggle('stage-blur', !!on);
+    // repaint once on return: the buffer we hid is not guaranteed to survive
+    if (!on && this.ok) { this._acc = 1; this.kick(); }
+  },
+
   _tick(dt) {
     if (!this.ok || !this._ren || !this._sc || this.tier === 'off' || !MO.on) {
       this._job = null; return false;
@@ -312,6 +337,7 @@ const STAGE = {
     // per-skin amplitude — Terminal drifts, Cyberpunk runs.
     const flow = this.flowOf != null ? this.flowOf : 1;
     this._T += fdt * flow * (0.55 + 1.7 * this._E + 1.2 * this._shock);
+    this._Tw += fdt;
 
     const sc = this._sc;
     try {

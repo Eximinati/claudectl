@@ -1,0 +1,236 @@
+"""`claudectl statusline` — the line under every Claude Code prompt.
+
+There is a whole category of statusline tools and they all show the same four
+things, because that is all the stdin payload has: model, cwd, cost, context.
+The reason claudectl should ship one is the two fields nobody else can compute —
+how stale this project's memory is, and how many lessons are waiting. Those are
+the only bits that change what you do next.
+
+The other half of this file is about not being a nuisance: it runs on every
+conversation turn, and a statusline that throws leaves a traceback under the
+user's prompt for the rest of the session.
+"""
+import json
+import os
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from claude_sessions import statusline as sl
+
+
+def _plain(s):
+    import re
+    return re.sub(r'\033\[[0-9;]*m', '', s)
+
+
+# ── it says the things only claudectl knows ───────────────────
+
+def test_it_reports_how_stale_the_memory_is(monkeypatch):
+    """The one field no other statusline can print. A graph nobody has rebuilt
+    in six days is quietly feeding the agent a stale codebase."""
+    from datetime import datetime, timedelta, timezone
+    old = (datetime.now(timezone.utc) - timedelta(days=6)).isoformat()
+    monkeypatch.setattr(sl, '_load', lambda p: {
+        'entities': [{'name': 'X', 'type': 'component'}], 'generated_at': old})
+    out = _plain(sl.render({'cwd': 'D:/p', 'model': {'display_name': 'Opus 5'}}))
+    assert 'memory 6d' in out, out
+
+
+def test_stale_memory_is_coloured_by_how_stale(monkeypatch):
+    """Dim / amber / red. A number with no urgency attached is decoration."""
+    from datetime import datetime, timedelta, timezone
+
+    def at(days):
+        stamp = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        monkeypatch.setattr(sl, '_load', lambda p: {
+            'entities': [{'name': 'X'}], 'generated_at': stamp})
+        return sl.render({'cwd': 'D:/p'})
+
+    assert '\033[2m' in at(1)      # fresh-ish: dim
+    assert '\033[33m' in at(9)     # over a week: amber
+    assert '\033[31m' in at(20)    # over two: red
+
+
+def test_it_surfaces_lessons_waiting_for_review(monkeypatch):
+    """These now go unnoticed BECAUSE the mining became automatic — nothing
+    else puts them in front of you mid-session."""
+    monkeypatch.setattr(sl, '_load', lambda p: {'entities': [
+        {'type': 'lesson', 'status': 'pending'},
+        {'type': 'lesson', 'status': 'pending'},
+        {'type': 'lesson', 'status': 'approved'},
+        {'type': 'component'}]})
+    out = _plain(sl.render({'cwd': 'D:/p'}))
+    assert '2 to review' in out, out
+
+
+def test_no_memory_says_so_rather_than_going_blank(monkeypatch):
+    monkeypatch.setattr(sl, '_load', lambda p: {'entities': []})
+    assert 'no memory' in _plain(sl.render({'cwd': 'D:/p'}))
+
+
+def test_the_account_shows_only_when_there_are_several(monkeypatch):
+    """On a single-account setup it is noise."""
+    from claude_sessions import config as cfg
+    monkeypatch.setattr(sl, '_load', lambda p: {'entities': [{'name': 'X'}]})
+    monkeypatch.setattr(cfg, 'all_config_dirs', lambda: [('default', cfg.config_dir)])
+    assert 'default' not in _plain(sl.render({'cwd': 'D:/p'}))
+    monkeypatch.setattr(cfg, 'all_config_dirs',
+                        lambda: [('default', cfg.config_dir), ('work', 'X')])
+    assert 'default' in _plain(sl.render({'cwd': 'D:/p'}))
+
+
+def test_context_pressure_appears_only_when_it_matters(monkeypatch):
+    """Below half there is nothing to act on."""
+    monkeypatch.setattr(sl, '_load', lambda p: {'entities': []})
+    low = _plain(sl.render({'cwd': 'D:/p', 'context': {'used': 20, 'total': 200}}))
+    hot = _plain(sl.render({'cwd': 'D:/p', 'context': {'used': 180, 'total': 200}}))
+    assert 'ctx' not in low, low
+    assert 'ctx 90%' in hot, hot
+
+
+# ── it must never become the problem ──────────────────────────
+
+def test_no_payload_can_make_it_raise():
+    """It runs every turn. A traceback here sits under the prompt for the rest
+    of the session."""
+    for bad in ({}, {'cwd': None}, {'model': None}, {'cost': {'total_cost_usd': 'x'}},
+                {'context': {'used': 'a', 'total': 0}}, {'cwd': 12},
+                {'model': {'display_name': None}}, {'cost': None}):
+        sl.render(bad)          # must not raise
+
+
+def test_a_broken_memory_read_degrades_to_a_shorter_line(monkeypatch):
+    def boom(_p):
+        raise RuntimeError('disk gone')
+    monkeypatch.setattr(sl, '_load', boom)
+    out = _plain(sl.render({'cwd': 'D:/p', 'model': {'display_name': 'Opus 5'}}))
+    # the memory-derived bits drop out; everything else still renders
+    assert 'Opus 5' in out, out
+    assert 'memory' not in out and 'to review' not in out, out
+
+
+def test_it_prints_exactly_one_line(tmp_path):
+    """Claude Code renders only the first line of stdout, so a multi-line
+    payload must not silently lose half its content — it must not be
+    multi-line in the first place."""
+    r = subprocess.run(
+        [sys.executable, '-m', 'claude_sessions', 'statusline'],
+        input=json.dumps({'cwd': str(tmp_path),
+                          'model': {'display_name': 'A\nB'}}),
+        capture_output=True, text=True,
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.count('\n') == 1, repr(r.stdout)
+    assert r.stderr.strip() == '', r.stderr
+
+
+def test_garbage_on_stdin_is_survivable():
+    r = subprocess.run(
+        [sys.executable, '-m', 'claude_sessions', 'statusline'],
+        input='not json at all {{{', capture_output=True, text=True,
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    assert r.returncode == 0, r.stderr
+    assert r.stderr.strip() == ''
+
+
+# ── install ───────────────────────────────────────────────────
+
+def test_it_refuses_to_clobber_someone_elses_statusline(monkeypatch, tmp_path):
+    """statusLine is single-valued. Silently replacing a line the user built is
+    the same class of overwrite the memory work went to lengths to avoid."""
+    from claude_sessions import hooks
+    p = tmp_path / 'settings.json'
+    p.write_text(json.dumps({'statusLine': {'type': 'command',
+                                            'command': '~/mine.sh'}}), encoding='utf-8')
+    monkeypatch.setattr(hooks, 'settings_path', str(p))
+
+    ok, msg = sl.install()
+    assert ok is False
+    assert 'already set' in msg
+    assert json.loads(p.read_text(encoding='utf-8'))['statusLine']['command'] == '~/mine.sh'
+
+
+def test_install_and_remove_round_trip(monkeypatch, tmp_path):
+    from claude_sessions import hooks
+    p = tmp_path / 'settings.json'
+    p.write_text('{}', encoding='utf-8')
+    monkeypatch.setattr(hooks, 'settings_path', str(p))
+
+    assert sl.is_installed() is False
+    ok, _ = sl.install()
+    assert ok and sl.is_installed()
+    cmd = json.loads(p.read_text(encoding='utf-8'))['statusLine']['command']
+    assert 'claude_sessions' in cmd and 'statusline' in cmd
+    ok, _ = sl.remove()
+    assert ok and not sl.is_installed()
+    # and it left the rest of settings.json alone
+    assert json.loads(p.read_text(encoding='utf-8')) == {}
+
+
+# ── the hook events ───────────────────────────────────────────
+
+def test_the_events_a_workspace_manager_needs_are_covered():
+    """5 of 32 was the starting point, and the missing ones were exactly the
+    ones claudectl has a reason to want."""
+    from claude_sessions.hooks import EVENTS, TEMPLATES
+    for e in ('PostCompact', 'SubagentStart', 'PermissionRequest',
+              'PermissionDenied', 'WorktreeCreate', 'WorktreeRemove',
+              'TaskCreated', 'TaskCompleted', 'FileChanged'):
+        assert e in EVENTS, e
+    # every template must name an event the manager can actually place
+    for name, t in TEMPLATES.items():
+        assert t['event'] in EVENTS, f'{name} -> {t["event"]}'
+
+
+def test_compaction_recovery_uses_the_real_signal():
+    """claudectl advertises context-loss insurance after /compact. Until
+    PostCompact existed the only available moment was SessionStart — i.e.
+    before the loss, not after it."""
+    from claude_sessions.hooks import TEMPLATES
+    t = TEMPLATES['reinject-after-compact']
+    assert t['event'] == 'PostCompact'
+    assert 'recall_hook' in t['entry']['hooks'][0]['command']
+
+
+# ── OTEL export ───────────────────────────────────────────────
+
+def test_otel_is_off_unless_both_switch_and_endpoint_are_set():
+    """An enabled flag with no endpoint would set CLAUDE_CODE_ENABLE_TELEMETRY
+    and then have nowhere to send it — a half-configured export that looks on."""
+    from claude_sessions.config import otel_env
+    assert otel_env({}) == {}
+    assert otel_env({'otel_enabled': True}) == {}
+    assert otel_env({'otel_endpoint': 'http://x'}) == {}
+    assert otel_env({'otel_enabled': True, 'otel_endpoint': 'http://x'})
+
+
+def test_otel_never_turns_on_prompt_content_logging():
+    """OTEL_LOG_USER_PROMPTS=1 exports the prompts themselves. It is the first
+    thing anyone asks about and it is deliberately not a checkbox here."""
+    from claude_sessions.config import otel_env
+    import inspect
+    from claude_sessions import config as cfg
+    env = otel_env({'otel_enabled': True, 'otel_endpoint': 'http://x',
+                    'otel_headers': 'Authorization=Bearer k'})
+    assert 'OTEL_LOG_USER_PROMPTS' not in env
+    src = inspect.getsource(cfg.otel_env)
+    assert 'OTEL_LOG_USER_PROMPTS' in src, 'the caveat is not documented'
+
+
+def test_otel_reaches_the_launch_environment():
+    """claudectl owns the launch env, which is the only reason this can be one
+    toggle instead of a shell profile edit."""
+    import inspect
+    from claude_sessions import main as main_mod
+    src = inspect.getsource(main_mod.build_launch_command)
+    assert 'otel_env()' in src
+
+
+def test_otel_keys_survive_a_reload():
+    """Same trap as the appearance keys: undeclared means written once then
+    deleted by the next settings save."""
+    from claude_sessions.config import _DEFAULT_SETTINGS
+    for k in ('otel_enabled', 'otel_endpoint', 'otel_protocol', 'otel_headers'):
+        assert k in _DEFAULT_SETTINGS, k

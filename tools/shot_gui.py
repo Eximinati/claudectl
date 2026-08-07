@@ -87,6 +87,53 @@ OVERFLOW_JS = """[...document.querySelectorAll('.dash>.card')].map(c=>{
   return (c.className.match(/d-[\\w]+/)||['?'])[0]+': '+(bad.length?bad.join(', '):'clean');})"""
 
 
+# Same idea as OVERFLOW_JS but scoped to whatever modal is open.
+MODAL_JS = """(()=>{const m=document.querySelector('.ovl.show .modal');
+  if(!m)return [];const mb=m.getBoundingClientRect();const bad=[];
+  m.querySelectorAll('*').forEach(e=>{
+    const b=e.getBoundingClientRect(); if(!b.height)return;
+    for(let p=e.parentElement;p&&p!==m.parentElement;p=p.parentElement){
+      const o=getComputedStyle(p).overflowY;
+      if(o==='auto'||o==='scroll'||o==='hidden')return;}
+    const over=Math.max(b.bottom-mb.bottom,b.right-mb.right);
+    if(over>1.5)bad.push((typeof e.className==='string'?e.className.split(' ')[0]
+      :e.tagName)+'+'+Math.round(over)+'px');});
+  return [...new Set(bad)];})()"""
+
+# A pill radius is right for something one line tall and catastrophic for
+# anything taller: 999px on a 130px-high card is an ellipse. Flag any element
+# whose corner radius exceeds half its own height while being visibly tall.
+OVAL_JS = """(()=>{const m=document.querySelector('.ovl.show .modal');
+  if(!m)return [];const out=[];
+  m.querySelectorAll('*').forEach(e=>{
+    const b=e.getBoundingClientRect();
+    if(b.height<40||b.width<40)return;
+    const r=parseFloat(getComputedStyle(e).borderTopLeftRadius)||0;
+    if(r>b.height/2)out.push((typeof e.className==='string'
+      ?e.className.split(' ')[0]:e.tagName)+' r='+Math.round(r)
+      +' h='+Math.round(b.height));});
+  return [...new Set(out)];})()"""
+
+
+# The same two probes rooted anywhere. Manager pages are cards too, and they
+# were as unaudited as modals were before the ellipse: `.preset` now appears on
+# the Output styles page as well as in the launch modal, and a row of buttons in
+# an `.hrow` overflows exactly the way a card's contents do.
+def _rooted(js, root):
+    return js.replace("document.querySelector('.ovl.show .modal')", root)
+
+
+PAGE_ROOT = "document.querySelector('#content')"
+
+
+def audit_page(pg, label):
+    bad = pg.evaluate(_rooted(MODAL_JS, PAGE_ROOT))
+    ovals = pg.evaluate(_rooted(OVAL_JS, PAGE_ROOT))
+    state = ('OVERFLOW ' + '; '.join(bad)) if bad else             ('OVAL ' + '; '.join(ovals)) if ovals else 'clean'
+    print(f'  {label:<11} {state}')
+    return state == 'clean'
+
+
 def main():
     from playwright.sync_api import sync_playwright
     os.makedirs(OUT, exist_ok=True)
@@ -131,6 +178,55 @@ def main():
             pg.evaluate(f"go('{page}')")
             pg.wait_for_timeout(800)
             pg.screenshot(path=os.path.join(OUT, f'_shot_{page}.png'))
+
+        # ── modals ──
+        # The overflow audit only ever walked `.dash>.card`, so nothing in this
+        # tool had ever looked at a modal. That is how a pill radius applied to
+        # the launch presets shipped: every preset rendered as an ELLIPSE with
+        # its own text outside the shape, on a screen the audit could not see.
+        print(chr(10) + '— modal audit —')
+        for name, opener in (
+            ('launch', "askLaunch({title:'New session',sub:'Demo',isNew:true,"
+                       "path:'D:\\Claude',enc:'d--claude',choice:'new',cfgdir:''})"),
+            ('guide', "openGuide&&openGuide()"),
+        ):
+            try:
+                pg.evaluate(opener)
+            except Exception as e:
+                print(f'  {name:<8} could not open — {str(e)[:60]}')
+                continue
+            pg.wait_for_timeout(500)
+            shown = pg.evaluate(
+                "!!document.querySelector('.ovl.show .modal')")
+            if not shown:
+                print(f'  {name:<8} did not open')
+                continue
+            bad = pg.evaluate(MODAL_JS)
+            # a control whose corner radius exceeds half its own height is a
+            # pill, and a pill that is not one line tall is an ellipse
+            ovals = pg.evaluate(OVAL_JS)
+            state = 'clean'
+            if bad:
+                state = 'OVERFLOW ' + '; '.join(bad)
+            elif ovals:
+                state = 'OVAL ' + '; '.join(ovals)
+            print(f'  {name:<8} {state}')
+            pg.screenshot(path=os.path.join(OUT, f'_modal_{name}.png'))
+            pg.evaluate("document.querySelectorAll('.ovl').forEach("
+                        "o=>o.classList.remove('show'))")
+            pg.wait_for_timeout(200)
+
+        # ── manager pages ──
+        print(chr(10) + '— page audit —')
+        for page in ('plugins', 'ostyles', 'skills', 'hooks', 'agents',
+                     'settings', 'accounts'):
+            pg.evaluate(f"go('{page}')")
+            pg.wait_for_timeout(700)
+            audit_page(pg, page)
+            if page in ('plugins', 'ostyles'):
+                pg.screenshot(path=os.path.join(OUT, f'_shot_{page}.png'))
+        pg.evaluate("go('home')")
+        pg.wait_for_timeout(600)
 
         # ── per-skin pass ──
         # A skin changes card geometry, so it can break fit in ways the default

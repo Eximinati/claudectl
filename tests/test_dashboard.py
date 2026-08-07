@@ -194,3 +194,105 @@ def test_usage_plan_returns_every_configured_account(monkeypatch, tmp_path):
         assert accts['second']['windows'] == []      # zero data → empty windows
     finally:
         srv.shutdown()
+
+
+# ── the Activity card ─────────────────────────────────────────
+
+def _mk_acct(tmp_path, name, enc, when, n_msgs=12):
+    """One account dir holding one project with one transcript, touched at
+    `when`. Returns the (mtime, path, enc, cfgdir) entry assemble_breakdown
+    consumes — built directly, so this exercises the aggregation rather than
+    the path-resolution layer around it."""
+    import os
+    cfg = tmp_path / name
+    proj = cfg / 'projects' / enc
+    proj.mkdir(parents=True)
+    j = proj / f'{enc}-0000-0000-0000-000000000000.jsonl'
+    make_jsonl(j, n_msgs=n_msgs, title=enc)
+    os.utime(j, (when, when))
+    work = tmp_path / 'work' / enc
+    work.mkdir(parents=True, exist_ok=True)
+    return (when, str(work), enc, str(cfg))
+
+
+def test_live_sessions_are_counted_across_every_account(monkeypatch, tmp_path):
+    """The Activity card reads LIVE CLAUDE CODE SESSIONS, cross-account.
+
+    It used to read claudectl's own background-job count, which is almost
+    always zero — so on a workspace burning hundreds of millions of tokens a day
+    the card sat at "0 RUNNING" and flat. It reported the tool's idleness, not
+    the workspace's.
+
+        "activity section on the dashboard never shows anything, it's always
+         like this … activity should be for all accounts working"
+    """
+    from claude_sessions import config
+    from claude_sessions.stats import assemble_breakdown, LIVE_WINDOW
+
+    now = time.time()
+    e1 = _mk_acct(tmp_path, 'cfg-a', 'alpha', now)
+    e2 = _mk_acct(tmp_path, 'cfg-b', 'beta', now)
+    monkeypatch.setattr(config, 'all_config_dirs',
+                        lambda: [('default', e1[3]), ('second', e2[3])])
+
+    bd = assemble_breakdown([e1, e2], days=14)
+    live = bd['live']
+    assert live['window'] == LIVE_WINDOW
+    assert live['total'] == 2, live
+    # …and it must attribute them, or "for all accounts" means nothing
+    assert set(live['by_account']) == {'default', 'second'}, live
+    assert sum(live['by_account'].values()) == live['total']
+
+
+def test_a_stale_session_is_not_live(monkeypatch, tmp_path):
+    """Outside the window it stops counting — the card is supposed to reach
+    zero. The bug was that it never left it."""
+    from claude_sessions import config
+    from claude_sessions.stats import assemble_breakdown, LIVE_WINDOW
+
+    old = time.time() - LIVE_WINDOW * 4
+    e = _mk_acct(tmp_path, 'cfg-a', 'alpha', old)
+    monkeypatch.setattr(config, 'all_config_dirs', lambda: [('default', e[3])])
+
+    bd = assemble_breakdown([e], days=14)
+    assert bd['live']['total'] == 0, bd['live']
+    # but it still shows in the 24h bars — which is why there are both
+    assert len(bd['hours']) == 24
+    assert sum(bd['hours']) >= 1, bd['hours']
+
+
+def test_claudectl_own_one_shots_do_not_read_as_activity(monkeypatch, tmp_path):
+    """Lesson distilling, graph building and title extraction all land in the
+    same transcript store and are a couple of turns each. Counting them would
+    mean memory refreshing itself looked like you working."""
+    from claude_sessions import config
+    from claude_sessions.stats import assemble_breakdown
+
+    now = time.time()
+    e = _mk_acct(tmp_path, 'cfg-a', 'alpha', now, n_msgs=2)
+    monkeypatch.setattr(config, 'all_config_dirs', lambda: [('default', e[3])])
+
+    bd = assemble_breakdown([e], days=14)
+    assert bd['live']['total'] == 0, bd['live']
+    assert sum(bd['hours']) == 0, bd['hours']
+
+
+def test_activity_bars_are_hours_not_days():
+    """`days.slice(-24)` was the last 24 DAYS out of a 14-day window — a sparse
+    trend chart in a card called Activity."""
+    from claude_sessions.gui_html import PAGE
+    assert "series:d.hours||[]" in PAGE
+    assert "series:days.slice(-24)" not in PAGE
+    assert "beats:nlive" in PAGE, 'still driven by claudectl job count'
+
+
+def test_the_stage_surface_comes_down_when_unfocused():
+    """A visible-but-unrendered WebGL surface is what tears when Qt
+    recomposites a background window: with preserveDrawingBuffer:false the
+    backbuffer is undefined once presented. Stopping the frame loop is not
+    enough — the canvas has to leave the composite."""
+    from claude_sessions.gui_html import PAGE
+    assert 'blur(on) {' in PAGE
+    assert "classList.toggle('stage-blur', !!on)" in PAGE
+    assert 'if(window.STAGE)STAGE.blur(!v);' in PAGE, 'setVis does not call it'
+    assert 'html.stage-blur #stage{visibility:hidden}' in PAGE

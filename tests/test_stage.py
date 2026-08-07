@@ -109,7 +109,9 @@ def test_it_is_driven_by_real_workspace_state():
     assert 'STAGE.page(page);STAGE.impulse();' in PAGE, 'navigation does not'
     # ...and NOT off throughput alone. Feeding a liveness test from a token
     # counter is the one-word bug that made the equalizer animate forever.
-    assert 'const j=Math.min(1,(jobs||0)/2);' in PAGE
+    # /4: the input is live Claude Code sessions now, not the rare background
+    # job, so the scale has to have headroom or it pins at full all day
+    assert 'const j=Math.min(1,(jobs||0)/4);' in PAGE
 
 
 def test_every_pause_condition_is_present():
