@@ -295,3 +295,39 @@ def test_appearance_settings_round_trip_through_disk(tmp_path, monkeypatch):
     cfg.save_settings(back)
     again = cfg.load_settings()
     assert again.get('world') == 'graph', 'a later save deleted the world again'
+
+
+def test_the_graph_links_carry_travelling_data():
+    """The homage is not just the solids — connections.py runs particles along
+    its edges, and so does this. Always moving (the links carry something), but
+    faster and denser with energy, so it still reports rather than decorates.
+
+    The per-segment seed is load-bearing: without it every edge pulses in
+    lockstep and the field reads as a strobe rather than as traffic."""
+    g = PAGE[PAGE.index('  graph(TH, c) {'):PAGE.index('  /* Terminal —')]
+    assert 'float packet(float at, float head)' in g
+    assert "gLink.setAttribute('lsd'" in g, 'no per-segment seed'
+    assert 'attribute float lsd;' in g and 'vS = lsd;' in g
+    # two packets per link, de-synchronised, and the speed reads energy
+    assert 'fract(u_t * sp + vS)' in g and 'vS + 0.53' in g
+    assert 'float sp = 0.16 + 0.42 * u_e;' in g
+    # every attribute the link shader declares must exist on its geometry —
+    # a declared-but-absent one reads as 0 and the lines silently vanish
+    for a in ('lt', 'li', 'lsd'):
+        assert f"gLink.setAttribute('{a}'" in g, a
+        assert f'attribute float {a};' in g, a
+
+
+def test_the_dodecahedra_vary_in_size_and_collide_by_mass():
+    """A uniform spread gives forty forgettably similar solids. Cubing a flat
+    hash gives a long tail — a few hubs among many leaves, the read the real
+    architecture graph has. Once sizes differ, equal-mass collision is wrong:
+    a pea would deflect a boulder."""
+    g = PAGE[PAGE.index('  graph(TH, c) {'):PAGE.index('  /* Terminal —')]
+    assert 'Math.pow(h, 3)' in g, 'size is not long-tailed'
+    assert 'm: r * r * r' in g, 'no mass'
+    assert 'const mi = nodes[i].m, mj = nodes[j].m, mt = mi + mj;' in g
+    assert '(2 * mj / mt)' in g and '(2 * mi / mt)' in g
+    assert 'if (vi - vj <= 0) continue;' in g, 'no separating-pair guard'
+    # the wall inset, or a large solid half-leaves the frame
+    assert 'BOUND[k] - nodes[i].r' in g

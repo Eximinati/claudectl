@@ -740,11 +740,22 @@ const STAGE_SCENES = {
     for (let i = 0; i < N; i++) {
       const ang = i * 2.399963;                       // golden angle
       const rad = 1.0 + 5.6 * Math.sqrt(i / N);
+      // Size follows a LONG TAIL, not a uniform spread: a handful of large hubs
+      // among many small leaves. Cubing a flat hash is what does it — a linear
+      // ramp gives forty solids of forgettably similar size, which is what the
+      // first cut had. Same read the real architecture graph gives, where a
+      // module dwarfs a leaf. Deterministic hash, so the field is identical on
+      // every reload.
+      const h = ((i * 9301 + 49297) % 233280) / 233280;
+      const r = 0.13 + Math.pow(h, 3) * 1.15;
       nodes.push({
         x: Math.cos(ang) * rad * 1.85,
         y: Math.sin(ang) * rad * 0.98,
         z: -1.5 - ((i * 7) % 11) * 0.62,
-        r: 0.26 + ((i * 13) % 7) / 7 * 0.40,
+        r,
+        // mass by volume. Without this the collision below is equal-mass and a
+        // pea deflects a boulder, which looks wrong the moment sizes differ.
+        m: r * r * r,
         ph: (i * 1.7) % 6.283,
         tone: (i % 5) / 5,
       });
@@ -785,26 +796,36 @@ const STAGE_SCENES = {
           const rr = (nodes[i].r + nodes[j].r) * 1.35;
           if (d2 >= rr * rr || d2 < 1e-6) continue;
           const d = Math.sqrt(d2), nx = dx / d, ny = dy / d, nz = dz / d;
-          const push = (rr - d) * 0.5;
-          POS[i * 3] -= nx * push; POS[i * 3 + 1] -= ny * push; POS[i * 3 + 2] -= nz * push;
-          POS[j * 3] += nx * push; POS[j * 3 + 1] += ny * push; POS[j * 3 + 2] += nz * push;
-          // elastic-ish exchange along the contact normal, damped so the field
-          // keeps jostling instead of heating up until everything flies apart
+          // separate them, and let the heavier one hold its ground
+          const mi = nodes[i].m, mj = nodes[j].m, mt = mi + mj;
+          const gap = rr - d;
+          const pi = gap * (mj / mt), pj = gap * (mi / mt);
+          POS[i * 3] -= nx * pi; POS[i * 3 + 1] -= ny * pi; POS[i * 3 + 2] -= nz * pi;
+          POS[j * 3] += nx * pj; POS[j * 3 + 1] += ny * pj; POS[j * 3 + 2] += nz * pj;
+          // elastic exchange along the contact normal, weighted by mass and
+          // damped so the field keeps jostling instead of heating up until
+          // everything flies apart. A big hub now plows through a small leaf and
+          // the leaf pings off it, which is the whole reason sizes vary.
           const vi = VEL[i * 3] * nx + VEL[i * 3 + 1] * ny + VEL[i * 3 + 2] * nz;
           const vj = VEL[j * 3] * nx + VEL[j * 3 + 1] * ny + VEL[j * 3 + 2] * nz;
-          const t = (vj - vi) * 0.9;
-          VEL[i * 3] += nx * t; VEL[i * 3 + 1] += ny * t; VEL[i * 3 + 2] += nz * t;
-          VEL[j * 3] -= nx * t; VEL[j * 3 + 1] -= ny * t; VEL[j * 3 + 2] -= nz * t;
+          if (vi - vj <= 0) continue;            // already separating
+          const ti = (2 * mj / mt) * (vj - vi) * 0.9;
+          const tj = (2 * mi / mt) * (vi - vj) * 0.9;
+          VEL[i * 3] += nx * ti; VEL[i * 3 + 1] += ny * ti; VEL[i * 3 + 2] += nz * ti;
+          VEL[j * 3] += nx * tj; VEL[j * 3 + 1] += ny * tj; VEL[j * 3 + 2] += nz * tj;
         }
       }
       for (let i = 0; i < N; i++) {
         for (let k = 0; k < 3; k++) {
           const a = i * 3 + k;
           POS[a] += VEL[a] * dt * sp;
-          // reflect at the wall, and clamp back inside so a body can never
-          // escape and drift off screen for the rest of the session
-          if (POS[a] > BOUND[k]) { POS[a] = BOUND[k]; VEL[a] = -Math.abs(VEL[a]); }
-          else if (POS[a] < -BOUND[k]) { POS[a] = -BOUND[k]; VEL[a] = Math.abs(VEL[a]); }
+          // Reflect at the wall, and clamp back inside so a body can never
+          // escape and drift off screen for the rest of the session. The limit
+          // is inset by the radius, or a large solid half-leaves the frame while
+          // its centre is still legally inside.
+          const lim = Math.max(0.5, BOUND[k] - nodes[i].r);
+          if (POS[a] > lim) { POS[a] = lim; VEL[a] = -Math.abs(VEL[a]); }
+          else if (POS[a] < -lim) { POS[a] = -lim; VEL[a] = Math.abs(VEL[a]); }
           VEL[a] *= 0.9995;               // a whisper of drag
         }
         u.u_np.value[i].set(POS[i * 3], POS[i * 3 + 1], POS[i * 3 + 2] - 3.0);
@@ -885,7 +906,8 @@ const STAGE_SCENES = {
     // attributes are REQUIRED: a declared-but-absent attribute reads as 0, which
     // pins every segment to node 0 and gives it zero length, so the lines vanish
     // without a single error anywhere. That is exactly what happened here.
-    const lp = [], la = [], li = [];
+    const lp = [], la = [], li = [], ls = [];
+    let seg = 0;
     for (let i = 0; i < N; i++) {
       for (const k of [1, 2, 3, 8]) {
         const j = i + k;
@@ -893,31 +915,55 @@ const STAGE_SCENES = {
         lp.push(0, 0, 0, 0, 0, 0);
         la.push(0, 1);
         li.push(i, j);
+        // one seed per SEGMENT (identical on both endpoints, so it survives
+        // interpolation) — it de-synchronises the packets travelling each link.
+        // Without it every edge pulses in lockstep and reads as a strobe.
+        const sd = ((seg * 9301 + 49297) % 233280) / 233280;
+        ls.push(sd, sd);
+        seg++;
       }
     }
     const gLink = new TH.BufferGeometry();
     gLink.setAttribute('position', new TH.Float32BufferAttribute(lp, 3));
     gLink.setAttribute('lt', new TH.Float32BufferAttribute(la, 1));
     gLink.setAttribute('li', new TH.Float32BufferAttribute(li, 1));
+    gLink.setAttribute('lsd', new TH.Float32BufferAttribute(ls, 1));
     const mLink = new TH.LineSegments(gLink, new TH.ShaderMaterial({
       uniforms: u, transparent: true, depthWrite: false,
       vertexShader: `
-        attribute float lt; attribute float li;
-        varying float vT; varying float vD;
+        attribute float lt; attribute float li; attribute float lsd;
+        varying float vT; varying float vD; varying float vS;
         uniform vec3 u_np[${N}];
-        void main(){ vT = lt;
+        void main(){ vT = lt; vS = lsd;
           vec4 mv = modelViewMatrix * vec4(u_np[int(li)], 1.0);
           vD = clamp(1.0 - (-mv.z) / 26.0, 0.0, 1.0);
           gl_Position = projectionMatrix * mv; }`,
       fragmentShader: `
         ${SF_CALM}
-        varying float vT; varying float vD;
-        uniform vec3 u_acc,u_bg; uniform float u_t,u_e,u_pulse,u_dens,u_calm;
+        varying float vT; varying float vD; varying float vS;
+        uniform vec3 u_acc,u_acc2,u_bg;
+        uniform float u_t,u_e,u_pulse,u_dens,u_calm;
+        // a packet: a bright head with a short tail behind it, like the
+        // particles connections.py runs along its edges
+        float packet(float at, float head){
+          float d = at - head;
+          float dot_  = pow(max(0.0, 1.0 - abs(d) * 26.0), 2.0);
+          float tail  = d < 0.0 ? pow(max(0.0, 1.0 + d * 7.0), 3.0) * 0.35 : 0.0;
+          return dot_ + tail;
+        }
         void main(){
-          // a pulse runs along the link when you navigate
-          float trav = pow(1.0 - abs(fract(u_t * 0.2) - vT), 26.0) * u_pulse;
-          float a = (0.20 + 0.26 * vD + 0.6 * trav) * u_dens;
-          gl_FragColor = vec4(calm(u_acc, u_bg, u_calm + 0.3), a);
+          // DATA TRAVELLING. Always running — this is the graph showing that the
+          // links carry something — but faster and denser when the workspace is
+          // busy, so it is still telling you something rather than decorating.
+          float sp = 0.16 + 0.42 * u_e;
+          float p1 = packet(vT, fract(u_t * sp + vS));
+          float p2 = packet(vT, fract(u_t * sp * 0.72 + vS + 0.53)) * 0.7;
+          float data = p1 + p2;
+          // …plus the one-shot surge when you navigate
+          float surge = pow(1.0 - abs(fract(u_t * 0.2) - vT), 26.0) * u_pulse;
+          vec3 col = mix(u_acc, mix(u_acc2, vec3(1.0), 0.45), clamp(data, 0.0, 1.0));
+          float a = (0.34 + 0.30 * vD + 0.85 * data + 0.6 * surge) * u_dens;
+          gl_FragColor = vec4(calm(col, u_bg, u_calm + 0.34), a);
         }`,
     }));
     mLink.frustumCulled = false;
@@ -973,6 +1019,7 @@ const STAGE_SCENES = {
     mJoint.frustumCulled = false;
     S.add(mJoint);
 
+    S.__nodes = nodes;          // read by tools/ probes
     S.update = f => {
       sFeed(u, f);
       physics(Math.min(0.05, f.dt), f.e);
