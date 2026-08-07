@@ -1881,13 +1881,14 @@ def api_plugin_remove(q, body):
 
 
 def api_worktrees(q, body):
-    """The board: every worktree of this project, and the session working in it."""
+    """The board: every repo under this project, its worktrees, and the session
+    working in each. A project is often a PARENT of repos rather than a repo."""
     from . import worktrees
     path = q.get('path', '')
     if not path:
-        return {'worktrees': [], 'repo': False}
+        return {'repo': False, 'repos': []}
     enc = q.get('enc', '')
-    return worktrees.board(path, _folder(q.get('cfgdir'), enc) if enc else None)
+    return worktrees.project_board(path, _folder(q.get('cfgdir'), enc) if enc else None)
 
 
 def api_worktree_merge(q, body):
@@ -2001,9 +2002,17 @@ def api_statusline(q, body):
     lessons and today's spend, so what you see is what the session will show.
     """
     from . import statusline
-    payload = {'model': {'display_name': 'Opus 5'},
-               'workspace': {'current_dir': q.get('path') or os.getcwd()},
-               'output_style': {'name': 'default'}}
+    path = q.get('path') or os.getcwd()
+    # git, memory, lessons and account are REAL; context and limits are
+    # illustrative, because only a live session has them
+    payload = {'model': {'display_name': 'Opus 5'}, 'cwd': path,
+               'workspace': {'current_dir': path},
+               'output_style': {'name': 'default'},
+               'context_window': {'used_percentage': 42},
+               'rate_limits': {'five_hour': {'used_percentage': 41},
+                               'seven_day': {'used_percentage': 18}},
+               'cost': {'total_cost_usd': 3.42, 'total_lines_added': 156,
+                        'total_lines_removed': 23}}
     try:
         preview = statusline.plain(statusline.render(payload))
     except Exception as e:

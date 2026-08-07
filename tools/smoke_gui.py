@@ -120,13 +120,35 @@ ROUTES = {
                      'version': '1.0', 'missing': False,
                      'provides': {'skill': ['a', 'b'], 'hook': ['h']}}]},
     '/api/plugins/provenance': {'provenance': {'skill': {'a': 'demo@official'}}},
-    '/api/worktrees': {'repo': True, 'worktrees': [
-        {'path': 'D:/Claude', 'name': 'Claude', 'branch': 'main', 'head': 'abc',
-         'main': True, 'dirty': 3, 'ahead': 0, 'behind': 0, 'session': None},
-        {'path': 'D:/wt-a', 'name': 'wt-a', 'branch': 'feat', 'head': 'def',
-         'main': False, 'dirty': 1, 'ahead': 2, 'behind': 0,
-         'session': {'sid': 'deadbeef', 'title': 'refactor', 'account': 'work',
-                     'msgs': 12, 'age': 30, 'live': True}}]},
+    # a PARENT of repos, one carrying a submodule — the shape the flat board
+    # could not render at all, so the stub has to be the hard case
+    '/api/worktrees': {'repo': True, 'multi': True, 'root': 'D:/repos', 'repos': [
+        {'path': 'D:/repos/ws', 'name': 'ws', 'kind': 'repo', 'branch': 'develop',
+         'head': 'abc', 'dirty': 3, 'ahead': 0, 'behind': 2,
+         'sublabel': 'submodules',
+         'worktrees': [
+             {'path': 'D:/repos/ws', 'name': 'ws', 'branch': 'develop',
+              'head': 'abc', 'main': True, 'dirty': 3, 'ahead': 0, 'behind': 2,
+              'session': None},
+             {'path': 'D:/wt-a', 'name': 'wt-a', 'branch': 'feat', 'head': 'def',
+              'main': False, 'dirty': 1, 'ahead': 2, 'behind': 0,
+              'session': {'sid': 'deadbeef', 'title': 'refactor',
+                          'account': 'work', 'msgs': 12, 'age': 30,
+                          'live': True}}],
+         'children': [
+             {'path': 'D:/repos/ws/core', 'name': 'core', 'kind': 'submodule',
+              'branch': 'develop', 'head': 'f00', 'dirty': 0, 'ahead': 0,
+              'behind': 0, 'sublabel': 'nested repos', 'children': [],
+              'worktrees': [{'path': 'D:/repos/ws/core', 'name': 'core',
+                             'branch': 'develop', 'head': 'f00', 'main': True,
+                             'dirty': 0, 'ahead': 0, 'behind': 0,
+                             'session': None}]}]},
+        {'path': 'D:/repos/solo', 'name': 'solo', 'kind': 'repo', 'branch': 'main',
+         'head': 'aaa', 'dirty': 0, 'ahead': 0, 'behind': 0,
+         'sublabel': 'nested repos', 'children': [],
+         'worktrees': [{'path': 'D:/repos/solo', 'name': 'solo', 'branch': 'main',
+                        'head': 'aaa', 'main': True, 'dirty': 0, 'ahead': 0,
+                        'behind': 0, 'session': None}]}]},
     '/api/output-styles': {'active': 'default', 'styles': [
         {'name': 'default', 'description': 'As it ships.', 'scope': 'built-in',
          'builtin': True, 'active': True, 'lines': 0},
@@ -442,6 +464,18 @@ def main():
             pg.evaluate(f"TAB='{t}';go('project')")
             pg.wait_for_timeout(600)
             check(f'tab {t}', len(errs) == before, errs[before:])
+
+        # "no JS error" passes on an EMPTY card, which is exactly what the old
+        # renderer produced against the new API shape — so assert the tree.
+        pg.evaluate("TAB='worktrees';go('project')")
+        pg.wait_for_timeout(600)
+        groups = pg.evaluate("document.querySelectorAll('#content details.rgrp').length")
+        check('repos tab groups every repo', groups == 3, groups)
+        txt = pg.evaluate("document.querySelector('#content').innerText")
+        check('a submodule is nested and labelled',
+              'core' in txt and 'submodule' in txt and 'submodules' in txt, txt[:200])
+        check('a worktree still shows its session', 'refactor' in txt, txt[:200])
+
         pg.evaluate("go('home')")
         pg.wait_for_timeout(500)
 

@@ -1,49 +1,48 @@
-"""`claudectl statusline` — one line under every Claude Code prompt.
+"""`claudectl statusline` — two rows under every Claude Code prompt.
 
-Claude Code runs a `statusLine.command` from settings.json, pipes it session
-JSON on stdin, and renders the first line of stdout. It refreshes whenever the
-conversation changes, throttled to 300ms.
+Claude Code pipes session JSON on stdin and renders every line printed as its
+own row, refreshed on each assistant message and debounced 300ms.
 
-WHY CLAUDECTL SHOULD SHIP ONE
------------------------------
-There is a whole category of statusline tools and they all show the same four
-things, because that is all the stdin payload contains: model, directory, cost,
-context usage. claudectl knows things none of them can:
+  row 1  identity and place:  model · account · repo ⑂branch ●dirty ↑↓ · mode
+  row 2  pressure:            context meter · 5h/7d limits · memory · cost
 
-  · whether this project's memory is FRESH or stale, and by how long
-  · how many lessons are waiting for review
-  · which account this session is burning, out of several
-  · today's burn against your own heaviest day, not an absolute number
-
-That is the difference between a readout and a warning. "memory 6d" is the one
-piece of information that changes what you do next, and only the tool that
-maintains the memory can say it.
-
-It also changes where claudectl lives: today it is something you use *between*
-sessions. This puts it in front of you *during* every one.
+WHAT THIS SAYS THAT OTHERS CANNOT
+---------------------------------
+Every statusline tool shows model, directory, cost and context, because that is
+what the payload hands out. Two of the fields here come from claudectl's own
+files: how stale this project's memory graph is, and how many lessons are
+waiting for review. "memory 6d" is the one segment that changes what you do
+next, and only the tool maintaining the graph can say it.
 
 CONSTRAINTS THAT SHAPE THIS FILE
 --------------------------------
-It runs on every conversation turn, so it must be fast and it must never fail
-loudly. A statusline that throws leaves a Python traceback under the user's
-prompt for the rest of the session — so every read is guarded and any error
-degrades to a shorter line, never to a crash. It also must not do a transcript
-scan: the dashboard's aggregate is far too expensive to run per turn, so the
-numbers here come from files claudectl has already written.
+It runs on EVERY turn and a traceback here sits under the prompt for the rest of
+the session, so every read is guarded and failure degrades to a shorter line.
+Nothing goes to stderr. No transcript scan — the numbers come from stdin or from
+files claudectl already wrote. Git is never spawned inline: `repos.state` serves
+it from a cache the GUI board warms.
+
+Two Windows details that are not cosmetic:
+
+  · stdout MUST be reconfigured to UTF-8. Claude Code captures stdout as a pipe,
+    so CPython picks the locale codepage (cp1252 here) and the glyphs in these
+    rows are either unencodable or reach the terminal as broken UTF-8. That is
+    what produced the reported `Opus 5 <?> default <?> memory 21m`.
+  · width comes from $COLUMNS, which Claude Code sets. `shutil.get_terminal_size`
+    reports 80 for a pipe and would truncate a wide terminal.
 """
 
 import json
 import os
-import re
 import sys
-import time
 
-#: ANSI, kept minimal — the terminal is the user's and its palette is not ours
-_DIM = '\033[2m'
-_OFF = '\033[0m'
-_WARN = '\033[33m'
-_ERR = '\033[31m'
+from . import render as _r      # NOT `render` — the public function below would shadow it
+from .config import C_DIM as _DIM, C_RESET as _OFF, C_WARN as _WARN, C_ERR as _ERR
+
 _SEP = f'{_DIM} · {_OFF}'
+
+#: the effort level normal enough not to mention
+_QUIET_EFFORT = 'high'
 
 
 def _age(seconds):
@@ -121,58 +120,188 @@ def _account_bit():
     return ''
 
 
-def _context_bit(data):
-    """Context pressure, straight from the payload — amber past 70%, red past
-    85%, absent below half, because a number you cannot act on is decoration."""
+def _git_bits(cwd):
+    """(`repo ⑂branch ●3 ↓2`, `7 subs (2 dirty)`) — both '' without git.
+
+    Never spawns git itself. `repos.state` answers from cache; the branch inside
+    it is read from `.git/HEAD` and is always exact. The sub-repo roll-up is the
+    answer to a project that is a PARENT of repos rather than a repo.
+    """
+    if not cwd or not isinstance(cwd, str) or not os.path.isdir(cwd):
+        return '', ''
     try:
-        pct = None
-        for key in ('context_used_pct', 'contextUsedPercent'):
-            if isinstance(data.get(key), (int, float)):
-                pct = float(data[key])
-        if pct is None:
-            used = (data.get('context') or {}).get('used')
-            total = (data.get('context') or {}).get('total')
-            if used and total:
-                pct = 100.0 * used / total
-        if pct is None or pct < 50:
-            return ''
-        col = _ERR if pct >= 85 else (_WARN if pct >= 70 else _DIM)
-        return f'{col}ctx {int(pct)}%{_OFF}'
+        from . import repos
+        root = repos.owner_of(cwd)
+        if not root:
+            summary = repos.summary(cwd)
+            if summary['repos']:
+                d = summary['dirty']
+                tail = f' ({d} dirty)' if d else ''
+                return '', f'{_DIM}{summary["repos"]} repos{tail}{_OFF}'
+            return '', ''
+        st = repos.state(root, refresh=False)
+        parts = [f'{_DIM}{os.path.basename(root) or root}{_OFF}']
+        if st['branch']:
+            parts.append(f'⑂{_r.trunc(st["branch"], 24)}')
+        elif st['head']:
+            parts.append(f'@{st["head"]}')
+        if st['dirty']:
+            parts.append(f'{_WARN}●{st["dirty"]}{_OFF}')
+        if st['ahead']:
+            parts.append(f'↑{st["ahead"]}')
+        if st['behind']:
+            parts.append(f'{_WARN}↓{st["behind"]}{_OFF}')
+        sub = repos.summary(root)
+        subs = ''
+        if sub['repos'] > 1:
+            n = sub['repos'] - 1
+            d = sub['dirty'] - (1 if st['dirty'] else 0)
+            tail = f' ({d} dirty)' if d > 0 else ''
+            subs = f'{_DIM}{n} subs{tail}{_OFF}'
+        return ' '.join(parts), subs
+    except Exception:
+        return '', ''
+
+
+def _context_bit(data):
+    """The context meter. The percentage is always drawn — it leads row 2 and
+    anchors it — but the COLOUR is what appears only when it matters.
+
+    `exceeds_200k_tokens` forces red regardless: it means the premium pricing
+    tier is live, which is actionable at any percentage.
+    """
+    try:
+        cw = data.get('context_window') or {}
+        pct = cw.get('used_percentage')
+        if not isinstance(pct, (int, float)) or isinstance(pct, bool):
+            used, size = cw.get('total_input_tokens'), cw.get('context_window_size')
+            if not (isinstance(used, (int, float)) and isinstance(size, (int, float))
+                    and size):
+                return ''
+            pct = 100.0 * used / size
+        pct = max(0.0, min(100.0, float(pct)))
+        big = bool(data.get('exceeds_200k_tokens'))
+        col = _ERR if (pct >= 85 or big) else (_WARN if pct >= 70 else _DIM)
+        return (f'{_r.meter(pct, 10, col)}{col}{int(pct)}% ctx'
+                f'{" 200k+" if big else ""}{_OFF}')
     except Exception:
         return ''
 
 
-def render(data):
-    """Build the line from one stdin payload. Pure — the tests call this."""
-    cwd = data.get('cwd') or (data.get('workspace') or {}).get('current_dir') or ''
+def _limit_bits(data):
+    """5h and 7d plan windows, straight off stdin.
+
+    `usage.py` gets these by polling the OAuth endpoint on a background thread.
+    That must never happen here: a thread started per turn, in a process Claude
+    Code cancels whenever a new update arrives, is the wrong shape entirely —
+    and the payload already carries the numbers for free.
+    """
+    out = []
+    try:
+        rl = data.get('rate_limits') or {}
+        for key, label in (('five_hour', '5h'), ('seven_day', '7d')):
+            pct = (rl.get(key) or {}).get('used_percentage')
+            if not isinstance(pct, (int, float)) or isinstance(pct, bool):
+                continue
+            col = _ERR if pct >= 90 else (_WARN if pct >= 75 else _DIM)
+            out.append(f'{col}{label} {int(pct)}%{_OFF}')
+    except Exception:
+        pass
+    return out
+
+
+def _mode_bit(data):
+    """Anything unusual about how this session is configured. Empty on a normal
+    session, which is the point — it costs nothing when there is nothing to say.
+    """
+    parts = []
+    try:
+        if data.get('fast_mode'):
+            parts.append('fast')
+        eff = (data.get('effort') or {}).get('level')
+        if isinstance(eff, str) and eff and eff != _QUIET_EFFORT:
+            parts.append(eff)
+        style = (data.get('output_style') or {}).get('name')
+        if isinstance(style, str) and style and style != 'default':
+            parts.append(style)
+        agent = (data.get('agent') or {}).get('name')
+        if isinstance(agent, str) and agent:
+            parts.append(f'@{agent}')
+        wt = (data.get('workspace') or {}).get('git_worktree')
+        if isinstance(wt, str) and wt:
+            parts.append(f'wt:{wt}')
+        pr = (data.get('pr') or {}).get('number')
+        if isinstance(pr, int) and not isinstance(pr, bool):
+            parts.append(f'PR #{pr}')
+    except Exception:
+        return ''
+    return f'{_DIM}{" ".join(parts)}{_OFF}' if parts else ''
+
+
+def _cost_bit(data):
+    try:
+        cost = (data.get('cost') or {}).get('total_cost_usd')
+        if not isinstance(cost, (int, float)) or isinstance(cost, bool) or cost <= 0:
+            return ''
+        add = (data.get('cost') or {}).get('total_lines_added')
+        rem = (data.get('cost') or {}).get('total_lines_removed')
+        lines = (f' +{add}/-{rem}'
+                 if isinstance(add, int) and isinstance(rem, int) and (add or rem) else '')
+        return f'{_DIM}${cost:.2f}{lines}{_OFF}'
+    except Exception:
+        return ''
+
+
+def _cols():
+    """Terminal width from $COLUMNS, or 0 for 'do not adapt'."""
+    try:
+        return max(0, int(os.environ.get('COLUMNS') or 0) - 2)
+    except Exception:
+        return 0
+
+
+def _fit(bits, cols):
+    """Join, dropping from the RIGHT until it fits — so segment order is
+    priority order. Also the single choke point where a newline in any
+    free-text field (model name, branch, style, agent) is neutralised: that is
+    what stops a payload adding rows of its own."""
+    bits = [str(b).replace('\n', ' ').replace('\r', ' ') for b in bits if b]
+    if not bits:
+        return ''
+    while cols and len(bits) > 1 and _r.disp_width(_SEP.join(bits)) > cols:
+        bits.pop()
+    line = _SEP.join(bits)
+    return _r.trunc(line, cols) if cols else line
+
+
+def render_rows(data):
+    """The rows, as a list. Pure — the tests call this."""
+    ws = data.get('workspace') or {}
+    cwd = data.get('cwd') or ws.get('current_dir') or ''
     model = ((data.get('model') or {}).get('display_name')
              or (data.get('model') or {}).get('id') or '')
-    bits = []
-    if model:
-        bits.append(model)
-    acct = _account_bit()
-    if acct:
-        bits.append(acct)
+    git, subs = _git_bits(cwd)
+    mem_bit = les_bit = ''
     if cwd:
-        # one read, both bits — this runs on every conversation turn
         try:
             mem = _load(cwd)
-            bits.append(_memory_bit(mem))
-            bits.append(_lessons_bit(mem))
+            mem_bit, les_bit = _memory_bit(mem), _lessons_bit(mem)
         except Exception:
             pass
-    bits.append(_context_bit(data))
-    cost = (data.get('cost') or {}).get('total_cost_usd')
-    if isinstance(cost, (int, float)) and cost > 0:
-        bits.append(f'{_DIM}${cost:.2f}{_OFF}')
-    return _SEP.join(b for b in bits if b)
+    cols = _cols()
+    row1 = _fit([model, _account_bit(), git, _mode_bit(data), subs], cols)
+    row2 = _fit([_context_bit(data), *_limit_bits(data), mem_bit, les_bit,
+                 _cost_bit(data)], cols)
+    return [r for r in (row1, row2) if r]
+
+
+def render(data):
+    return '\n'.join(render_rows(data))
 
 
 # ── install / remove ─────────────────────────────────────────
 # Writes Claude Code's own settings.json, reusing hooks.py's accessors so there
 # is one reader and one writer for that file rather than two that can disagree.
-
-_ANSI = re.compile(r'\[[0-9;]*m')
 
 
 def plain(line):
@@ -182,7 +311,7 @@ def plain(line):
     those into HTML would show the escape sequences themselves — the preview has
     to be the text, not the bytes.
     """
-    return _ANSI.sub('', line)
+    return _r.strip_ansi(line)
 
 
 def _command():
@@ -224,22 +353,21 @@ def remove():
 
 
 def main(argv=None):
-    """Read one JSON payload from stdin, print one line. Never raises.
-
-    Claude Code renders only the FIRST line of stdout, and anything on stderr is
-    the user's problem for the rest of the session — so failure here has to be
-    silence, not a traceback under the prompt.
-    """
+    """Read one JSON payload from stdin, print the rows. Never raises."""
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
     try:
         raw = sys.stdin.read()
         data = json.loads(raw) if raw.strip() else {}
     except Exception:
         data = {}
     try:
-        line = render(data)
+        out = render(data)
     except Exception:
-        line = ''
-    sys.stdout.write(line.replace('\n', ' ') + '\n')
+        out = ''
+    sys.stdout.write(out + '\n')
     return 0
 
 

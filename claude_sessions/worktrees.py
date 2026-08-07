@@ -30,22 +30,16 @@ you open one.
 """
 
 import os
-import subprocess
 import time
 
 from . import config as _c
+from .repos import _git      # module-level name so tests can still monkeypatch it
 
 #: a session whose transcript moved inside this window is "live" in its worktree
 LIVE_WINDOW = 600
 
-
-def _git(args, cwd, timeout=15):
-    try:
-        r = subprocess.run(['git'] + args, cwd=cwd, capture_output=True,
-                           text=True, timeout=timeout)
-    except Exception:
-        return None
-    return r.stdout if r.returncode == 0 else None
+#: git state for many repos at once — the wall clock is one repo, not their sum
+BOARD_WORKERS = 8
 
 
 def list_worktrees(project_path):
@@ -142,16 +136,20 @@ def _sessions_by_cwd(project_path, proj_folder):
     return out
 
 
-def board(project_path, proj_folder=None):
+def board(project_path, proj_folder=None, by_cwd=None):
     """Everything the board renders, in one call.
 
     [{path, name, branch, head, main, dirty, ahead, behind, session}] where
     `session` is the newest session running in that worktree, or None.
+
+    `by_cwd` lets a multi-repo caller scan sessions ONCE and share the result;
+    left alone it scans for itself, which is what the single-repo path does.
     """
     trees = list_worktrees(project_path)
     if not trees:
         return {'worktrees': [], 'repo': False}
-    by_cwd = _sessions_by_cwd(project_path, proj_folder)
+    if by_cwd is None:
+        by_cwd = _sessions_by_cwd(project_path, proj_folder)
     now = time.time()
     rows = []
     for t in trees:
@@ -178,6 +176,89 @@ def board(project_path, proj_folder=None):
                              not (r['session'] or {}).get('live'),
                              -r['dirty']))
     return {'worktrees': rows, 'repo': True}
+
+
+def project_board(root, proj_folder=None):
+    """The board for a project that may hold MANY repos.
+
+    A project is often a parent directory — `D:/repos` holds 15 repos, one of
+    which carries 7 submodules — and `git worktree list` in such a directory
+    simply fails, which is why the tab used to say "not a git repository".
+
+    Three things make this cheap enough to be one click:
+      · the session scan runs ONCE and is shared, not per repo (it walks every
+        transcript, so per-repo would dominate everything else here)
+      · the repos are polled in parallel; the wall clock is the slowest single
+        repo rather than their sum
+      · every repo's state is written back to the shared cache, so the next
+        statusline turn is free
+
+    A submodule never gets `git worktree list`: run inside one, it reports the
+    GITDIR (`…/.git/modules/<name>`) rather than the working directory, which
+    would silently break the session-to-path join.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from . import repos as _repos
+    try:
+        from .connections import _discover_repos
+        found = _discover_repos(os.path.abspath(root), proj_folder)
+    except Exception:
+        found = _repos.find_git_repos(root)
+    if not found:
+        return {'repo': False, 'repos': [], 'root': root}
+
+    shared = _sessions_by_cwd(root, proj_folder)
+    kinds = {p: _repos.classify(p) for p in found}
+
+    def one(path):
+        if kinds.get(path) == 'submodule':
+            st = _repos.state(path)
+            return {'worktrees': [{
+                'path': path, 'name': os.path.basename(path) or path,
+                'branch': st['branch'] or ('detached @ ' + st['head']),
+                'head': st['head'], 'main': True, 'dirty': st['dirty'],
+                'ahead': st['ahead'], 'behind': st['behind'],
+                'session': shared.get(os.path.normcase(os.path.normpath(path))),
+            }], 'repo': True}
+        return board(path, proj_folder, by_cwd=shared)
+
+    with ThreadPoolExecutor(max_workers=BOARD_WORKERS) as pool:
+        boards = list(pool.map(one, found))
+
+    by_path = {}
+    for path, b in zip(found, boards):
+        trees = b.get('worktrees') or []
+        if not trees:
+            continue
+        main = next((t for t in trees if t.get('main')), trees[0])
+        by_path[path] = {
+            'path': path, 'name': os.path.basename(path) or path,
+            'kind': kinds.get(path) or 'repo',
+            'branch': main['branch'], 'head': main['head'],
+            'dirty': main['dirty'],
+            'ahead': main['ahead'], 'behind': main['behind'],
+            'worktrees': trees, 'children': [],
+        }
+
+    # nest by longest path prefix — the same shape connections._cluster_of uses
+    tops, ordered = [], sorted(by_path, key=len)
+    for path in ordered:
+        parent = next((p for p in reversed(ordered)
+                       if p != path and path.startswith(p + os.sep)), None)
+        (by_path[parent]['children'] if parent else tops).append(by_path[path])
+
+    for entry in by_path.values():
+        entry['sublabel'] = ('submodules'
+                             if os.path.isfile(os.path.join(entry['path'], '.gitmodules'))
+                             else 'nested repos')
+
+    def live(entry):
+        return any((t.get('session') or {}).get('live') for t in entry['worktrees'])
+
+    tops.sort(key=lambda e: (not live(e), -e['dirty'], e['name'].lower()))
+    _repos.remember({e['path']: e for e in by_path.values()})
+    return {'repo': True, 'root': root, 'repos': tops,
+            'multi': len(by_path) > 1}
 
 
 def diff(path, staged=False):

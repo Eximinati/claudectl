@@ -133,31 +133,19 @@ def memory_map_menu(project_path, project_name):
 
 
 def find_git_repos(root, max_depth=2):
-    """Return list of paths that contain a .git dir, up to max_depth levels deep."""
-    repos = []
-    # root itself may be a repo
-    if os.path.isdir(os.path.join(root, '.git')):
-        repos.append(root)
-    if max_depth <= 0:
-        return repos
-    try:
-        for entry in sorted(os.scandir(root), key=lambda e: e.name):
-            if not entry.is_dir(follow_symlinks=False):
-                continue
-            sub = entry.path
-            if os.path.isdir(os.path.join(sub, '.git')):
-                repos.append(sub)
-            elif max_depth > 1:
-                # one more level
-                try:
-                    for e2 in sorted(os.scandir(sub), key=lambda e: e.name):
-                        if e2.is_dir(follow_symlinks=False) and os.path.isdir(os.path.join(e2.path, '.git')):
-                            repos.append(e2.path)
-                except PermissionError:
-                    pass
-    except PermissionError:
-        pass
-    return repos
+    """Repos for the CLAUDE.md context block — shallow, and NO submodules.
+
+    Discovery itself moved to `repos.find_git_repos`, which fixed three bugs
+    that made a parent-of-repos project invisible. This wrapper deliberately
+    does NOT inherit that function's depth-4 default: everything below feeds a
+    block that is injected into every session's context, and each repo costs
+    three git calls plus a README read. A submodule's own origin and log are
+    noise inside its parent's context block, so they are dropped here — the
+    graph and the board still see them.
+    """
+    from .repos import classify, find_git_repos as _find
+    return [r for r in _find(root, max_depth=max_depth)
+            if classify(r) != 'submodule']
 
 
 def _parse_existing_sessions(text):

@@ -77,12 +77,12 @@ def _git_repos(project_path, proj_folder):
     """Every git repo for this project: the root if it's one, plus any nested
     repos (a workspace often holds several sub-project repos, none at the root)."""
     repos = []
-    if os.path.isdir(os.path.join(project_path, '.git')):
-        repos.append(project_path)
     try:
         from . import connections
+        # no `isdir('.git')` filter: _discover_repos already returns repos, and
+        # re-testing for a .git DIRECTORY here dropped every submodule again
         for r in connections._discover_repos(os.path.abspath(project_path), proj_folder):
-            if os.path.isdir(os.path.join(r, '.git')) and r not in repos:
+            if r not in repos:
                 repos.append(r)
     except Exception:
         pass

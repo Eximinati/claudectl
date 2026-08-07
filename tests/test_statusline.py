@@ -39,8 +39,14 @@ def test_it_reports_how_stale_the_memory_is(monkeypatch):
 
 
 def test_stale_memory_is_coloured_by_how_stale(monkeypatch):
-    """Dim / amber / red. A number with no urgency attached is decoration."""
+    """Dim / amber / red. A number with no urgency attached is decoration.
+
+    The constants are imported rather than spelled out: the row shares a line
+    with `render.meter`, which paints its bar from config's palette, and two
+    different greys in one row read as a rendering bug.
+    """
     from datetime import datetime, timedelta, timezone
+    from claude_sessions.config import C_DIM, C_WARN, C_ERR
 
     def at(days):
         stamp = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
@@ -48,9 +54,9 @@ def test_stale_memory_is_coloured_by_how_stale(monkeypatch):
             'entities': [{'name': 'X'}], 'generated_at': stamp})
         return sl.render({'cwd': 'D:/p'})
 
-    assert '\033[2m' in at(1)      # fresh-ish: dim
-    assert '\033[33m' in at(9)     # over a week: amber
-    assert '\033[31m' in at(20)    # over two: red
+    assert C_DIM in at(1)      # fresh-ish: dim
+    assert C_WARN in at(9)     # over a week: amber
+    assert C_ERR in at(20)     # over two: red
 
 
 def test_it_surfaces_lessons_waiting_for_review(monkeypatch):
@@ -81,13 +87,86 @@ def test_the_account_shows_only_when_there_are_several(monkeypatch):
     assert 'default' in _plain(sl.render({'cwd': 'D:/p'}))
 
 
-def test_context_pressure_appears_only_when_it_matters(monkeypatch):
-    """Below half there is nothing to act on."""
+def test_context_pressure_reads_the_field_claude_code_actually_sends(monkeypatch):
+    """This segment was DEAD in production for its whole life.
+
+    It read `context_used_pct` / `contextUsedPercent` / `context.used|total` —
+    none of which Claude Code has ever sent. The real field is
+    `context_window.used_percentage`. The old test passed because it asserted
+    against the same invented shape, so it was testing the bug, not the
+    behaviour. The last two assertions are the regression guard.
+    """
+    from claude_sessions.config import C_ERR
     monkeypatch.setattr(sl, '_load', lambda p: {'entities': []})
-    low = _plain(sl.render({'cwd': 'D:/p', 'context': {'used': 20, 'total': 200}}))
-    hot = _plain(sl.render({'cwd': 'D:/p', 'context': {'used': 180, 'total': 200}}))
-    assert 'ctx' not in low, low
-    assert 'ctx 90%' in hot, hot
+
+    hot = sl.render({'cwd': 'D:/p', 'context_window': {'used_percentage': 90}})
+    assert '90% ctx' in _plain(hot), hot
+    assert C_ERR in hot, 'past 85% has to be red'
+
+    calm = sl.render({'cwd': 'D:/p', 'context_window': {'used_percentage': 30}})
+    assert '30% ctx' in _plain(calm), calm
+    assert C_ERR not in calm, 'a third full is not an emergency'
+
+    for dead in ({'context': {'used': 180, 'total': 200}},
+                 {'context_used_pct': 90}, {'contextUsedPercent': 90}):
+        assert 'ctx' not in _plain(sl.render(dict(dead, cwd='D:/p'))), dead
+
+
+def test_the_context_meter_is_drawn_not_just_the_number():
+    """It leads row 2 and anchors it — a bare integer does not read as pressure."""
+    out = sl.render({'cwd': 'D:/p', 'context_window': {'used_percentage': 50}})
+    assert '█' in out and '░' in out, out
+
+
+def test_exceeding_200k_is_red_at_any_percentage():
+    """That flag means the premium pricing tier is live, which is actionable
+    even at 10% — so it must not wait for the 85% threshold."""
+    from claude_sessions.config import C_ERR
+    out = sl.render({'cwd': 'D:/p', 'context_window': {'used_percentage': 10},
+                     'exceeds_200k_tokens': True})
+    assert C_ERR in out and '200k+' in _plain(out), out
+
+
+def test_rate_limits_come_from_stdin_and_never_from_the_api():
+    """`usage.py` gets these by polling the OAuth endpoint on a background
+    thread. A thread started per turn, in a process Claude Code cancels the
+    moment a new update arrives, is the wrong shape — and the payload already
+    carries the numbers for free."""
+    import inspect
+    out = _plain(sl.render({'cwd': 'D:/p', 'rate_limits': {
+        'five_hour': {'used_percentage': 41},
+        'seven_day': {'used_percentage': 18}}}))
+    assert '5h 41%' in out and '7d 18%' in out, out
+    assert 'import usage' not in inspect.getsource(sl), 'no OAuth poll on the turn path'
+
+
+def test_mode_segments_stay_quiet_on_an_ordinary_session():
+    """They cost nothing when there is nothing to say — that is the whole
+    reason they can be afforded at all."""
+    assert sl._mode_bit({'effort': {'level': 'high'},
+                         'output_style': {'name': 'default'}}) == ''
+    loud = _plain(sl._mode_bit({'effort': {'level': 'xhigh'},
+                                'output_style': {'name': 'terse'},
+                                'pr': {'number': 412}, 'fast_mode': True,
+                                'workspace': {'git_worktree': 'feat-x'}}))
+    for token in ('xhigh', 'terse', 'PR #412', 'fast', 'wt:feat-x'):
+        assert token in loud, (token, loud)
+
+
+def test_a_narrow_terminal_drops_segments_instead_of_wrapping(monkeypatch):
+    """A wrapped statusline eats the prompt. COLUMNS is the only width source
+    that works — stdout is a pipe, so terminal-size detection reports 80."""
+    monkeypatch.setattr(sl, '_load', lambda p: {'entities': []})
+    payload = {'cwd': 'D:/p', 'model': {'display_name': 'Opus 5'},
+               'context_window': {'used_percentage': 72},
+               'rate_limits': {'five_hour': {'used_percentage': 41}},
+               'cost': {'total_cost_usd': 15.7}}
+    monkeypatch.setenv('COLUMNS', '48')
+    rows = sl.render_rows(payload)
+    for row in rows:
+        assert sl._r.disp_width(row) <= 48, (sl._r.disp_width(row), _plain(row))
+    assert 'Opus 5' in _plain(rows[0]), rows
+    assert 'ctx' in _plain(rows[1]), rows
 
 
 # ── it must never become the problem ──────────────────────────
@@ -111,19 +190,55 @@ def test_a_broken_memory_read_degrades_to_a_shorter_line(monkeypatch):
     assert 'memory' not in out and 'to review' not in out, out
 
 
-def test_it_prints_exactly_one_line(tmp_path):
-    """Claude Code renders only the first line of stdout, so a multi-line
-    payload must not silently lose half its content — it must not be
-    multi-line in the first place."""
+def test_a_payload_cannot_add_rows_of_its_own(tmp_path):
+    """Claude Code renders EVERY printed line as a row, so the row count is now
+    ours to control. The old test asserted a single line, which was true of the
+    old renderer and is not the property worth protecting: what matters is that
+    a newline inside a free-text field cannot smuggle in a row of its own.
+    """
     r = subprocess.run(
         [sys.executable, '-m', 'claude_sessions', 'statusline'],
         input=json.dumps({'cwd': str(tmp_path),
-                          'model': {'display_name': 'A\nB'}}),
-        capture_output=True, text=True,
+                          'model': {'display_name': 'A\nB'},
+                          'context_window': {'used_percentage': 40}}),
+        capture_output=True, text=True, encoding='utf-8',
         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     assert r.returncode == 0, r.stderr
-    assert r.stdout.count('\n') == 1, repr(r.stdout)
+    assert r.stdout.count('\n') == 2, repr(r.stdout)      # two rows, one trailing \n
+    assert 'A B' in r.stdout, repr(r.stdout)
     assert r.stderr.strip() == '', r.stderr
+
+
+def test_the_glyphs_survive_a_pipe(tmp_path):
+    """The reported `Opus 5 <?> default <?> memory 21m`.
+
+    Claude Code captures stdout as a PIPE, so CPython falls back to the locale
+    codepage — cp1252 on Windows. The row's block glyphs are unencodable there
+    and even `·` reaches the terminal as a byte it decodes as broken UTF-8.
+    Without the reconfigure() in main() this exits non-zero with a
+    UnicodeEncodeError traceback under the user's prompt.
+    """
+    env = dict(os.environ)
+    env.pop('PYTHONIOENCODING', None)
+    r = subprocess.run(
+        [sys.executable, '-m', 'claude_sessions', 'statusline'],
+        input=json.dumps({'cwd': str(tmp_path),
+                          'context_window': {'used_percentage': 72}}).encode(),
+        capture_output=True, cwd=os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))), env=env)
+    assert r.returncode == 0, r.stderr
+    assert r.stderr.strip() == b'', r.stderr
+    assert '█'.encode('utf-8') in r.stdout, r.stdout
+
+
+def test_the_statusline_does_not_import_the_tui_stack():
+    """It runs on every turn. `main.py` pulls the whole TUI plus `usage`, which
+    drags in urllib/ssl/http.client for an OAuth poll this must never make —
+    48ms of import that the dispatch in __main__ exists to skip."""
+    src = open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), 'claude_sessions', '__main__.py'),
+        encoding='utf-8').read()
+    assert src.index("== 'statusline'") < src.index('from .main import run')
 
 
 def test_garbage_on_stdin_is_survivable():

@@ -199,6 +199,78 @@ def test_live_trees_sort_above_idle_ones(monkeypatch):
     assert names[-1] == 'repo', names          # the main tree goes last
 
 
+# ── a project that is a PARENT of repos ───────────────────────
+
+def _multi(monkeypatch, found, kinds=None):
+    """Stub discovery + per-repo boards; no git, no session scan."""
+    from claude_sessions import repos as _repos
+    monkeypatch.setattr(_repos, 'find_git_repos', lambda root, **k: list(found))
+    monkeypatch.setattr(_repos, 'classify',
+                        lambda p: (kinds or {}).get(p, 'repo'))
+    monkeypatch.setattr(_repos, 'remember', lambda measured: None)
+    monkeypatch.setattr(_repos, 'state', lambda p, **k: {
+        'branch': 'main', 'dirty': 0, 'ahead': 0, 'behind': 0,
+        'head': 'aaaaaaa', 'stale': False})
+    import claude_sessions.connections as conn
+    monkeypatch.setattr(conn, '_discover_repos', lambda r, f: list(found))
+    monkeypatch.setattr(worktrees, 'board', lambda p, f=None, by_cwd=None: {
+        'repo': True, 'worktrees': [{
+            'path': p, 'name': os.path.basename(p), 'branch': 'main',
+            'head': 'aaaaaaa', 'main': True, 'dirty': 0, 'ahead': 0,
+            'behind': 0, 'session': None}]})
+
+
+def test_a_parent_directory_of_repos_is_not_an_empty_board(monkeypatch):
+    """THE reported bug. D:/repos holds 15 repos and is not itself a repo, so
+    `git worktree list` failed there and the tab said 'not a git repository'."""
+    _multi(monkeypatch, [os.path.join('/p', 'a'), os.path.join('/p', 'b')])
+    monkeypatch.setattr(worktrees, '_sessions_by_cwd', lambda p, f: {})
+    b = worktrees.project_board('/p')
+    assert b['repo'] is True
+    assert [r['name'] for r in b['repos']] == ['a', 'b'], b['repos']
+    assert b['multi'] is True
+
+
+def test_submodules_nest_under_the_repo_that_owns_them(monkeypatch):
+    """IKM.Workspace carries seven. Flat, they read as unrelated projects."""
+    top = os.path.join('/p', 'ws')
+    sub = os.path.join(top, 'core')
+    _multi(monkeypatch, [top, sub], {sub: 'submodule'})
+    monkeypatch.setattr(worktrees, '_sessions_by_cwd', lambda p, f: {})
+    b = worktrees.project_board('/p')
+    assert len(b['repos']) == 1, b['repos']
+    assert [c['name'] for c in b['repos'][0]['children']] == ['core']
+    assert b['repos'][0]['children'][0]['kind'] == 'submodule'
+
+
+def test_a_single_repo_project_is_unchanged(monkeypatch):
+    """D:/Claude must render exactly as it did before any of this."""
+    _multi(monkeypatch, ['/only'])
+    monkeypatch.setattr(worktrees, '_sessions_by_cwd', lambda p, f: {})
+    b = worktrees.project_board('/only')
+    assert b['multi'] is False
+    assert len(b['repos']) == 1 and b['repos'][0]['worktrees'][0]['main'] is True
+
+
+def test_the_session_scan_runs_once_for_the_whole_project(monkeypatch):
+    """It walks every transcript of every account. Per-repo it would dominate
+    everything else on the page — 15 repos means 15 full scans."""
+    _multi(monkeypatch, [f'/p/r{i}' for i in range(15)])
+    calls = []
+    monkeypatch.setattr(worktrees, '_sessions_by_cwd',
+                        lambda p, f: calls.append(p) or {})
+    worktrees.project_board('/p')
+    assert len(calls) == 1, calls
+
+
+def test_nothing_below_is_still_an_honest_empty(monkeypatch):
+    from claude_sessions import repos as _repos
+    monkeypatch.setattr(_repos, 'find_git_repos', lambda root, **k: [])
+    import claude_sessions.connections as conn
+    monkeypatch.setattr(conn, '_discover_repos', lambda r, f: [])
+    assert worktrees.project_board('/nope')['repo'] is False
+
+
 def test_removing_a_worktree_refuses_to_discard_uncommitted_work(monkeypatch):
     monkeypatch.setattr(worktrees, 'dirty', lambda p: (4, 0))
     called = []

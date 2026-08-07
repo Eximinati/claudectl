@@ -1228,7 +1228,7 @@ function goToFullSearch(){PENDING_SEARCH_Q=($('#hqSearch').value||'');go('search
 /* ── project view + tabs ── */
 const TABS=[['sessions','Sessions'],['memory','Memory'],['claudemd','CLAUDE.md'],
   ['review','Review'],['audit','Audit'],['pusage','Usage'],['planexec','Plan → Execute'],
-  ['worktrees','Worktrees'],['tools','Tools']];
+  ['worktrees','Repos'],['tools','Tools']];
 async function openProject(p){CUR=p;PAGE_='project';TAB='sessions';REVIEW=null;
   render();
   // kick off the same background memory update the TUI does on open, then
@@ -2340,20 +2340,11 @@ function provTag(kind,name){
    cwd, a worktree is a path, so claudectl — which owns both — can say which
    SESSION is in which tree. And every one of them reads the same semantic
    memory, so they are not each rediscovering the codebase. */
-async function drawWorktrees(){
-  const nav=paintNow(LOADING);
-  const d=await api('/api/worktrees?'+qs({path:CUR.path,enc:CUR.encoded,cfgdir:CUR.primary_cfgdir}));
-  if(!d.repo){
-    paint(nav,`<div class="card"><h3>Worktrees</h3>
-      <div style="color:var(--dim)">Not a git repository — nothing to show.</div></div>`);
-    return;
-  }
-  const rows=(d.worktrees||[]).map(w=>{
-    const s=w.session;
-    const live=s&&s.live;
-    return `<div class="hrow">
+function wtRow(w,repoPath,indent){
+  const s=w.session,live=s&&s.live;
+  return `<div class="hrow" style="padding-left:${indent}px">
       <span class="dot${live?' pip':''}" style="background:${live?'var(--ok)':'var(--dim2)'};color:var(--ok)"></span>
-      <b style="min-width:190px">${esc(w.name)}${w.main?' <span class="tag">main</span>':''}</b>
+      <b style="min-width:${190-indent}px">${esc(w.name)}${w.main?' <span class="tag">main</span>':''}</b>
       <code style="min-width:190px;color:var(--dim)">${esc(w.branch)}</code>
       ${w.dirty?`<span class="tag warn">${w.dirty} uncommitted</span>`:'<span class="tag ok">clean</span>'}
       ${w.ahead?`<span class="tag">+${w.ahead}</span>`:''}
@@ -2362,14 +2353,50 @@ async function drawWorktrees(){
         s?`${esc(s.title||s.sid.slice(0,8))} · ${esc(s.account)} · ${s.msgs} msgs · ${live?'live now':fmtAge(s.age)}`
          :'<span style="color:var(--dim2)">no session here</span>'}</span>
       ${w.dirty?`<button class="btn sm" onclick='wtDiff(${JSON.stringify(w.path)})'>${ic('eye')} Diff</button>`:''}
-      ${w.main?'':`<button class="btn sm" onclick='wtMerge(${JSON.stringify(w.branch)})'>Merge</button>`}
-    </div>`;}).join('');
-  const nlive=(d.worktrees||[]).filter(w=>w.session&&w.session.live).length;
+      ${w.main?'':`<button class="btn sm" onclick='wtMerge(${JSON.stringify(repoPath)},${JSON.stringify(w.branch)})'>Merge</button>`}
+    </div>`;
+}
+/* One repo and everything under it. <details> does the collapsing natively —
+   no JS, no open/closed state to track, no icon to keep in sync. */
+function repoGroup(r,multi,depth){
+  const inner=(r.worktrees||[]).filter(w=>!w.main||!multi)
+      .map(w=>wtRow(w,r.path,multi?18:0)).join('');
+  const kids=(r.children||[]).map(c=>repoGroup(c,multi,depth+1)).join('');
+  if(!multi)return inner;
+  const live=(r.worktrees||[]).some(w=>w.session&&w.session.live);
+  return `<details open class="rgrp" style="margin-left:${depth*14}px">
+    <summary class="hrow" style="cursor:pointer">
+      <span class="dot${live?' pip':''}" style="background:${live?'var(--ok)':'var(--dim2)'};color:var(--ok)"></span>
+      <b style="min-width:200px">${esc(r.name)}</b>
+      ${r.kind==='submodule'?'<span class="tag">submodule</span>':''}
+      <code style="min-width:170px;color:var(--dim)">${esc(r.branch)}</code>
+      ${r.dirty?`<span class="tag warn">${r.dirty} uncommitted</span>`:'<span class="tag ok">clean</span>'}
+      ${r.ahead?`<span class="tag">+${r.ahead}</span>`:''}
+      ${r.behind?`<span class="tag warn">-${r.behind}</span>`:''}
+      <span style="flex:1"></span>
+      ${(r.children||[]).length?`<span class="tag">${r.children.length} ${esc(r.sublabel)}</span>`:''}
+    </summary>
+    ${inner}${kids}</details>`;
+}
+async function drawWorktrees(){
+  const nav=paintNow(LOADING);
+  const d=await api('/api/worktrees?'+qs({path:CUR.path,enc:CUR.encoded,cfgdir:CUR.primary_cfgdir}));
+  if(!d.repo){
+    paint(nav,`<div class="card"><h3>Repos</h3>
+      <div style="color:var(--dim)">No git repository here or below — nothing to show.</div></div>`);
+    return;
+  }
+  const tops=d.repos||[],multi=!!d.multi;
+  let nlive=0,nrepo=0;
+  (function walk(list){list.forEach(r=>{nrepo++;
+    nlive+=(r.worktrees||[]).filter(w=>w.session&&w.session.live).length;
+    walk(r.children||[]);});})(tops);
   paint(nav,`
-    <div class="card"><h3>${ic('fork')} Worktrees <span class="sp"></span>
+    <div class="card"><h3>${ic('fork')} Repos <span class="sp"></span>
+      ${multi?`<span class="tag">${nrepo} repos</span>`:''}
       <span class="tag${nlive?' ok':''}">${nlive} live</span></h3>
-      <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">Every worktree of this project and the session working in it. All of them read the same project memory, so parallel agents are not each rediscovering the codebase.</p>
-      ${rows}</div>`);
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">Every repo under this project — submodules and worktrees included — and the session working in each. All of them read the same project memory, so parallel agents are not each rediscovering the codebase.</p>
+      ${tops.map(r=>repoGroup(r,multi,0)).join('')}</div>`);
 }
 function fmtAge(sec){
   if(sec<90)return 'just now';
@@ -2381,9 +2408,11 @@ async function wtDiff(path){
   const d=await api('/api/worktree/diff?'+qs({wt:path}));
   await ask('Uncommitted changes',[],(d.diff||'(no diff)').slice(0,20000));
 }
-async function wtMerge(branch){
-  if(!await confirmBox('Merge '+branch+' into the checked-out branch?'))return;
-  const r=await post('/api/worktree/merge',{path:CUR.path,branch});
+/* repoPath, not CUR.path: with many repos under one project a branch name no
+   longer names a single repo, so the caller has to say which one it belongs to. */
+async function wtMerge(repoPath,branch){
+  if(!await confirmBox('Merge '+branch+' into the checked-out branch of '+repoPath+'?'))return;
+  const r=await post('/api/worktree/merge',{path:repoPath,branch});
   toast(r.message||'',r.ok?'ok':'err');drawWorktrees();
 }
 
@@ -2733,8 +2762,8 @@ async function pgSettings(nav){
         It stops entirely when the window is hidden, minimised or blurred, and <b>motion: off<\b> turns it off with everything else.</div></div></div>
   <div class="card"><h3>${ic('doc')} Statusline <span class="sp"></span>
       <span class="tag" id="slDot">checking…</span></h3>
-    <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Claude Code renders one line at the bottom of every session. claudectl can be that line — and it puts things there nobody else can compute: how stale this project's memory is, how many sessions are still unmined for lessons, which account you are on, and today's burn. It refuses to replace a statusline you wrote yourself.</p>
-    <div class="kv"><span>preview</span><code id="slPrev" style="color:var(--dim)">—</code></div>
+    <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Claude Code renders two rows at the bottom of every session — identity and git on the first, pressure on the second. claudectl can be those rows, and it puts things there nobody else can compute: how stale this project's memory is, how many sessions are still unmined for lessons, which account you are on, and the branch, uncommitted count and sub-repo roll-up for wherever you are. Plan limits come free from the session payload, so it never polls the API. It refuses to replace a statusline you wrote yourself.</p>
+    <div class="kv"><span>preview</span><code id="slPrev" style="color:var(--dim);white-space:pre">—</code></div>
     <div class="mrow"><button class="btn" id="slBtn" onclick="slToggle()">…</button></div></div>
   <div class="card"><h3>${ic('chart')} OpenTelemetry export</h3>
     <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Claude Code exports metrics and events over OTLP. claudectl already owns the launch environment, so it can switch this on per account without you exporting variables by hand. <b>Prompt text is never collected</b> unless you also set <code>OTEL_LOG_USER_PROMPTS=1</code> — this toggle does not.</p>

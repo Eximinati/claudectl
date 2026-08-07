@@ -34,7 +34,7 @@ MAX_DEP_EDGES = 8000      # file→file dependency edges cap (lifted client-side
 AUTO_EXPAND_NODES = 60    # small projects: expand everything at once
 
 _CACHE_NAME = 'connections-cache.json'
-MODEL_VERSION = 'v2-files'   # bump to invalidate caches when the model changes
+MODEL_VERSION = 'v3-repos'   # bump to invalidate caches when the model changes
 
 
 # ── helpers ──────────────────────────────────────────────────
@@ -103,7 +103,7 @@ def _walk_source_files(root, max_files):
 def _discover_repos(root, proj_folder):
     """Absolute repo paths under the project + linked extra paths."""
     try:
-        from .claude_md import find_git_repos
+        from .repos import find_git_repos
         from .sessions import read_extra_paths
     except Exception:
         return []
@@ -115,7 +115,9 @@ def _discover_repos(root, proj_folder):
     seen = []
     for r in roots:
         try:
-            for repo in find_git_repos(r, max_depth=2):
+            # depth 4 and submodules included: a submodule genuinely IS its own
+            # cluster, and attributing its files to the parent was wrong
+            for repo in find_git_repos(r):
                 rp = os.path.abspath(repo)
                 if rp not in seen:
                     seen.append(rp)
