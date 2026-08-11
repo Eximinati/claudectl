@@ -23,7 +23,13 @@ Homepage = "https://github.com/babarmuhammad/claudectl"
 Issues = "https://github.com/babarmuhammad/claudectl/issues"
 
 [project.scripts]
-claudectl = "claude_sessions.main:run"
+# cli:run, not main:run — main's import chain pulls urllib/ssl/http.client via
+# `usage`, and `claudectl statusline` runs on every conversation turn.
+claudectl = "claude_sessions.cli:run"
+
+[project.optional-dependencies]
+dev = ["pytest"]
+gui = ["PyQt6", "PyQt6-WebEngine"]   # optional native desktop shell (gui_qt.py)
 
 [tool.setuptools]
 packages = ["claude_sessions"]
@@ -36,7 +42,31 @@ claude_sessions = [
     "web/*.html", "web/*.css", "web/*.js",
     "web/vendor/*.js", "web/vendor/*.txt",
     "web/vendor/*/*.js",
-    "skills_templates/*.md",
+    # nested: every template is skills_templates/<name>/SKILL.md, so the flat
+    # glob matched nothing and the wheel shipped an empty templates directory.
+    "skills_templates/*/*.md",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# Deliberately narrow, and chosen by what it actually caught on first run:
+# F821 found three live NameErrors in plan_execute's step editor and one in
+# review._supports_color, and B023 found two loop-variable closures. Style rules
+# are excluded on purpose — 88 unused imports and 77 placeholder-less f-strings
+# are a separate, mechanical diff, and bundling them here would mean the gate
+# that matters lands red and gets switched off.
+select = [
+    "E9",     # syntax / IO errors
+    "F821",   # undefined name — a NameError waiting for the branch to run
+    "F811",   # redefinition of an unused name
+    "F632",   # `is` against a literal
+    "F702",   # continue outside a loop
+    "B023",   # closure over a loop variable
+    "B006",   # mutable default argument
+    "B002",   # ++n is not an increment
 ]
 
 [tool.pytest.ini_options]

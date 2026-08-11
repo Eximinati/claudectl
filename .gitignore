@@ -7,6 +7,13 @@ __pycache__/
 *.pyo
 *.pyd
 
+# Build artifacts (python -m build, and the venv the packaging check installs into)
+build/
+dist/
+*.egg-info/
+.wheeltest/
+.ruff_cache/
+
 # Windows
 Thumbs.db
 desktop.ini

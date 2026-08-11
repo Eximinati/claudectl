@@ -588,7 +588,7 @@ def select_session_agents(project_name, preselected=None, project_path=None,
                 [(f"{name}  {_c.C_DIM}{render.trunc(desc, 50)}{_c.C_RESET}", f"{cat}/{name}")
                  for name, desc, model, path in agents],
                 f"{cat}", preselected=pre,
-                view_fn=lambda ref: view_agent_file(paths.get(ref)))
+                view_fn=lambda ref, paths=paths: view_agent_file(paths.get(ref)))
             if picked is not None:
                 # replace this category's selections with the new set
                 chosen = {r for r in chosen if not r.startswith(cat + '/')} | picked

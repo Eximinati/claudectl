@@ -26,7 +26,6 @@ def test_plan_execute_happy_path(monkeypatch, tmp_path):
     monkeypatch.setattr(plan_execute, 'get_claude_exe', lambda: r'C:\fake.exe',
                         raising=False)
     launched = {}
-    import subprocess
     monkeypatch.setattr(subprocess, 'call',
                         lambda args, **k: launched.setdefault('args', args) or 0)
     # pick default effort (ENTER); skip council (ESC = No); type the task, ENTER;
@@ -51,7 +50,6 @@ def test_plan_execute_reject(monkeypatch, tmp_path):
     actual, enc, folder, _ = sb.add_project('alpha')
     monkeypatch.setattr(plan_execute, '_plan', lambda task, m, cwd, effort='', cfgdir='': 'a plan')
     called = {}
-    import subprocess
     monkeypatch.setattr(subprocess, 'call', lambda *a, **k: called.setdefault('x', 1))
     keys = flat(ENTER, ESC, typed('task'), ENTER, ESC, ESC)   # default effort; no council; reject plan, dismiss edit menu
     res, cap, _ = run_flow(monkeypatch, keys, plan_execute.run, actual, folder, 'alpha')

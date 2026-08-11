@@ -441,7 +441,7 @@ def plan_review_loop(plan, title=''):
 
 def _edit_plan_ui(plan):
     """Interactive step editor. Returns modified plan or None if cancelled."""
-    from .ui import text_input, _cls, menu, confirm
+    from .ui import text_input, _cls, menu, confirm, flash
     while True:
         idx, steps = _step_lines(plan)
         if not steps:

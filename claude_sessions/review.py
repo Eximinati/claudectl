@@ -13,6 +13,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 
 from . import memory
 from . import config as _c

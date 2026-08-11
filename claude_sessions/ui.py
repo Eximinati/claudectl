@@ -1115,7 +1115,7 @@ def launch_options_menu(project_name, defaults=None, is_new=False, agents=None,
         wait_event()
 
     while True:
-        def sel_c(i):
+        def sel_c(i, field=field):
             return C_SEL if field == i else C_DIM
 
         perm_label = PERM_LABELS[perm_idx]
