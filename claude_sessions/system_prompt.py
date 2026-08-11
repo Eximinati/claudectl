@@ -58,8 +58,15 @@ def ai_generate_system_prompt(sp_path, project_name, project_path, proj_folder):
         except Exception:
             pass
 
-    context_block = f"CLAUDE.MD CONTENT:\n{claude_md}\n\n" if claude_md else ''
-    existing_block = f"EXISTING SYSTEM PROMPT (update it, preserve good parts):\n{existing}\n\n" if existing else ''
+    # Both blocks are repo content, and the output is written to a file injected
+    # before every session in this project — so fence them as data. See the note
+    # above fence_untrusted in claude_md.py; the approval gate below is the
+    # control that actually matters.
+    from .claude_md import fence_untrusted
+    context_block = ("CLAUDE.MD CONTENT:\n" + fence_untrusted(claude_md) + "\n\n"
+                     if claude_md else '')
+    existing_block = ("EXISTING SYSTEM PROMPT (update it, preserve good parts):\n"
+                      + fence_untrusted(existing) + "\n\n" if existing else '')
     extra_block = f"ADDITIONAL INSTRUCTIONS: {extra}\n\n" if extra else ''
 
     prompt = (

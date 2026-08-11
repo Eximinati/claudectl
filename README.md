@@ -47,6 +47,9 @@ Without claudectl, a big project either starves the agent (no context) or floods
 ## Contents
 
 - [Features](#features)
+  - [Model failover](#model-failover--retry-a-dead-model-instead-of-hanging--settings--failover)
+  - [Status line](#status-line-claudectl-statusline)
+  - [Checkpoints](#checkpoints-sessions-menu)
 - [Install](#install)
   - [Requirements](#requirements)
   - [Setup](#setup)
@@ -57,6 +60,7 @@ Without claudectl, a big project either starves the agent (no context) or floods
   - [Main screen](#main-screen)
   - [Built-in screens](#built-in-screens)
   - [Key bindings](#key-bindings)
+  - [Command line](#command-line)
 - [Reference](#reference)
   - [Per-project files](#per-project-files)
   - [Workspace status](#workspace-status)
@@ -83,6 +87,7 @@ Without claudectl, a big project either starves the agent (no context) or floods
 
 ### MCP servers
 - **Full management** — add, remove, and inspect MCP servers via `claude mcp` (scopes local/user/project, transports stdio/http/sse, env vars and headers)
+- **Three states, all visible** — ✔ connected, `!` needs authentication, ✘ failed to connect or timed out. A server that cannot connect is the one you most need to see, so it is listed with its error rather than omitted
 - **Status footer** — connected servers shown live on the main screen
 - **Tool documentation** — analyze any server's tools and write the docs into the global `~/.claude/CLAUDE.md`
 
@@ -208,6 +213,59 @@ Per-day table of the last 14 days — tokens in/out/cache, est. cost, sessions, 
 - **19 ready-made templates** — one-key install, toggle, or remove (edits `settings.json` safely). Formatting (Prettier, Ruff, ESLint, gofmt), safety guardrails that **block** dangerous tools (`rm -rf`, `git reset --hard`, force-push, sudo, curl; reading `.env`; writing secrets — exit-code-2 blocks), audit/notify (log Bash commands, beep on finish / when input is needed), context injection (git status at session start; a compact **code-minimization** rule that curbs over-engineering — inspired by [Ponytail](https://github.com/DietrichGebert/ponytail)), and **token savers** (`concise-output` trims narration and re-printed code; `filter-test-output` pipes test runs through a failures-only filter before the output enters context). Guards/blocks run as bundled Python (shell-agnostic); formatters no-op when the tool is absent.
 - **AI-generate a hook** — describe what you want in plain language; Claude returns a validated hook spec (event + matcher + command) you preview and confirm before it's saved.
 - **Remove broken/legacy hooks** — one action purges hook commands that error under a bash hook shell.
+
+### Model failover — retry a dead model instead of hanging (⚙ Settings → Failover)
+Claude Code sends every turn as a fresh request and, when one fails, retries the
+*same* request against the *same* model with backoff. So a model deregistered
+upstream, or a tool schema the backing provider rejects, makes a session look
+frozen forever — nothing ever tries a different model, because Claude Code has no
+such concept.
+
+claudectl's failover proxy sits between `claude.exe` and the OmniRoute upstream.
+It forwards bytes verbatim and, when a turn errors **before any response body byte
+has reached the client**, rewrites the request's `model` and tries the next
+candidate. Request-level retry *is* per-turn failover, because every turn is its
+own request. The routing log is the point — the original complaint was not "a
+model died", it was "I could not see that a model died" — so it runs in its own
+console window unless you hide it.
+
+Configure the fallback list, port and log visibility in ⚙ Settings → Failover
+(GUI: Settings → Failover), or drive it directly:
+
+```
+claudectl --failover-serve [port]   # run the proxy in the foreground
+claudectl --failover-stop           # terminate the daemon named in the lock file
+```
+
+It runs as a detached child so closing claudectl does not leave every live session
+with connection-refused, binds `127.0.0.1` only, and requires the configured
+OmniRoute key — claudectl hands that to the session as `ANTHROPIC_AUTH_TOKEN`, so
+no extra setup is needed. Requests carrying browser fetch metadata are refused
+outright: the proxy spends your upstream quota, so a web page must not be able to
+reach it.
+
+### Status line (`claudectl statusline`)
+Renders the Claude Code status line: model, cwd, git branch and worktree, context
+pressure, and the 5-hour / 7-day rate-limit windows. Install it from ⚙ Settings,
+or point `statusLine` in `settings.json` at:
+
+```
+"<python>" -m claude_sessions statusline
+```
+
+It runs on **every** conversation turn, so it is built to be cheap: the
+subcommand is dispatched before the TUI or the usage poller is imported, the
+branch is read straight from `.git/HEAD`, and repo state comes from a disk cache
+that never spawns git. The rate-limit and context numbers come from the payload
+Claude Code already sends — no network call is ever made.
+
+### Checkpoints (sessions menu)
+Read-only view of Claude Code's own file-history store: the whole-file snapshots
+it takes before edits, paired with the files the session actually touched. The
+store is undocumented, so claudectl never decodes the snapshot names — it hashes
+the paths the session edited and looks those up, which means a change to the
+scheme surfaces as "cannot read the store" rather than as filenames paired at
+random. Restoring is left to Claude Code's own `/rewind`; claudectl only reads.
 
 ### Usage analytics
 - **Usage stats dashboard** — tokens (in/out/cache) and estimated cost per project and per session, parsed from local transcripts; cached for instant reopening
@@ -479,6 +537,22 @@ Worktree & Name appear only for new sessions; Lead agent appears when `~/.claude
 - Checkbox pickers (MCP tools, agent tools): `SPACE` toggle, `a` all, `n` none, `v` view (agent `.md`, where available), `ENTER` confirm, `ESC` cancel.
 - Confirm dialogs: `←→` choose, `ENTER` confirm, `ESC`/`y`/`n`.
 
+### Command line
+
+| Command | What it does |
+|---------|--------------|
+| `claudectl` | Open the TUI (or the GUI, if `ui_mode` is set to `gui`) |
+| `claudectl --gui` / `--tui` | Force one interface for this run, ignoring the setting |
+| `claudectl workspace status` | Freshness report for the repo in the current directory |
+| `claudectl recall "<topic>"` | Print the task-relevant subgraph of this project's memory |
+| `claudectl review [--staged\|--branch]` | Review the working diff, staged diff, or the whole branch |
+| `claudectl statusline` | Render one status line from the JSON payload on stdin |
+| `claudectl --failover-serve [port]` | Run the model-failover proxy in the foreground |
+| `claudectl --failover-stop` | Terminate the failover daemon named in the lock file |
+
+`python -m claude_sessions <same args>` works identically and is what the
+installed status line and the background memory worker use.
+
 ---
 
 ## Reference
@@ -571,7 +645,13 @@ Claude Code encodes project paths as folder names under `~/.claude/projects/` by
 D:\Projects\my-app  →  D--Projects-my-app
 ```
 
-claudectl's `find_actual_path()` in `paths.py` reverses this by walking the filesystem and matching encoded components, handling edge cases like `_`, `+`, `-`, `#` in directory names.
+The encoding is lossy, so `find_actual_path()` in `paths.py` does not try to
+decode it. It reads the real path out of the `cwd` field that every transcript
+line already records, and only falls back to walking the filesystem and matching
+encoded components (handling `_`, `+`, `-`, `#` in directory names) when a
+project folder has no transcript to read. That ordering is what makes UNC paths
+work: `\\server\share\Project` encodes to `--server-share-Project`, which no
+amount of splitting on `--` can turn back into a drive letter.
 
 ### File layout
 
@@ -581,31 +661,79 @@ claudectl's `find_actual_path()` in `paths.py` reverses this by walking the file
 ├── Open Repo cmd.bat       # bat launcher (runs TUI, then py --launch)
 ├── pyproject.toml
 ├── README.md
+├── tools\                  # dev utilities: GUI smoke/screenshot audits, graph renders, icons
+├── tests\                  # pytest suite (Windows-only, no network, no real claude.exe)
 └── claude_sessions\        # package
-    ├── config.py           # constants, paths, themes, settings
-    ├── paths.py            # encode_component, find_actual_path
+    │
+    │  # entry points
+    ├── main.py             # run() — subcommand dispatch, project discovery, launch flow
+    ├── cli.py              # console-script target; dispatches statusline before importing main
+    ├── __main__.py         # `python -m claude_sessions`; same early statusline dispatch
+    │
+    │  # core
+    ├── config.py           # constants, paths, settings, write_atomic, theme application
+    ├── paths.py            # encode_component, find_actual_path, resolve_dir
     ├── sessions.py         # session parsing + persistence helpers
-    ├── main.py             # run() — project discovery, launch flow, main loop
     ├── render.py           # frame-diff renderer, layout + hint helpers
+    ├── themes.py           # PALETTES / SKINS / WORLDS — single source of truth for colour
+    │
+    │  # TUI screens
     ├── ui.py               # menu, pager, multiselect, confirm, launch options, settings
     ├── session_menu.py     # per-project sessions menu
     ├── search.py           # cross-project session search
     ├── transcript.py       # transcript viewer + markdown export
     ├── stats.py            # usage stats dashboard
-    ├── usage.py            # plan usage limit bars
+    ├── usage.py            # plan usage limit bars (OAuth poll)
+    ├── brief.py            # "since last session" digest
+    ├── checkpoints.py      # read-only view of Claude Code's file-history store
+    │
+    │  # Claude Code integration
     ├── mcp.py              # MCP manager + background status poll
     ├── agents.py           # agent library, per-project selection, scaffold/AI
+    ├── skills.py           # skills manager + bundled starter templates
+    ├── skillscan.py        # static risk scan of a skill before installing it
     ├── hooks.py            # hooks template / toggle / remove
-    ├── workspace.py        # provenance manifest + freshness status
-    ├── connections.py      # project connections graph + plexus HTML
+    ├── plugins.py          # plugin marketplaces + installs (shells out to `claude`)
+    ├── outputstyles.py     # output-style browse / save / select
+    ├── statusline.py       # `claudectl statusline` — renders the Claude Code status line
+    ├── accounts.py         # multiple CLAUDE_CONFIG_DIR accounts
+    ├── denygen.py          # generated permissions.deny rules for heavy paths
+    ├── health.py           # project health checks + auto-fixes
+    ├── *_hook.py           # the hook scripts themselves (guard, recall, worklog, …)
+    │
+    │  # memory & context
     ├── memory.py           # Claude-powered semantic memory (ECL + ask)
-    ├── diffview.py         # git-style diffs for generated files
-    ├── claude_md.py        # scaffold + AI CLAUDE.md, memory map
-    ├── system_prompt.py    # edit / AI-generate system prompt
-    ├── gui.py              # local HTTP server + launch endpoint (loopback-only)
+    ├── memhub.py           # cross-project memory index
+    ├── memrules.py         # per-module .claude/rules generation
+    ├── lessons.py          # durable lessons distilled from transcripts
+    ├── recall.py           # `claudectl recall "<topic>"` — task-relevant subgraph
+    ├── worklog.py          # recent-work ring buffer per project
+    ├── conventions.py      # inferred repo conventions
+    ├── context_inject.py   # cross-session context hand-off
+    ├── ctxaudit.py         # context weight audit
+    ├── claude_md.py        # scaffold + AI CLAUDE.md, autogen/sessions blocks
+    ├── system_prompt.py    # edit / AI-generate the per-project system prompt
+    │
+    │  # git & repos
+    ├── repos.py            # repo discovery, cached state, _git (the one git door)
+    ├── worktrees.py        # linked-worktree board
+    ├── workspace.py        # provenance manifest + freshness status
+    ├── review.py           # `claudectl review` — diff review
+    ├── diffview.py         # git-style diffs + the approval gate for generated files
+    ├── connections.py      # project architecture graph (standalone HTML)
+    │
+    │  # model routing
+    ├── plan_execute.py     # Plan→Execute: plan with one model, execute with another
+    ├── omniroute.py        # OmniRoute free-tier client (model catalog, health)
+    ├── failover.py         # local proxy: retry a dead model instead of hanging
+    │
+    │  # GUI
+    ├── gui.py              # loopback HTTP server, _guard(), launch endpoint
     ├── gui_api.py          # GUI job layer — TUI flows headless + diff-approval gates
-    ├── gui_html.py         # single-page app (self-contained, SVG icons, themes)
-    └── gui_qt.py           # optional PyQt6 native window shell
+    ├── gui_html.py         # page assembly + the /vendor/ allowlist
+    ├── gui_qt.py           # optional PyQt6 native window shell
+    ├── web\                # the SPA: app.js, app.css, stage.js, motion.js, instruments.js
+    └── skills_templates\   # bundled starter SKILL.md files
 ```
 
 ---

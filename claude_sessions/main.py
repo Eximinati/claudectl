@@ -467,7 +467,13 @@ def run():
     )
     if not valid:
         _cls()
-        print(f"\n  Internal error — invalid action: {choice!r}")
+        print(f"\n  Cannot launch: unrecognized session action {choice!r}.")
+        print("  Expected one of: terminal, new, continue, resume:<id>,")
+        print("  fork:<id>, resume-named:<id>::<name>.")
+        print("\n  Nothing was launched and nothing was changed. This is a bug in")
+        print("  claudectl rather than something you did — please report it with")
+        print("  the action shown above:")
+        print("  https://github.com/babarmuhammad/claudectl/issues")
         pause("\n  Press Enter to exit...")
         sys.exit(1)
     # '|' is the choice-file delimiter. Strip it from user-typed fields
@@ -477,7 +483,17 @@ def run():
     opts['agent']    = opts.get('agent', '').replace('|', '')
     if '|' in f"{path}{encoded_name or ''}{config_dir}{opts.get('cfgdir', '')}":
         _cls()
-        print(f"\n  Internal error — '|' in project path or config dir; cannot launch.")
+        bad = [lbl for lbl, v in (('project path', path),
+                                  ('session folder name', encoded_name or ''),
+                                  ('config dir', config_dir),
+                                  ('account config dir', opts.get('cfgdir', '')))
+               if '|' in (v or '')]
+        print("\n  Cannot launch: a '|' character appears in the "
+              + ' and the '.join(bad) + '.')
+        print("  claudectl hands the launch options to the new console as a")
+        print("  '|'-separated line, so a '|' inside a path would split it apart.")
+        print("\n  Fix: rename the folder to remove the '|' — Windows permits it in")
+        print("  a path but very little tooling handles it — or move the project.")
         pause("\n  Press Enter to exit...")
         sys.exit(1)
 

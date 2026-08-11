@@ -743,6 +743,66 @@ def help_screen():
         pass
 
 
+def _failover_label(s):
+    models = [m for m in (s.get('failover_models') or []) if str(m).strip()]
+    if not models:
+        return 'off'
+    return f"{len(models)} fallback{'s' if len(models) != 1 else ''} on :{s.get('failover_port') or 20129}"
+
+
+def _failover_menu():
+    """The failover proxy was GUI-only: three settings and start/stop with no TUI
+    equivalent at all, so a TUI-only user could not see it existed."""
+    from . import failover
+    while True:
+        s = load_settings()
+        models = [m for m in (s.get('failover_models') or []) if str(m).strip()]
+        port = int(s.get('failover_port') or 20129)
+        live = failover.is_ready(port)
+        items = [
+            (f"Fallback models :  {', '.join(models) if models else C_DIM + '(none — failover off)' + C_RESET}", 'models'),
+            (f"Port            :  {port}", 'port'),
+            (f"Log window      :  {'hidden' if s.get('failover_quiet') else 'visible'}   "
+             f"{C_DIM}(the routing log is the feature — keep it visible){C_RESET}", 'quiet'),
+            (f"{'─' * W}", None),
+            ((f"{C_GREEN}running{C_RESET} — stop it" if live else 'not running — start it'),
+             'stop' if live else 'start'),
+            (f"{'─' * W}", None),
+            ('Back', 'back'),
+        ]
+        sel = menu(items, "MODEL FAILOVER")
+        if not sel or sel == 'back':
+            return
+        if sel == 'models':
+            v = text_input("Fallback models, comma-separated (blank = off):",
+                           default=', '.join(models))
+            if v is not None:
+                s['failover_models'] = [m.strip() for m in v.split(',') if m.strip()]
+                save_settings(s)
+                flash("Saved")
+        elif sel == 'port':
+            v = text_input("Proxy port:", default=str(port))
+            if v is not None:
+                try:
+                    s['failover_port'] = int(v)
+                except ValueError:
+                    flash("Enter a port number", ok=False, secs=1.2)
+                    continue
+                save_settings(s)
+                flash("Saved — restart the proxy for it to take effect", secs=2)
+        elif sel == 'quiet':
+            s['failover_quiet'] = not s.get('failover_quiet')
+            save_settings(s)
+            flash(f"Log window {'hidden' if s['failover_quiet'] else 'visible'}")
+        elif sel == 'start':
+            ok, msg = failover.ensure_running(s)
+            flash(msg if not ok else f"Failover proxy running at {msg}",
+                  ok=ok, secs=2.5)
+        elif sel == 'stop':
+            ok, msg = failover.stop_running()
+            flash(msg, ok=ok, secs=2)
+
+
 def settings_menu():
     """Edit ~/.claude/claudectl.json interactively."""
     while True:
@@ -772,6 +832,7 @@ def settings_menu():
             (f"Economy mdl :  {xmod}   {C_DIM}(claudectl's own memory/gen calls — cuts cost){C_RESET}", 'extract_model'),
             (f"Theme       :  {theme}", 'theme'),
             (f"Interface   :  {s.get('ui_mode', 'tui').upper()}   {C_DIM}(TUI here / GUI in browser — or run --gui){C_RESET}", 'ui_mode'),
+            (f"Failover    :  {_failover_label(s)}   {C_DIM}(retry a dead model instead of hanging){C_RESET}", 'failover'),
             (f"{'─' * W}", None),
             (f"Back", 'back'),
         ]
@@ -810,6 +871,8 @@ def settings_menu():
                     flash("Saved — restart claudectl to apply", secs=1.6)
         elif sel == 'theme':
             _theme_picker(s)
+        elif sel == 'failover':
+            _failover_menu()
         elif sel == 'ui_mode':
             pick = menu([('TUI — this terminal interface', 'tui'),
                          ('GUI — web app in your browser', 'gui')],
@@ -918,6 +981,11 @@ def pager(crumbs, lines, hint='', header_lines=None, extra_keys=(),
                     flash(f"No matches for '{query}'", ok=False)
                 elif matches:
                     top = matches[0]
+        # extra_keys wins over the built-in n/p search-match navigation: a caller
+        # that asked for 'n' must get 'n', otherwise the binding it registered
+        # silently stops working whenever a search happens to be active.
+        elif ev[0] == 'char' and ev[1] in extra_keys:
+            return ev[1]
         elif ev[0] == 'char' and ev[1] == 'n' and matches:
             nxt = [m for m in matches if m > top]
             top = nxt[0] if nxt else matches[0]          # wrap to first
@@ -932,8 +1000,6 @@ def pager(crumbs, lines, hint='', header_lines=None, extra_keys=(),
                 return None
         elif ev[0] == 'enter':
             return None
-        elif ev[0] == 'char' and ev[1] in extra_keys:
-            return ev[1]
 
         # coalesce queued scroll repeats (held arrows / wheel) into one redraw;
         # any other queued event becomes next iteration's input — never dropped
