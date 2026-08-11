@@ -182,17 +182,7 @@ def _save_cache(c):
     now = time.time()
     c['repos'] = {k: v for k, v in (c.get('repos') or {}).items()
                   if now - (v.get('at') or 0) < 604800}
-    path = _cache_file()
-    tmp = f'{path}.{os.getpid()}.tmp'
-    try:
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(c, f)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+    _c.write_json_atomic(_cache_file(), c, indent=None)
 
 
 def _index_stamp(repo):

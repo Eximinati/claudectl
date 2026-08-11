@@ -3,6 +3,7 @@ import subprocess
 import time
 
 from .config import W, get_claude_exe, open_in_editor, find_editor
+from . import config as _c
 from .ui import text_input, menu, _cls, pause, run_with_progress, flash
 
 
@@ -99,12 +100,9 @@ def ai_generate_system_prompt(sp_path, project_name, project_path, proj_folder):
             print(f"\n  Rejected — system prompt not written.\n")
             time.sleep(1)
             return
-        try:
-            with open(sp_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-        except Exception as e:
+        if not _c.write_atomic(sp_path, content):
             _cls()
-            print(f"\n  ✘ Error writing file: {e}\n")
+            print(f"\n  ✘ Error writing {sp_path}\n")
             pause("  Press Enter...")
             return
         try:
@@ -143,11 +141,10 @@ def edit_system_prompt(proj_folder, project_name, project_path=None):
 
     # manual
     if not exists:
-        try:
-            with open(sp_path, 'w', encoding='utf-8') as f:
-                f.write(f"# System prompt — {project_name}\n"
-                        f"# Passed via --system-prompt-file on every launch for this project.\n\n")
-        except Exception:
+        if not _c.write_atomic(
+                sp_path,
+                f"# System prompt — {project_name}\n"
+                f"# Passed via --system-prompt-file on every launch for this project.\n\n"):
             return
     if not open_in_editor(sp_path):
         _cls()

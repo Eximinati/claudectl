@@ -66,9 +66,8 @@ def _check_memory(project_path, proj_folder):
         man = load_manifest(project_path, proj_folder) or {}
         base = (man.get('operations') or {}).get('memory') or {}
         if base:
-            import subprocess
-            head = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=project_path,
-                                  capture_output=True, text=True, timeout=5).stdout.strip()
+            from .repos import _git
+            head = (_git(['rev-parse', 'HEAD'], project_path) or '').strip()
             if head and base.get('head_at_gen') and head != base['head_at_gen']:
                 out.append(('info', 'memory may be stale (repo HEAD moved since build)',
                             'press m → b to refresh (incremental, cheap)'))
@@ -225,7 +224,6 @@ def propose_allowlist(project_path, proj_folder):
     from . import diffview
     if not diffview.confirm(old_text, new_text, 'PERMISSIONS ALLOWLIST (project settings.json)'):
         return 0, 'rejected'
-    os.makedirs(os.path.dirname(sp), exist_ok=True)
-    with open(sp, 'w', encoding='utf-8') as f:
-        f.write(new_text)
+    if not _c.write_atomic(sp, new_text):
+        return 0, 'could not write %s' % sp
     return len(new_rules), ''

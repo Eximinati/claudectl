@@ -10,6 +10,8 @@ import shutil
 from .config import (W, _AUTOGEN_START, _AUTOGEN_END, _SESSIONS_START, _SESSIONS_END,
                      _AI_MARKER, _MEMORY_START, _MEMORY_END)
 from .config import get_claude_exe, open_in_editor, config_dir
+from . import config as _c
+from .repos import _git      # pins encoding='utf-8' — see repos._git docstring
 from .sessions import get_session_info, get_session_rich_summary, read_extra_paths, format_age
 from .ui import text_input, _cls, wait_event, poll_event
 
@@ -270,20 +272,11 @@ def _build_autogen_block(project_path, proj_folder, commits=None):
             label = os.path.join(os.path.basename(label_override), rel) if rel != '.' else os.path.basename(label_override)
         else:
             label = '.' if rel == '.' else rel
-        try:
-            ru = subprocess.run(['git', '-C', repo, 'remote', 'get-url', 'origin'],
-                                capture_output=True, text=True, timeout=5)
-            origin = ru.stdout.strip() if ru.returncode == 0 else ''
-        except Exception:
-            origin = ''
+        origin = (_git(['remote', 'get-url', 'origin'], repo) or '').strip()
         block += f"## Repo: {label}" + (f"  ({origin})" if origin else "") + "\n"
-        try:
-            r = subprocess.run(['git', '-C', repo, 'log', '--oneline', f'-{commits}'],
-                               capture_output=True, text=True, timeout=5)
-            if r.returncode == 0 and r.stdout.strip():
-                block += f"```\n{r.stdout.strip()}\n```\n"
-        except Exception:
-            pass
+        log = (_git(['log', '--oneline', f'-{commits}'], repo) or '').strip()
+        if log:
+            block += f"```\n{log}\n```\n"
         for readme in ['README.md', 'readme.md', 'README.txt']:
             rp = os.path.join(repo, readme)
             if os.path.exists(rp):
@@ -505,27 +498,13 @@ def _build_ai_context(project_path, proj_folder):
             seen_repos.add(key)
             rel = os.path.relpath(repo, root)
             parts.append(f"\nRepo: {rel if rel != '.' else os.path.basename(repo)}")
-            try:
-                r = subprocess.run(['git', '-C', repo, 'remote', 'get-url', 'origin'],
-                                   capture_output=True, text=True, timeout=5)
-                if r.returncode == 0 and r.stdout.strip():
-                    parts.append(f"Origin: {r.stdout.strip()}")
-            except Exception:
-                pass
-            try:
-                r = subprocess.run(['git', '-C', repo, 'branch', '--show-current'],
-                                   capture_output=True, text=True, timeout=5)
-                if r.returncode == 0 and r.stdout.strip():
-                    parts.append(f"Branch: {r.stdout.strip()}")
-            except Exception:
-                pass
-            try:
-                r = subprocess.run(['git', '-C', repo, 'log', '--oneline', '-15'],
-                                   capture_output=True, text=True, timeout=5)
-                if r.returncode == 0 and r.stdout.strip():
-                    parts.append(f"Recent commits:\n{r.stdout.strip()}")
-            except Exception:
-                pass
+            for args, label_ in ((['remote', 'get-url', 'origin'], 'Origin'),
+                                 (['branch', '--show-current'], 'Branch'),
+                                 (['log', '--oneline', '-15'], 'Recent commits')):
+                got = (_git(args, repo) or '').strip()
+                if got:
+                    sep = '\n' if label_ == 'Recent commits' else ' '
+                    parts.append(f"{label_}:{sep}{got}")
             for readme in ['README.md', 'readme.md', 'README.txt', 'README.rst']:
                 rp = os.path.join(repo, readme)
                 if os.path.exists(rp):
@@ -1048,10 +1027,7 @@ def scaffold_claude_md(project_path, proj_folder=None):
                  + new_autogen
                  + ('\n' + new_sessions if new_sessions else ''))
 
-    try:
-        with open(md_path, 'w', encoding='utf-8') as f:
-            f.write(final)
-    except Exception:
+    if not _c.write_atomic(md_path, final):
         return
     try:
         from . import workspace

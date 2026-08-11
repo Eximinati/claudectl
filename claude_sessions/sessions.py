@@ -4,6 +4,7 @@ import time
 import re
 
 from .config import BAD_PREFIXES, BAD_CONTAINS, last_session_file, projects_dir, config_dir
+from . import config as _c
 
 
 # ── session parsing ──────────────────────────────────────────
@@ -304,12 +305,7 @@ def load_tags(proj_folder):
 
 
 def save_tags(proj_folder, tags):
-    try:
-        with open(os.path.join(proj_folder, 'tags.json'), 'w', encoding='utf-8') as f:
-            json.dump(tags, f, indent=2)
-        return True
-    except Exception:
-        return False
+    return _c.write_json_atomic(os.path.join(proj_folder, 'tags.json'), tags)
 
 
 def load_session_agents(proj_folder):
@@ -329,12 +325,8 @@ def save_session_agents(proj_folder, key, refs):
         data[key] = refs
     else:
         data.pop(key, None)
-    try:
-        with open(os.path.join(proj_folder, 'session-agents.json'), 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
-        return True
-    except Exception:
-        return False
+    return _c.write_json_atomic(
+        os.path.join(proj_folder, 'session-agents.json'), data)
 
 
 def load_add_dirs(proj_folder):
@@ -520,7 +512,6 @@ def save_last_session(project_path, encoded_name, session_id, preview='', cfgdir
             existing = []
         # dedup by session_id, newest first
         merged = [new_entry] + [e for e in existing if e.get('session_id') != session_id]
-        with open(last_session_file, 'w', encoding='utf-8') as f:
-            json.dump(merged[:5], f)
+        _c.write_json_atomic(last_session_file, merged[:5], indent=None)
     except Exception:
         pass

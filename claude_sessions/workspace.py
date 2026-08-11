@@ -46,16 +46,12 @@ def _git_head(path):
     if not path or not os.path.isdir(os.path.join(path, '.git')):
         # still try rev-parse — path may be inside a worktree/subdir of a repo
         pass
-    try:
-        sha = subprocess.run(['git', '-C', path, 'rev-parse', 'HEAD'],
-                             capture_output=True, text=True, timeout=5).stdout.strip()
-        if not sha:
-            return ('', '', '')
-        br = subprocess.run(['git', '-C', path, 'branch', '--show-current'],
-                            capture_output=True, text=True, timeout=5).stdout.strip()
-        return (sha, sha[:7], br)
-    except Exception:
+    from .repos import _git
+    sha = (_git(['rev-parse', 'HEAD'], path) or '').strip()
+    if not sha:
         return ('', '', '')
+    br = (_git(['branch', '--show-current'], path) or '').strip()
+    return (sha, sha[:7], br)
 
 
 def _sha256_file(path):

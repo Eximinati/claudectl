@@ -11,7 +11,9 @@ settings content.
 import json
 import os
 
-HEAVY_DIRS = ['node_modules', 'dist', 'build', 'out', '.venv', 'venv',
+from . import config as _c
+
+HEAVY_DIRS =['node_modules', 'dist', 'build', 'out', '.venv', 'venv',
               '__pycache__', 'target', 'vendor', '.next', '.nuxt', 'coverage',
               '.tox', '.mypy_cache', '.pytest_cache', '.gradle', 'Pods']
 LOCK_FILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'Cargo.lock',
@@ -93,9 +95,7 @@ def merge_deny(project_path, patterns):
             deny.append(pat)
             added += 1
     if added:
-        os.makedirs(os.path.dirname(sp), exist_ok=True)
-        with open(sp, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
+        _c.write_json_atomic(sp, data)
     return added, existed
 
 

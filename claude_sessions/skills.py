@@ -171,7 +171,8 @@ def install_from_git(repo_url, project_path, exec_model=''):
     try:
         try:
             r = subprocess.run(['git', 'clone', '--depth', '1', repo_url, tmp],
-                               capture_output=True, text=True, timeout=60)
+                               capture_output=True, text=True,
+                               encoding='utf-8', errors='ignore', timeout=60)
         except Exception as e:
             return False, f'git not available: {e}'
         if r.returncode != 0:

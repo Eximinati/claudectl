@@ -985,7 +985,8 @@ def api_mcp_remove(q, body):
         return {'ok': False, 'error': 'claude.exe not found'}
     p = subprocess.run([exe, 'mcp', 'remove', body['name'],
                         '-s', body.get('scope', 'local')],
-                       capture_output=True, text=True, timeout=30)
+                       capture_output=True, text=True,
+                       encoding='utf-8', errors='ignore', timeout=30)
     return {'ok': p.returncode == 0, 'error': (p.stderr or '').strip()}
 
 
@@ -1002,7 +1003,8 @@ def api_mcp_add(q, body):
         args += ['--', *str(body.get('command', '')).split()]
     if body.get('scope'):
         args[3:3] = ['-s', body['scope']]
-    p = subprocess.run(args, capture_output=True, text=True, timeout=60)
+    p = subprocess.run(args, capture_output=True, text=True,
+                       encoding='utf-8', errors='ignore', timeout=60)
     return {'ok': p.returncode == 0, 'error': (p.stderr or '').strip()}
 
 

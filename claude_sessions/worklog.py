@@ -15,6 +15,8 @@ import json
 import os
 import time
 
+from . import config as _c
+
 CAP = 10                 # keep the most recent N sessions
 DIGEST_N = 5             # inject at most this many
 DIGEST_BUDGET = 700      # char budget for the injected block
@@ -35,16 +37,7 @@ def load_worklog(project_path):
 
 
 def save_worklog(project_path, entries):
-    p = worklog_path(project_path)
-    try:
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        tmp = p + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(entries[-CAP:], f, indent=2)
-        os.replace(tmp, p)
-        return True
-    except Exception:
-        return False
+    return _c.write_json_atomic(worklog_path(project_path), entries[-CAP:])
 
 
 def add_entry(project_path, entry):

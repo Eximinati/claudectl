@@ -85,14 +85,11 @@ def save_memory(project_path, proj_folder, m):
     for d in _mem_dirs(project_path, proj_folder):
         try:
             os.makedirs(d, exist_ok=True)
-            # temp file + atomic replace: a killed process (e.g. the detached
-            # bg worker, or claudectl exiting to launch claude) can never leave
-            # torn JSON — which load_memory would silently reset to _empty().
-            path = os.path.join(d, GRAPH_NAME)
-            tmp = path + '.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(m, f, indent=2)
-            os.replace(tmp, path)
+            # atomic: a killed process (the detached bg worker, or claudectl
+            # exiting to launch claude) must never leave torn JSON here —
+            # load_memory would silently reset it to _empty().
+            if not _c.write_json_atomic(os.path.join(d, GRAPH_NAME), m):
+                continue
             ok = True
         except Exception:
             continue

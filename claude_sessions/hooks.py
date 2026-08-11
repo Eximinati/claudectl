@@ -351,13 +351,7 @@ def _load():
 
 
 def _save(d):
-    try:
-        os.makedirs(os.path.dirname(settings_path), exist_ok=True)
-        with open(settings_path, 'w', encoding='utf-8') as f:
-            json.dump(d, f, indent=2)
-        return True
-    except Exception:
-        return False
+    return _c.write_json_atomic(settings_path, d)
 
 
 def _count(block):

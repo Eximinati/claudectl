@@ -120,12 +120,8 @@ def select(name, project_path=None, cfgdir=None):
         data.pop('outputStyle', None)
     else:
         data['outputStyle'] = name
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as fh:
-            json.dump(data, fh, indent=2)
-    except OSError as e:
-        return False, f'Could not write {path}: {e}'
+    if not _c.write_json_atomic(path, data):
+        return False, f'Could not write {path}'
     where = 'this project' if project_path else 'all projects'
     return True, f'Output style for {where}: {name}'
 
@@ -151,12 +147,8 @@ def save(name, description, body, project_path=None, cfgdir=None):
     path = os.path.join(scope_dir, f'{slug}.md')
     text = (f'---\nname: {name}\ndescription: {description}\n---\n\n'
             f'{body.strip()}\n')
-    try:
-        os.makedirs(scope_dir, exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as fh:
-            fh.write(text)
-    except OSError as e:
-        return False, str(e)
+    if not _c.write_atomic(path, text):
+        return False, f'Could not write {path}'
     return True, f'Saved {slug}.md'
 
 

@@ -497,3 +497,37 @@ def test_readiness_marker_needs_no_key_but_still_needs_the_host(monkeypatch):
     finally:
         px.close()
         up.close()
+
+
+def test_only_one_caller_may_spawn_the_daemon(monkeypatch, tmp_path):
+    """Two callers arriving together (two GUI tabs, or TUI + GUI) both used to
+    conclude "not running" and both spawn; the loser's bind then failed."""
+    assert failover._claim_spawn(20129) is True
+    assert failover._claim_spawn(20129) is False        # claim is held
+    failover._clear_lock()
+    assert failover._claim_spawn(20129) is True         # released
+
+
+def test_a_stale_claim_from_a_dead_run_is_evicted(monkeypatch, tmp_path):
+    import json as _json
+    p = failover.lock_path()
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, 'w', encoding='utf-8') as f:
+        _json.dump({'pid': 999999, 'port': 20129,
+                    'started': 0}, f)                  # ancient, pid long gone
+    monkeypatch.setattr(failover, '_pid_alive', lambda pid: False)
+    assert failover._claim_spawn(20129) is True
+
+
+def test_a_failed_spawn_releases_the_claim(monkeypatch, tmp_path):
+    """Otherwise the first crash wedges failover for the rest of the machine's
+    uptime — nothing would ever retry."""
+    import subprocess as _sp
+    monkeypatch.setattr(failover, 'is_ready', lambda port, timeout=2: False)
+    monkeypatch.setattr(_sp, 'Popen',
+                        lambda *a, **k: (_ for _ in ()).throw(OSError('boom')))
+    ok, msg = failover.ensure_running({'failover_port': 20129,
+                                       'failover_models': ['x'],
+                                       'failover_quiet': True})
+    assert not ok and 'could not start' in msg
+    assert failover._read_lock() is None

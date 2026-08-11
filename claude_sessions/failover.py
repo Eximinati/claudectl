@@ -183,6 +183,41 @@ def _clear_lock():
         pass
 
 
+def _claim_spawn(port):
+    """True if THIS caller may spawn the daemon; False if someone else already is.
+
+    O_EXCL is the whole point: the old code cleared the lock and then spawned, so
+    two callers arriving together (two GUI tabs hitting plan_launch, or the TUI
+    and the GUI at once) could both conclude "not running" and both spawn, and the
+    loser's server then failed to bind the port. The claim is written before the
+    spawn, not by the child after it starts."""
+    p = lock_path()
+    payload = json.dumps({'pid': os.getpid(), 'port': int(port),
+                          'started': time.time()}).encode('utf-8')
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+    except Exception:
+        pass
+    for _attempt in (0, 1):
+        try:
+            fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            data = _read_lock()
+            fresh = data and time.time() - (data.get('started') or 0) < _READY_TIMEOUT
+            if fresh or (data and _pid_alive(data.get('pid')) is True):
+                return False            # someone else is on it; go wait
+            _clear_lock()               # stale claim from a dead run — retry once
+            continue
+        except Exception:
+            return True                 # can't lock at all; better to spawn than not
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
+        return True
+    return True
+
+
 def ensure_running(s=None):
     """(ok, base_url) or (False, message). Never raises. Reuses a live daemon;
     evicts a stale lock and respawns."""
@@ -202,7 +237,14 @@ def ensure_running(s=None):
             if is_ready(port):
                 return True, base_url(s)
             time.sleep(0.3)
-    _clear_lock()
+
+    if not _claim_spawn(port):
+        deadline = time.time() + _READY_TIMEOUT
+        while time.time() < deadline:
+            if is_ready(port):
+                return True, base_url(s)
+            time.sleep(0.3)
+        return False, 'failover proxy did not become ready on port %d' % port
 
     pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     env = os.environ.copy()
@@ -226,6 +268,7 @@ def ensure_running(s=None):
                 creationflags=getattr(subprocess, 'CREATE_NEW_CONSOLE', 0))
     except Exception as e:
         _c.log.exception('failover: spawn failed')
+        _clear_lock()           # release the claim, or nothing may ever retry
         return False, 'could not start failover proxy: %s' % e
 
     deadline = time.time() + _READY_TIMEOUT

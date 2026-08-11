@@ -98,13 +98,10 @@ def session_diff(project_path, proj_folder):
     if not repos:
         return ['(no git repo here or in sub-projects — nothing to diff)']
 
+    from .repos import _git as _repo_git
+
     def _git(cwd, args):
-        try:
-            r = subprocess.run(['git', *args], cwd=cwd,
-                               capture_output=True, text=True, timeout=8)
-            return r.stdout.strip() if r.returncode == 0 else ''
-        except Exception:
-            return ''
+        return (_repo_git(args, cwd, timeout=8) or '').strip()
 
     root = os.path.abspath(project_path)
     lines = []

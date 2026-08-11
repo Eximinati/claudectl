@@ -144,15 +144,39 @@ def load_settings():
     return s
 
 
-def save_settings(s):
-    """Write settings dict. Returns True on success."""
+def write_atomic(path, text):
+    """Temp file in the same directory, then os.replace. Returns True on success.
+
+    Several of the files claudectl writes are parsed by Claude Code itself
+    (settings.json carries hooks, permissions and outputStyle), so a crash, a
+    full disk, or a killed process partway through a plain open(path,'w') leaves
+    truncated JSON that breaks the user's whole session, not just claudectl.
+    os.replace is atomic on NTFS, so a reader sees either the old file or the new
+    one — never half of either."""
     try:
-        os.makedirs(os.path.dirname(settings_file), exist_ok=True)
-        with open(settings_file, 'w', encoding='utf-8') as f:
-            json.dump(s, f, indent=2)
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        tmp = f'{path}.{os.getpid()}.tmp'
+        with open(tmp, 'w', encoding='utf-8', newline='') as f:
+            f.write(text)
+        os.replace(tmp, path)
         return True
     except Exception:
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
         return False
+
+
+def write_json_atomic(path, obj, indent=2):
+    return write_atomic(path, json.dumps(obj, indent=indent))
+
+
+def save_settings(s):
+    """Write settings dict. Returns True on success."""
+    return write_json_atomic(settings_file, s)
 
 
 # ── active config dir ────────────────────────────────────────

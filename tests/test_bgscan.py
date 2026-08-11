@@ -46,11 +46,16 @@ def test_save_memory_atomic_on_dump_failure(monkeypatch, tmp_path):
 
     def boom(*a, **k):
         raise RuntimeError('disk full')
-    real_dump = memory.json.dump
-    monkeypatch.setattr(memory.json, 'dump', boom)
-    mem2 = memory._empty()
-    assert memory.save_memory(actual, folder, mem2) is False
-    monkeypatch.setattr(memory.json, 'dump', real_dump)
+    # The write goes through config.write_json_atomic now — one implementation
+    # shared with every other state file — so that is where the failure is
+    # injected. The invariant under test is unchanged.
+    from claude_sessions import config as _cfg
+    real_dumps = _cfg.json.dumps
+    _cfg.json.dumps = boom
+    try:
+        assert memory.save_memory(actual, folder, memory._empty()) is False
+    finally:
+        _cfg.json.dumps = real_dumps
     # original graph intact — no torn/empty file replaced it
     got = memory.load_memory(actual, folder)
     assert got['entities'] and got['entities'][0]['name'] == 'Keep'

@@ -189,6 +189,7 @@ def _claude_cli(args, timeout=120):
         return False, 'claude.exe not found'
     try:
         r = subprocess.run([exe] + args, capture_output=True, text=True,
+                           encoding='utf-8', errors='ignore',
                            timeout=timeout)
     except Exception as e:
         return False, f'{e}'
