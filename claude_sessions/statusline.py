@@ -37,9 +37,19 @@ import os
 import sys
 
 from . import render as _r      # NOT `render` — the public function below would shadow it
-from .config import C_DIM as _DIM, C_RESET as _OFF, C_WARN as _WARN, C_ERR as _ERR
+from . import config as _c
 
-_SEP = f'{_DIM} · {_OFF}'
+#: Colours are read off `_c` at USE time, never `from .config import C_WARN`.
+#: That form binds by VALUE at import, so this module froze whatever palette
+#: happened to be installed the first time it was imported and never saw a
+#: theme applied afterwards. It also made
+#: `test_stale_memory_is_coloured_by_how_stale` pass alone and fail in a full
+#: run, because collection order decided which palette got frozen — the same
+#: import-time-binding bug as `hooks.settings_path`, in a different costume.
+
+
+def _sep():
+    return f'{_c.C_DIM} · {_c.C_RESET}'
 
 #: the effort level normal enough not to mention
 _QUIET_EFFORT = 'high'
@@ -87,12 +97,12 @@ def _memory_bit(mem):
     quietly feeding the agent a stale picture of the codebase.
     """
     if not mem.get('entities'):
-        return f'{_DIM}no memory{_OFF}'
+        return f'{_c.C_DIM}no memory{_c.C_RESET}'
     age = _iso_age(mem.get('auto_updated') or mem.get('generated_at'))
     if age is None:
         return ''
-    col = _ERR if age > 1209600 else (_WARN if age > 604800 else _DIM)
-    return f'{col}memory {_age(age)}{_OFF}'
+    col = _c.C_ERR if age > 1209600 else (_c.C_WARN if age > 604800 else _c.C_DIM)
+    return f'{col}memory {_age(age)}{_c.C_RESET}'
 
 
 def _lessons_bit(mem):
@@ -100,7 +110,7 @@ def _lessons_bit(mem):
     mining became automatic. Nothing else surfaces them mid-session."""
     n = sum(1 for e in mem.get('entities', [])
             if e.get('type') == 'lesson' and e.get('status') == 'pending')
-    return f'{_WARN}{n} to review{_OFF}' if n else ''
+    return f'{_c.C_WARN}{n} to review{_c.C_RESET}' if n else ''
 
 
 def _account_bit():
@@ -114,7 +124,7 @@ def _account_bit():
         cur = os.path.normcase(os.path.abspath(_c.config_dir))
         for name, d in accts:
             if os.path.normcase(os.path.abspath(d)) == cur:
-                return f'{_DIM}{name}{_OFF}'
+                return f'{_c.C_DIM}{name}{_c.C_RESET}'
     except Exception:
         pass
     return ''
@@ -137,27 +147,27 @@ def _git_bits(cwd):
             if summary['repos']:
                 d = summary['dirty']
                 tail = f' ({d} dirty)' if d else ''
-                return '', f'{_DIM}{summary["repos"]} repos{tail}{_OFF}'
+                return '', f'{_c.C_DIM}{summary["repos"]} repos{tail}{_c.C_RESET}'
             return '', ''
         st = repos.state(root, refresh=False)
-        parts = [f'{_DIM}{os.path.basename(root) or root}{_OFF}']
+        parts = [f'{_c.C_DIM}{os.path.basename(root) or root}{_c.C_RESET}']
         if st['branch']:
             parts.append(f'⑂{_r.trunc(st["branch"], 24)}')
         elif st['head']:
             parts.append(f'@{st["head"]}')
         if st['dirty']:
-            parts.append(f'{_WARN}●{st["dirty"]}{_OFF}')
+            parts.append(f'{_c.C_WARN}●{st["dirty"]}{_c.C_RESET}')
         if st['ahead']:
             parts.append(f'↑{st["ahead"]}')
         if st['behind']:
-            parts.append(f'{_WARN}↓{st["behind"]}{_OFF}')
+            parts.append(f'{_c.C_WARN}↓{st["behind"]}{_c.C_RESET}')
         sub = repos.summary(root)
         subs = ''
         if sub['repos'] > 1:
             n = sub['repos'] - 1
             d = sub['dirty'] - (1 if st['dirty'] else 0)
             tail = f' ({d} dirty)' if d > 0 else ''
-            subs = f'{_DIM}{n} subs{tail}{_OFF}'
+            subs = f'{_c.C_DIM}{n} subs{tail}{_c.C_RESET}'
         return ' '.join(parts), subs
     except Exception:
         return '', ''
@@ -181,9 +191,9 @@ def _context_bit(data):
             pct = 100.0 * used / size
         pct = max(0.0, min(100.0, float(pct)))
         big = bool(data.get('exceeds_200k_tokens'))
-        col = _ERR if (pct >= 85 or big) else (_WARN if pct >= 70 else _DIM)
+        col = _c.C_ERR if (pct >= 85 or big) else (_c.C_WARN if pct >= 70 else _c.C_DIM)
         return (f'{_r.meter(pct, 10, col)}{col}{int(pct)}% ctx'
-                f'{" 200k+" if big else ""}{_OFF}')
+                f'{" 200k+" if big else ""}{_c.C_RESET}')
     except Exception:
         return ''
 
@@ -203,8 +213,8 @@ def _limit_bits(data):
             pct = (rl.get(key) or {}).get('used_percentage')
             if not isinstance(pct, (int, float)) or isinstance(pct, bool):
                 continue
-            col = _ERR if pct >= 90 else (_WARN if pct >= 75 else _DIM)
-            out.append(f'{col}{label} {int(pct)}%{_OFF}')
+            col = _c.C_ERR if pct >= 90 else (_c.C_WARN if pct >= 75 else _c.C_DIM)
+            out.append(f'{col}{label} {int(pct)}%{_c.C_RESET}')
     except Exception:
         pass
     return out
@@ -235,7 +245,7 @@ def _mode_bit(data):
             parts.append(f'PR #{pr}')
     except Exception:
         return ''
-    return f'{_DIM}{" ".join(parts)}{_OFF}' if parts else ''
+    return f'{_c.C_DIM}{" ".join(parts)}{_c.C_RESET}' if parts else ''
 
 
 def _cost_bit(data):
@@ -247,7 +257,7 @@ def _cost_bit(data):
         rem = (data.get('cost') or {}).get('total_lines_removed')
         lines = (f' +{add}/-{rem}'
                  if isinstance(add, int) and isinstance(rem, int) and (add or rem) else '')
-        return f'{_DIM}${cost:.2f}{lines}{_OFF}'
+        return f'{_c.C_DIM}${cost:.2f}{lines}{_c.C_RESET}'
     except Exception:
         return ''
 
@@ -268,9 +278,9 @@ def _fit(bits, cols):
     bits = [str(b).replace('\n', ' ').replace('\r', ' ') for b in bits if b]
     if not bits:
         return ''
-    while cols and len(bits) > 1 and _r.disp_width(_SEP.join(bits)) > cols:
+    while cols and len(bits) > 1 and _r.disp_width(_sep().join(bits)) > cols:
         bits.pop()
-    line = _SEP.join(bits)
+    line = _sep().join(bits)
     return _r.trunc(line, cols) if cols else line
 
 
@@ -321,35 +331,80 @@ def _command():
     return f'"{sys.executable}" -m claude_sessions statusline'
 
 
-def is_installed():
+def is_installed(cfgdir=None):
     from . import hooks
-    sl = (hooks._load().get('statusLine') or {})
+    sl = (hooks._load(cfgdir).get('statusLine') or {})
     return 'claude_sessions' in str(sl.get('command', ''))
 
 
-def install():
-    """Point settings.json at us. Returns (ok, message).
+def by_account():
+    """[(name, cfgdir, installed)] — the per-account truth.
+
+    The statusline is a property of the USER, but it is configured per account
+    dir, so "installed" was never a single bool. Reporting it as one is what
+    hid the bug: with three accounts configured, only the active one was ever
+    written, and every surface said "installed".
+    """
+    from . import hooks
+    return [(n, d, is_installed(d)) for n, d in hooks.account_dirs()]
+
+
+def install(cfgdir=None):
+    """Point ONE account's settings.json at us. Returns (ok, message).
 
     Refuses to clobber someone else's statusline: that is a single-valued key,
     and quietly replacing a line the user built themselves would be exactly the
     kind of silent overwrite the memory work went to lengths to avoid.
     """
     from . import hooks
-    s = hooks._load()
+    s = hooks._load(cfgdir)
     cur = (s.get('statusLine') or {}).get('command', '')
     if cur and 'claude_sessions' not in str(cur):
         return False, f'A different statusline is already set: {str(cur)[:60]}'
     s['statusLine'] = {'type': 'command', 'command': _command()}
-    return (True, 'Statusline installed') if hooks._save(s) else (False, 'Write failed')
+    return ((True, 'Statusline installed') if hooks._save(s, cfgdir)
+            else (False, 'Write failed'))
 
 
-def remove():
+def remove(cfgdir=None):
     from . import hooks
-    s = hooks._load()
-    if not is_installed():
+    s = hooks._load(cfgdir)
+    if not is_installed(cfgdir):
         return False, 'Not installed'
     s.pop('statusLine', None)
-    return (True, 'Statusline removed') if hooks._save(s) else (False, 'Write failed')
+    return ((True, 'Statusline removed') if hooks._save(s, cfgdir)
+            else (False, 'Write failed'))
+
+
+def _fan_out(fn, verb):
+    """Apply `fn` to every account and summarise. A refusal in one account
+    (someone else's statusline) must not stop the others — it is reported
+    alongside them, because partial success is the honest answer."""
+    done, skipped = [], []
+    for name, cfgdir in _accounts():
+        ok, msg = fn(cfgdir)
+        (done if ok else skipped).append((name, msg))
+    if not done:
+        return False, '; '.join(f'{n}: {m}' for n, m in skipped) or f'Nothing to {verb}'
+    out = f"Statusline {verb} for {', '.join(n for n, _ in done)}"
+    if skipped:
+        out += ' — skipped ' + '; '.join(f'{n} ({m})' for n, m in skipped)
+    return True, out
+
+
+def _accounts():
+    from . import hooks
+    return hooks.account_dirs()
+
+
+def install_all():
+    """Install into every account. This is what the UI calls by default: a
+    statusline the user asked for should follow them across accounts."""
+    return _fan_out(install, 'installed')
+
+
+def remove_all():
+    return _fan_out(remove, 'removed')
 
 
 def main(argv=None):

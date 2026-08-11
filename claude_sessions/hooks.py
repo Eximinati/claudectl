@@ -223,10 +223,10 @@ def _memory_hook_command():
     return f'"{sys.executable}" "{script}"'
 
 
-def install_memory_hook():
+def install_memory_hook(cfgdir=None):
     """Idempotently install (or repair) the UserPromptSubmit recall hook in
     user-scope settings.json. Returns True when present after the call."""
-    s = _load()
+    s = _load(cfgdir)
     hooks = s.setdefault('hooks', {})
     entries = hooks.setdefault('UserPromptSubmit', [])
     if not isinstance(entries, list):
@@ -238,15 +238,15 @@ def install_memory_hook():
                 if h.get('command') != cmd:      # stale python/repo path → repair
                     h['command'] = cmd
                     h['timeout'] = 5
-                    return _save(s)
+                    return _save(s, cfgdir)
                 return True
     entries.append({'hooks': [{'type': 'command', 'command': cmd, 'timeout': 5}]})
-    return _save(s)
+    return _save(s, cfgdir)
 
 
-def uninstall_memory_hook():
+def uninstall_memory_hook(cfgdir=None):
     """Remove the recall hook from user-scope settings.json."""
-    s = _load()
+    s = _load(cfgdir)
     entries = (s.get('hooks') or {}).get('UserPromptSubmit')
     if not isinstance(entries, list):
         return True
@@ -262,11 +262,11 @@ def uninstall_memory_hook():
                 entries.remove(entry)
     if changed and not entries:
         s['hooks'].pop('UserPromptSubmit', None)
-    return _save(s) if changed else True
+    return _save(s, cfgdir) if changed else True
 
 
-def memory_hook_installed():
-    entries = (_load().get('hooks') or {}).get('UserPromptSubmit') or []
+def memory_hook_installed(cfgdir=None):
+    entries = (_load(cfgdir).get('hooks') or {}).get('UserPromptSubmit') or []
     return any('recall_hook.py' in str(h.get('command', ''))
                for e in entries if isinstance(e, dict)
                for h in (e.get('hooks') or []))
@@ -284,10 +284,10 @@ def _worklog_hook_command():
 _WORKLOG_EVENTS = ('SessionStart', 'Stop')
 
 
-def install_worklog_hook():
+def install_worklog_hook(cfgdir=None):
     """Idempotently install (or repair) the recent-work hook on SessionStart +
     Stop in user-scope settings.json. Returns True when present after."""
-    s = _load()
+    s = _load(cfgdir)
     hooks = s.setdefault('hooks', {})
     cmd = _worklog_hook_command()
     changed = False
@@ -307,11 +307,11 @@ def install_worklog_hook():
         if not found:
             entries.append({'hooks': [{'type': 'command', 'command': cmd, 'timeout': 10}]})
             changed = True
-    return _save(s) if changed else True
+    return _save(s, cfgdir) if changed else True
 
 
-def uninstall_worklog_hook():
-    s = _load()
+def uninstall_worklog_hook(cfgdir=None):
+    s = _load(cfgdir)
     changed = False
     for event in _WORKLOG_EVENTS:
         entries = (s.get('hooks') or {}).get(event)
@@ -328,11 +328,11 @@ def uninstall_worklog_hook():
                     entries.remove(entry)
         if not entries:
             s.get('hooks', {}).pop(event, None)
-    return _save(s) if changed else True
+    return _save(s, cfgdir) if changed else True
 
 
-def worklog_hook_installed():
-    hooks = _load().get('hooks') or {}
+def worklog_hook_installed(cfgdir=None):
+    hooks = _load(cfgdir).get('hooks') or {}
     for event in _WORKLOG_EVENTS:
         for e in hooks.get(event) or []:
             if isinstance(e, dict) and any('worklog_hook.py' in str(h.get('command', ''))
@@ -341,17 +341,51 @@ def worklog_hook_installed():
     return False
 
 
-def _load():
+def settings_path_for(cfgdir=None):
+    """The settings.json of ONE account — the active one when cfgdir is None.
+
+    `settings_path` deliberately stays the cfgdir=None answer instead of being
+    recomputed from `_c.config_dir` here. It is bound at import, which is the
+    bug this parameter exists to fix, but it is also the attribute nine tests
+    monkeypatch to redirect writes into a tmp dir. Keeping it as the default
+    means every one of those still works and the diff stays confined to the
+    accessors, rather than becoming a nine-file test rewrite for no behaviour.
+    """
+    return os.path.join(cfgdir, 'settings.json') if cfgdir else settings_path
+
+
+def account_dirs():
+    """[(name, dir)] for every account, default first. The fan-out target for
+    anything that installs into settings.json: a hook or a statusline the user
+    asked for is a property of THEM, not of whichever account happened to be
+    active when the module was imported."""
+    return _c.all_config_dirs()
+
+
+def across_accounts(fn, *args, **kw):
+    """Run an account-scoped accessor against EVERY account -> {name: result}.
+
+    Every `install_*`/`uninstall_*`/`*_installed` below takes `cfgdir`, so one
+    helper covers all of them and there is no per-feature `_all` variant to
+    forget to add. Returning a dict per account rather than a single bool is
+    deliberate: the interesting state is PARTIAL installation, which is what a
+    machine looks like after the pre-fix single-account behaviour, and a
+    collapsed bool cannot express it.
+    """
+    return {name: fn(*args, cfgdir=d, **kw) for name, d in account_dirs()}
+
+
+def _load(cfgdir=None):
     try:
-        with open(settings_path, encoding='utf-8') as f:
+        with open(settings_path_for(cfgdir), encoding='utf-8') as f:
             d = json.load(f)
             return d if isinstance(d, dict) else {}
     except Exception:
         return {}
 
 
-def _save(d):
-    return _c.write_json_atomic(settings_path, d)
+def _save(d, cfgdir=None):
+    return _c.write_json_atomic(settings_path_for(cfgdir), d)
 
 
 def _count(block):

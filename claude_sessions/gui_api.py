@@ -2027,16 +2027,33 @@ def api_statusline(q, body):
         preview = statusline.plain(statusline.render(payload))
     except Exception as e:
         preview = f'(preview failed: {e})'
-    return {'installed': statusline.is_installed(), 'preview': preview,
-            'command': statusline._command()}
+    accounts = [{'name': n, 'cfgdir': d, 'installed': done}
+                for n, d, done in statusline.by_account()]
+    return {'installed': all(a['installed'] for a in accounts) if accounts else False,
+            # `partial` is the state the pre-fix single-account installer left
+            # behind, and the whole reason the flat bool above is not enough.
+            'partial': any(a['installed'] for a in accounts)
+            and not all(a['installed'] for a in accounts),
+            'accounts': accounts,
+            'preview': preview, 'command': statusline._command()}
 
 
 def api_statusline_set(q, body):
+    """`cfgdir` targets one account; omitting it means every account, which is
+    the right default — the statusline belongs to the user, not to whichever
+    account happened to be active."""
     from . import statusline
-    act = (body or {}).get('action', '')
-    ok, msg = (statusline.install() if act == 'install' else
-               statusline.remove() if act == 'remove' else
-               (False, 'unknown action'))
+    b = body or {}
+    act = b.get('action', '')
+    cfgdir = b.get('cfgdir') or None
+    if cfgdir and cfgdir not in [d for _n, d in statusline._accounts()]:
+        return {'ok': False, 'message': 'unknown account'}
+    if act == 'install':
+        ok, msg = statusline.install(cfgdir) if cfgdir else statusline.install_all()
+    elif act == 'remove':
+        ok, msg = statusline.remove(cfgdir) if cfgdir else statusline.remove_all()
+    else:
+        ok, msg = False, 'unknown action'
     return {'ok': ok, 'message': msg}
 
 

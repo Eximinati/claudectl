@@ -2766,6 +2766,7 @@ async function pgSettings(nav){
       <span class="tag" id="slDot">checking…</span></h3>
     <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Claude Code renders two rows at the bottom of every session — identity and git on the first, pressure on the second. claudectl can be those rows, and it puts things there nobody else can compute: how stale this project's memory is, how many sessions are still unmined for lessons, which account you are on, and the branch, uncommitted count and sub-repo roll-up for wherever you are. Plan limits come free from the session payload, so it never polls the API. It refuses to replace a statusline you wrote yourself.</p>
     <div class="kv"><span>preview</span><code id="slPrev" style="color:var(--dim);white-space:pre">—</code></div>
+    <div id="slAccts"></div>
     <div class="mrow"><button class="btn" id="slBtn" onclick="slToggle()">…</button></div></div>
   <div class="card"><h3>${ic('chart')} OpenTelemetry export</h3>
     <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Claude Code exports metrics and events over OTLP. claudectl already owns the launch environment, so it can switch this on per account without you exporting variables by hand. <b>Prompt text is never collected</b> unless you also set <code>OTEL_LOG_USER_PROMPTS=1</code> — this toggle does not.</p>
@@ -3344,13 +3345,33 @@ async function setOtelSave(){
 }
 async function slRefresh(){
   const d=await api('/api/statusline');
-  const dot=$('#slDot'),btn=$('#slBtn'),prev=$('#slPrev');
+  const dot=$('#slDot'),btn=$('#slBtn'),prev=$('#slPrev'),acc=$('#slAccts');
   if(!dot||!btn)return;
-  dot.textContent=d.installed?'installed':'not installed';
-  dot.className='tag'+(d.installed?' ok':'');
-  btn.textContent=d.installed?'Remove from settings.json':'Install as my statusline';
+  // The statusline is configured per account dir, so "installed" was never one
+  // bool. PARTIAL is the state a machine is left in by the old single-account
+  // installer, and showing it is how you can tell the two apart at a glance.
+  const st=d.partial?'partial':(d.installed?'installed':'not installed');
+  dot.textContent=st;
+  dot.className='tag'+(d.installed?' ok':(d.partial?' warn':''));
+  btn.textContent=d.installed?'Remove from every account':'Install for every account';
   btn.className='btn'+(d.installed?' danger':' pri');
   if(prev)prev.textContent=d.preview||'—';
+  const accts=d.accounts||[];
+  // one row per account only when there is more than one — a single-account
+  // user should not be shown an account picker they never asked about
+  if(acc)acc.innerHTML=accts.length<2?'':accts.map((a,i)=>
+    `<div class="kv"><span>${esc(a.name)}</span><span>
+       <span class="tag${a.installed?' ok':''}">${a.installed?'installed':'—'}</span>
+       <button class="btn sm" onclick="slOne(${i})">${a.installed?'remove':'install'}</button>
+     </span></div>`).join('');
+  SL_ACCTS=accts;
+}
+let SL_ACCTS=[];
+async function slOne(i){
+  const a=SL_ACCTS[i];if(!a)return;
+  const r=await post('/api/statusline',
+    {action:a.installed?'remove':'install',cfgdir:a.cfgdir});
+  toast(r.message||'',r.ok?'ok':'err');slRefresh();
 }
 async function slToggle(){
   const d=await api('/api/statusline');

@@ -185,8 +185,19 @@ def save_settings(s):
 # whole tool works against one account/config dir at a time.
 
 def get_config_dir():
-    """Resolve active CLAUDE_CONFIG_DIR. Setting > default ~/.claude."""
-    override = load_settings().get('claude_config_dir', '')
+    """Resolve the active config dir. Env > setting > default ~/.claude.
+
+    The env var comes FIRST, and that ordering is the whole point: claudectl
+    sets `CLAUDE_CONFIG_DIR` in the child environment at five spawn sites
+    (accounts, context_inject, plan_execute, gui_api) to choose the account,
+    but nothing ever read it back. So a claudectl process running INSIDE a
+    session launched under another account — the statusline, which runs on
+    every turn — resolved the saved setting instead and reported the wrong
+    account for the whole session. Env-first is also Claude Code's own
+    precedence, so the two agree about which account a session belongs to.
+    """
+    env = (os.environ.get('CLAUDE_CONFIG_DIR') or '').strip()
+    override = env or load_settings().get('claude_config_dir', '')
     if override:
         return os.path.expanduser(os.path.expandvars(override))
     return os.path.join(_USERPROFILE, '.claude')
