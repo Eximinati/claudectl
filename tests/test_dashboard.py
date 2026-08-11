@@ -23,7 +23,7 @@ def _serve(monkeypatch):
 
 
 def _req(url, body=None, headers=None):
-    h = {'X-Claudectl': '1'}
+    h = {'X-Claudectl': gui.TOKEN}
     if headers is not None:
         h = headers
     data = json.dumps(body).encode() if body is not None else None
@@ -50,7 +50,7 @@ def _seed(sb, monkeypatch):
     folder.mkdir()
     sid = 'aaaa0000-0000-0000-0000-000000000000'
     make_jsonl(str(folder / f'{sid}.jsonl'), title='Fix the bug')
-    monkeypatch.setattr(gui, 'find_actual_path', lambda e: actual if e == enc else None)
+    monkeypatch.setattr(gui, 'find_actual_path', lambda e, *a, **k: actual if e == enc else None)
     return actual, enc, sid
 
 
@@ -88,7 +88,7 @@ def test_dashboard_breakdown_splits_accounts_and_flags_omni(monkeypatch, tmp_pat
     _write_today(second / enc / 'b.jsonl', 'big-pickle')       # OmniRoute free tier
     for mod in ('claude_sessions.gui.find_actual_path',
                 'claude_sessions.paths.find_actual_path'):
-        monkeypatch.setattr(mod, lambda e: actual if e == enc else None)
+        monkeypatch.setattr(mod, lambda e, *a, **k: actual if e == enc else None)
     srv, base = _serve(monkeypatch)
     try:
         _code, d = _req(f'{base}/api/dashboard')
@@ -130,7 +130,7 @@ def test_dashboard_recent_spans_accounts_and_skips_headless_oneshots(monkeypatch
     make_jsonl(str(sb.projects / enc / 'oneshot.jsonl'), n_msgs=2, title='Distil lessons')
     for mod in ('claude_sessions.gui.find_actual_path',
                 'claude_sessions.paths.find_actual_path'):
-        monkeypatch.setattr(mod, lambda e: actual if e == enc else None)
+        monkeypatch.setattr(mod, lambda e, *a, **k: actual if e == enc else None)
     srv, base = _serve(monkeypatch)
     try:
         _code, d = _req(f'{base}/api/dashboard')

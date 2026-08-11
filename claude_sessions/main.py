@@ -152,7 +152,7 @@ def run():
             proj = os.path.join(acct_projects_dir, name)
             if not os.path.isdir(proj):
                 continue
-            actual = find_actual_path(name)
+            actual = find_actual_path(name, folder=proj)
             if not actual:
                 continue
             mtime = os.path.getmtime(proj)

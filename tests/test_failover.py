@@ -7,6 +7,7 @@ one proven line copied from memory.spawn_background_worker and is deliberately
 not exercised: a subprocess test would be flaky and would leak console windows.
 """
 
+import http.client
 import json
 import os
 import threading
@@ -101,7 +102,8 @@ class _Proxy:
         data = json.dumps(payload).encode()
         req = urllib.request.Request(
             'http://127.0.0.1:%d%s' % (self.port, path), data=data,
-            method='POST', headers={'Content-Type': 'application/json'})
+            method='POST', headers={'Content-Type': 'application/json',
+                                    'Authorization': 'Bearer k'})
         try:
             with urllib.request.urlopen(req, timeout=20) as r:
                 return r.status, r.read(), dict(r.headers)
@@ -110,8 +112,10 @@ class _Proxy:
 
     def get(self, path):
         try:
-            with urllib.request.urlopen(
-                    'http://127.0.0.1:%d%s' % (self.port, path), timeout=20) as r:
+            req = urllib.request.Request(
+                'http://127.0.0.1:%d%s' % (self.port, path),
+                headers={'Authorization': 'Bearer k'})
+            with urllib.request.urlopen(req, timeout=20) as r:
                 return r.status, r.read(), dict(r.headers)
         except urllib.error.HTTPError as e:
             return e.code, e.read(), dict(e.headers)
@@ -295,7 +299,8 @@ def test_all_candidates_fail_returns_502_not_a_hang(monkeypatch):
         req = urllib.request.Request(
             'http://127.0.0.1:%d/v1/messages' % px.port,
             data=json.dumps({'model': 'a'}).encode(), method='POST',
-            headers={'Content-Type': 'application/json'})
+            headers={'Content-Type': 'application/json',
+                     'Authorization': 'Bearer k'})
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
                 status, body = r.status, r.read()
@@ -411,3 +416,84 @@ def test_council_calls_bypass_the_proxy(monkeypatch):
 
     plan_execute._headless('m', 'p', os.getcwd(), omni_env=omni, cfgdir='')
     assert seen['url'] == real
+
+
+# ── the proxy forwards on the user's key, so it must authenticate ──
+
+def _raw(port, path='/v1/messages', method='POST', extra=None, body=b'{"model":"a"}',
+         host=None):
+    """One request with full control over the headers, incl. Host — urllib always
+    sets Host to the connected address, which is exactly what we need to spoof."""
+    conn = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+    h = {'Content-Length': str(len(body)), 'Content-Type': 'application/json'}
+    h['Host'] = host or ('127.0.0.1:%d' % port)
+    h.update(extra or {})
+    conn.request(method, path, body=body, headers=h)
+    r = conn.getresponse()
+    out = (r.status, r.read())
+    conn.close()
+    return out
+
+
+def test_browser_originated_request_is_refused(monkeypatch):
+    """The whole CSRF class: a page in any open tab can POST here with a
+    CORS-simple content type and no preflight to stop it. Every browser sends at
+    least one fetch-metadata header; Claude Code's client sends none."""
+    up = _Upstream({'a': (200, b'{"ok":1}', {})})
+    _wire(monkeypatch, up, [])
+    px = _Proxy()
+    try:
+        for hdr in ('Origin', 'Referer', 'Sec-Fetch-Site', 'Sec-Fetch-Mode'):
+            status, body = _raw(px.port, extra={'Authorization': 'Bearer k',
+                                               hdr: 'https://evil.example'})
+            assert status == 403, hdr
+            assert b'browser-originated' in body, hdr
+    finally:
+        px.close()
+        up.close()
+
+
+def test_foreign_host_header_is_refused(monkeypatch):
+    """DNS rebinding: the attacker's origin resolves to 127.0.0.1, so the request
+    is same-origin to THEM and may carry any header — but Host is still theirs."""
+    up = _Upstream({'a': (200, b'{"ok":1}', {})})
+    _wire(monkeypatch, up, [])
+    px = _Proxy()
+    try:
+        status, body = _raw(px.port, host='evil.example:%d' % px.port,
+                            extra={'Authorization': 'Bearer k'})
+        assert status == 403 and b'bad host' in body
+    finally:
+        px.close()
+        up.close()
+
+
+def test_wrong_and_missing_credentials_are_refused(monkeypatch):
+    up = _Upstream({'a': (200, b'{"ok":1}', {})})
+    _wire(monkeypatch, up, [])
+    px = _Proxy()
+    try:
+        assert _raw(px.port)[0] == 403                                   # none
+        assert _raw(px.port, extra={'Authorization': 'Bearer nope'})[0] == 403
+        assert _raw(px.port, extra={'x-api-key': 'nope'})[0] == 403
+        assert _raw(px.port, extra={'Authorization': 'Bearer k'})[0] == 200
+        assert _raw(px.port, extra={'x-api-key': 'k'})[0] == 200         # either spelling
+    finally:
+        px.close()
+        up.close()
+
+
+def test_readiness_marker_needs_no_key_but_still_needs_the_host(monkeypatch):
+    """ensure_running() probes the marker before any key is in play, so it must
+    stay reachable — but not to a rebound origin."""
+    up = _Upstream({})
+    _wire(monkeypatch, up, [])
+    px = _Proxy()
+    try:
+        status, body = _raw(px.port, path=failover._MARKER_PATH, method='GET', body=b'')
+        assert status == 200 and body == failover._MARKER
+        assert _raw(px.port, path=failover._MARKER_PATH, method='GET', body=b'',
+                    host='evil.example:%d' % px.port)[0] == 403
+    finally:
+        px.close()
+        up.close()

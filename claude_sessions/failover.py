@@ -26,6 +26,7 @@ CREATE_NO_WINDOW: the original complaint was not "a model died", it was "I could
 not see that a model died", so the routing log is the feature.
 """
 
+import hmac
 import http.client
 import json
 import os
@@ -310,6 +311,46 @@ class _Handler(BaseHTTPRequestHandler):
 
     # ── plumbing ──
 
+    def _guard(self):
+        """This proxy forwards on the USER'S upstream key, so an unauthenticated
+        request here spends their quota. The port is fixed and published in the
+        source, so "it's loopback" excludes nobody: any page in any open tab can
+        POST /v1/messages with Content-Type: text/plain — a CORS-simple request,
+        no preflight to block it — and any other local process can too.
+
+        Three checks, cheapest first:
+          Host      — a DNS-rebound request carries the attacker's hostname, so
+                      an allowlist here is the only real rebinding defense.
+          Sec-Fetch/Origin — every browser sends at least one of these on every
+                      fetch; Claude Code's HTTP client sends none. One check
+                      kills the whole browser-origin class, key or no key.
+          bearer    — when a key is configured, require it. config.omniroute_env
+                      already hands it to the session as ANTHROPIC_AUTH_TOKEN,
+                      which Claude Code sends as `Authorization: Bearer`.
+        """
+        host = (self.headers.get('Host') or '').strip().lower()
+        port = self.server.server_address[1]
+        if host not in ('127.0.0.1:%d' % port, 'localhost:%d' % port,
+                        '[::1]:%d' % port):
+            return self._deny('bad host')
+        for h in ('Origin', 'Sec-Fetch-Site', 'Sec-Fetch-Mode', 'Referer'):
+            if self.headers.get(h):
+                return self._deny('browser-originated request')
+        key = (self._settings().get('omniroute_api_key') or '').strip()
+        if key and self.path != _MARKER_PATH:
+            got = (self.headers.get('x-api-key')
+                   or (self.headers.get('Authorization') or '').removeprefix('Bearer ')
+                   or '').strip()
+            if not hmac.compare_digest(got, key):
+                return self._deny('bad credentials')
+        return True
+
+    def _deny(self, why):
+        self._json(403, {'type': 'error', 'error': {
+            'type': 'permission_error',
+            'message': 'claudectl failover: refused (%s)' % why}})
+        return False
+
     def _settings(self):
         return _c.load_settings()
 
@@ -413,6 +454,8 @@ class _Handler(BaseHTTPRequestHandler):
     # ── verbs ──
 
     def do_GET(self):
+        if not self._guard():
+            return
         if self.path == _MARKER_PATH:
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain')
@@ -423,6 +466,8 @@ class _Handler(BaseHTTPRequestHandler):
         self._passthrough(None)
 
     def do_POST(self):
+        if not self._guard():
+            return
         try:
             n = int(self.headers.get('Content-Length') or 0)
         except ValueError:

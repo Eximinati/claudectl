@@ -1,3 +1,4 @@
+import json
 import os
 import re
 
@@ -16,10 +17,59 @@ def encode_component(name):
     return _NON_ALNUM.sub('-', name)
 
 
-def find_actual_path(encoded, max_depth=8):
+def resolve_dir(raw):
+    """Absolute existing directory, or ''. The single validator for any path that
+    arrives from a request body before it becomes a subprocess `cwd`."""
+    raw = (raw or '').strip()
+    if not raw:
+        return ''
+    cand = os.path.abspath(os.path.expandvars(os.path.expanduser(raw)))
+    return cand if os.path.isdir(cand) else ''
+
+
+def path_from_transcripts(folder, max_files=3, max_lines=40):
+    """The real path, read from what Claude Code itself recorded.
+
+    Every transcript line carries `cwd`. Decoding the folder NAME cannot work in
+    general — the encoding maps every non-alnum character to '-', so it is lossy
+    — and for a UNC path it fails outright: `\\\\server\\share\\P` encodes to
+    `--server-share-P`, whose leading '--' makes the drive-letter split below
+    yield an empty drive. Reading the recorded value is both exact and cheaper
+    than the recursive directory walk it replaces."""
+    try:
+        names = sorted((n for n in os.listdir(folder) if n.endswith('.jsonl')),
+                       key=lambda n: os.path.getmtime(os.path.join(folder, n)),
+                       reverse=True)[:max_files]
+    except OSError:
+        return None
+    for n in names:
+        try:
+            with open(os.path.join(folder, n), encoding='utf-8', errors='ignore') as f:
+                for i, line in enumerate(f):
+                    if i >= max_lines:
+                        break
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    cwd = obj.get('cwd') if isinstance(obj, dict) else None
+                    if cwd and os.path.isdir(cwd):
+                        return cwd
+        except OSError:
+            continue
+    return None
+
+
+def find_actual_path(encoded, max_depth=8, folder=None):
+    if folder:
+        got = path_from_transcripts(folder)
+        if got:
+            return got
     if '--' not in encoded:
         return None
     drive_part, rest = encoded.split('--', 1)
+    if not drive_part:          # UNC (leading '--'); only the transcript knows it
+        return None
     base = drive_part + ':\\'
     if not os.path.exists(base):
         return None

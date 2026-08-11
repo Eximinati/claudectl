@@ -23,7 +23,7 @@ def _serve():
 
 def _req(url, body=None):
     data = json.dumps(body).encode() if body is not None else None
-    r = urllib.request.Request(url, data=data, headers={'X-Claudectl': '1'},
+    r = urllib.request.Request(url, data=data, headers={'X-Claudectl': gui.TOKEN},
                                method='POST' if data else 'GET')
     try:
         with urllib.request.urlopen(r) as resp:
@@ -42,7 +42,7 @@ def _seed(sb, monkeypatch, n=2, enc='X--enc-alpha'):
         sid = f'aaaa{i:04d}-0000-0000-0000-000000000000'
         make_jsonl(str(folder / f'{sid}.jsonl'), title=f'Session {i}')
         sids.append(sid)
-    monkeypatch.setattr(gui, 'find_actual_path', lambda e: actual if e == enc else None)
+    monkeypatch.setattr(gui, 'find_actual_path', lambda e, *a, **k: actual if e == enc else None)
     import claude_sessions.paths as paths_mod
     monkeypatch.setattr(paths_mod, 'find_actual_path',
                         lambda e, *a, **k: actual if e == enc else None)

@@ -6,14 +6,19 @@ All data comes from the same pure helpers the TUI uses; launching a session
 spawns claude.exe in a NEW console window (a browser can't host a terminal),
 reusing main.build_launch_command for exact TUI parity.
 
-Security: the server only binds loopback, and every /api request must carry
-the X-Claudectl header. Browsers won't attach custom headers cross-origin
-without a CORS preflight (which we never approve), so a malicious web page
-can't drive the launch endpoint from another tab.
+Security: the server binds loopback only, and _guard() enforces three things
+on every /api request — an allowlisted Host, no browser fetch-metadata, and a
+per-run secret in X-Claudectl. A custom header alone is NOT enough: it stops a
+plain cross-origin fetch, but under DNS rebinding the attacker's own origin IS
+this server, so it may send any header it likes with no preflight. The Host
+check is what actually closes that, and TOKEN closes the case of another local
+process that guessed the port.
 """
 
+import hmac
 import json
 import os
+import secrets
 import subprocess
 import sys
 import threading
@@ -49,7 +54,7 @@ def list_projects():
             proj = os.path.join(pdir, name)
             if not os.path.isdir(proj):
                 continue
-            actual = find_actual_path(name)
+            actual = find_actual_path(name, folder=proj)
             if not actual:
                 continue
             entries.append((os.path.getmtime(proj), actual, name, acct_dir))
@@ -242,6 +247,11 @@ def _stage_tier(s):
 def launch_session(path, encoded, choice, opts):
     """Spawn claude.exe in a NEW console window. Returns (ok, error)."""
     from .main import build_launch_command
+    from .paths import resolve_dir
+    # `path` arrives in a request body and becomes a subprocess cwd; validate
+    # before spawning, not after.
+    if not resolve_dir(path):
+        return False, 'not a directory: %s' % (path or '(empty)')
     try:
         args, env, proj_folder = build_launch_command(path, encoded, choice, opts)
     except RuntimeError as e:
@@ -285,6 +295,12 @@ def rename_session(encoded, cfgdir, sid, name):
 
 # ── HTTP layer ───────────────────────────────────────────────
 
+#: Per-run secret. Handed to the SPA by rewriting the page at send time, so it
+#: never lands on disk, in a URL the user might paste, or in a previous run's
+#: browser history. Tests read this rather than hardcoding a value.
+TOKEN = secrets.token_urlsafe(24)
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):   # silence per-request stderr noise
         pass
@@ -295,24 +311,53 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', f'{ctype}; charset=utf-8')
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', cache or 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('X-Frame-Options', 'DENY')
+        # Everything the SPA loads is served from this origin; 'unsafe-inline'
+        # is needed because app.js/app.css are inlined into the page string and
+        # the markup uses onclick= attributes throughout.
+        self.send_header('Content-Security-Policy',
+                         "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                         "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                         "connect-src 'self'; frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(data)
 
+    def _host_ok(self):
+        """A DNS-rebound request reaches us with the attacker's hostname in Host
+        — this is the check that stops it. Runs even on the unguarded routes."""
+        host = (self.headers.get('Host') or '').strip().lower()
+        port = self.server.server_address[1]
+        return host in ('127.0.0.1:%d' % port, 'localhost:%d' % port,
+                        '[::1]:%d' % port)
+
     def _guard(self):
         """Reject anything a cross-origin page could send (see module doc)."""
-        if self.headers.get('X-Claudectl') != '1':
-            self._send(403, {'error': 'missing X-Claudectl header'})
+        if not self._host_ok():
+            self._send(403, {'error': 'bad host'})
+            return False
+        if not hmac.compare_digest(self.headers.get('X-Claudectl') or '', TOKEN):
+            self._send(403, {'error': 'missing or bad X-Claudectl header'})
             return False
         return True
 
     def do_GET(self):
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        if not self._host_ok():
+            self._send(403, {'error': 'bad host'})
+            return
         if u.path == '/':
             from .gui_html import PAGE
-            self._send(200, PAGE.encode('utf-8'), ctype='text/html')
+            page = PAGE.replace('__CLAUDECTL_TOKEN__', TOKEN)
+            self._send(200, page.encode('utf-8'), ctype='text/html')
             return
         if u.path == '/graph':
+            # Opened with window.open(), so it cannot carry a header — the token
+            # rides the query string instead.
+            if not hmac.compare_digest(q.get('k') or '', TOKEN):
+                self._send(403, {'error': 'missing or bad token'})
+                return
             self._serve_graph(q)
             return
         if u.path.startswith('/vendor/'):
@@ -370,6 +415,12 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             from . import connections
             path, enc = q.get('path', ''), q.get('enc', '')
+            if not path or not os.path.isdir(path):
+                self._send(400, {'error': 'path is not a directory'})
+                return
+            if enc and (os.sep in enc or '/' in enc or enc in ('.', '..')):
+                self._send(400, {'error': 'bad enc'})
+                return
             proj_folder = os.path.join(_c.config_dir, 'projects', enc) if enc else None
             g = connections.build_hierarchy(path, proj_folder)
             try:

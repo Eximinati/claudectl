@@ -177,7 +177,7 @@ class Sandbox:
         self.mp.setattr(main_mod, 'all_config_dirs', lambda: [('default', cfg)])
         # find_actual_path can't walk fake drives — resolve via registry
         self.mp.setattr(main_mod, 'find_actual_path',
-                        lambda enc: self._encoded_to_actual.get(enc))
+                        lambda enc, *a, **k: self._encoded_to_actual.get(enc))
         self.mp.setattr(config, 'open_in_editor',
                         lambda p: (self.editor_opened.append(p), True)[1])
         # modules that import open_in_editor by value need their own patch

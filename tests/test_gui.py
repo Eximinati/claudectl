@@ -1,6 +1,7 @@
 """GUI server tests — real HTTP requests against a sandboxed server on an
 ephemeral port, plus launch parity with the TUI's build_launch_command."""
 
+import http.client
 import json
 import os
 import subprocess
@@ -24,7 +25,7 @@ def _serve(monkeypatch):
 
 
 def _req(url, body=None, headers=None):
-    h = {'X-Claudectl': '1'}
+    h = {'X-Claudectl': gui.TOKEN}
     if headers is not None:
         h = headers
     data = json.dumps(body).encode() if body is not None else None
@@ -46,7 +47,7 @@ def _seed(sb, monkeypatch):
     folder.mkdir()
     sid = 'aaaa0000-0000-0000-0000-000000000000'
     make_jsonl(str(folder / f'{sid}.jsonl'), title='Fix the bug')
-    monkeypatch.setattr(gui, 'find_actual_path', lambda e: actual if e == enc else None)
+    monkeypatch.setattr(gui, 'find_actual_path', lambda e, *a, **k: actual if e == enc else None)
     return actual, enc, sid
 
 
@@ -76,7 +77,7 @@ def test_sessions_omni_flag(monkeypatch, tmp_path):
                title='Anthropic run', model='claude-sonnet-5')
     make_jsonl(str(folder / 'bbbb0000-0000-0000-0000-000000000000.jsonl'),
                title='Omni run', model='deepseek-v4-flash-free')
-    monkeypatch.setattr(gui, 'find_actual_path', lambda e: actual if e == enc else None)
+    monkeypatch.setattr(gui, 'find_actual_path', lambda e, *a, **k: actual if e == enc else None)
     by_title = {s['title']: s for s in gui.list_sessions(enc)}
     assert by_title['Omni run']['omni'] is True
     assert by_title['Anthropic run']['omni'] is False
@@ -246,5 +247,109 @@ def test_index_serves_html(monkeypatch, tmp_path):
             body = r.read().decode('utf-8')
             assert r.status == 200
             assert 'claudectl' in body and '<html' in body
+    finally:
+        srv.shutdown()
+
+
+# ── the guard is not just a custom header ────────────────────
+
+def _raw(port, path='/api/state', method='GET', extra=None, host=None):
+    """Full header control, incl. Host — urllib always sets Host to the address it
+    dialled, which is precisely the thing a rebinding test has to spoof."""
+    conn = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+    h = {'Host': host or ('127.0.0.1:%d' % port)}
+    h.update(extra or {})
+    conn.request(method, path, headers=h)
+    r = conn.getresponse()
+    out = (r.status, r.read())
+    conn.close()
+    return out
+
+
+def test_guard_requires_the_per_run_token(monkeypatch, tmp_path):
+    """A constant header value is guessable by any local process that found the
+    port; the token is not."""
+    Sandbox(monkeypatch, tmp_path)
+    srv, base = _serve(monkeypatch)
+    port = srv.server_address[1]
+    try:
+        assert _raw(port, extra={'X-Claudectl': '1'})[0] == 403
+        assert _raw(port, extra={'X-Claudectl': gui.TOKEN})[0] == 200
+    finally:
+        srv.shutdown()
+
+
+def test_guard_rejects_a_rebound_host(monkeypatch, tmp_path):
+    """DNS rebinding defeats a custom-header check outright: the attacker's page
+    becomes same-origin with this server, so it can send any header it likes.
+    Host is the one thing it cannot forge into our allowlist."""
+    Sandbox(monkeypatch, tmp_path)
+    srv, base = _serve(monkeypatch)
+    port = srv.server_address[1]
+    try:
+        code, body = _raw(port, extra={'X-Claudectl': gui.TOKEN},
+                          host='evil.example:%d' % port)
+        assert code == 403 and b'bad host' in body
+        # the unguarded routes are covered too, or the page itself leaks the token
+        assert _raw(port, path='/', host='evil.example:%d' % port)[0] == 403
+        assert _raw(port, path='/vendor/anime.esm.min.js',
+                    host='evil.example:%d' % port)[0] == 403
+    finally:
+        srv.shutdown()
+
+
+def test_page_carries_the_token_and_the_placeholder_never_ships(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    srv, base = _serve(monkeypatch)
+    port = srv.server_address[1]
+    try:
+        code, body = _raw(port, path='/')
+        assert code == 200
+        assert gui.TOKEN.encode() in body
+        assert b'__CLAUDECTL_TOKEN__' not in body
+    finally:
+        srv.shutdown()
+
+
+def test_graph_is_guarded_and_validates_its_path(monkeypatch, tmp_path):
+    """/graph cannot carry a header (window.open), so the token rides the query
+    string — but it is not therefore exempt, and `path` reaches the filesystem."""
+    Sandbox(monkeypatch, tmp_path)
+    srv, base = _serve(monkeypatch)
+    port = srv.server_address[1]
+    real = str(tmp_path)
+    try:
+        assert _raw(port, path='/graph?path=%s' % real)[0] == 403
+        assert _raw(port, path='/graph?k=nope&path=%s' % real)[0] == 403
+        code, body = _raw(port, path='/graph?k=%s&path=%s'
+                          % (gui.TOKEN, tmp_path / 'nope'))
+        assert code == 400 and b'not a directory' in body
+    finally:
+        srv.shutdown()
+
+
+def test_launch_refuses_a_path_that_is_not_a_directory(monkeypatch, tmp_path):
+    """`path` arrives in a request body and becomes a subprocess cwd."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    _actual, enc, sid = _seed(sb, monkeypatch)
+    calls = []
+    monkeypatch.setattr(subprocess, 'Popen',
+                        lambda cmd, **kw: calls.append(cmd) or None)
+    ok, err = gui.launch_session(str(tmp_path / 'not-there'), enc, f'resume:{sid}', {})
+    assert not ok and 'not a directory' in err
+    assert calls == []
+
+
+def test_responses_carry_the_hardening_headers(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    srv, base = _serve(monkeypatch)
+    try:
+        r = urllib.request.Request(base + '/api/state',
+                                   headers={'X-Claudectl': gui.TOKEN})
+        with urllib.request.urlopen(r) as resp:
+            h = dict(resp.headers)
+        assert h['X-Content-Type-Options'] == 'nosniff'
+        assert h['X-Frame-Options'] == 'DENY'
+        assert "frame-ancestors 'none'" in h['Content-Security-Policy']
     finally:
         srv.shutdown()

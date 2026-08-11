@@ -1,7 +1,9 @@
 
 'use strict';
 const $=s=>document.querySelector(s);
-const api=(p,opt={})=>fetch(p,{...opt,headers:{'X-Claudectl':'1',
+// Per-run secret, substituted into this page by gui._Handler when it is served.
+const CK='__CLAUDECTL_TOKEN__';
+const api=(p,opt={})=>fetch(p,{...opt,headers:{'X-Claudectl':CK,
   'Content-Type':'application/json',...(opt.headers||{})}}).then(r=>r.json());
 const post=(p,body)=>api(p,{method:'POST',body:JSON.stringify(body||{})});
 
@@ -1271,7 +1273,7 @@ function drawProject(){
   $('#ttl').textContent=CUR.name;$('#tpath').textContent=CUR.path;
   $('#tabs').innerHTML=TABS.map(([id,l])=>
     `<div class="tab${TAB===id?' sel':''}" onclick="TAB='${id}';drawProject()">${l}</div>`).join('')
-    +`<div class="tab" onclick="window.open('/graph?${qs({path:CUR.path,enc:CUR.encoded})}','_blank')">Graph ${ic('ext')}</div>`;
+    +`<div class="tab" onclick="window.open('/graph?${qs({path:CUR.path,enc:CUR.encoded,k:CK})}','_blank')">Graph ${ic('ext')}</div>`;
   ({sessions:drawSessions,memory:drawMemory,claudemd:drawClaudeMd,review:drawReview,
     audit:drawAudit,pusage:drawProjUsage,planexec:drawPlanExec,
     worktrees:drawWorktrees,tools:drawTools}[TAB])();

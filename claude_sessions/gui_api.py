@@ -405,7 +405,7 @@ def _entries():
             proj = os.path.join(pdir, enc)
             if not os.path.isdir(proj):
                 continue
-            actual = find_actual_path(enc)
+            actual = find_actual_path(enc, folder=proj)
             if actual:
                 out.append((os.path.getmtime(proj), actual, enc, acct_dir))
     out.sort(reverse=True)
@@ -1335,10 +1335,9 @@ def api_open_path(q, body):
     existing directory and encode it, exactly like the TUI's __open_path__
     branch. Returns {ok, path, enc, name} for the launch modal to use with
     choice='new'."""
-    from .paths import encode_component
-    raw = (body.get('path') or '').strip()
-    cand = os.path.abspath(os.path.expandvars(os.path.expanduser(raw))) if raw else ''
-    if not cand or not os.path.isdir(cand):
+    from .paths import encode_component, resolve_dir
+    cand = resolve_dir(body.get('path'))
+    if not cand:
         return {'ok': False, 'error': 'Not a folder — enter a valid directory path'}
     return {'ok': True, 'path': cand, 'enc': encode_component(cand),
             'name': os.path.basename(cand) or cand}
@@ -1365,9 +1364,11 @@ def api_inject_launch(q, body):
     from .context_inject import _write_context_file, CTX_FILE
     from .config import get_claude_exe, load_settings
     from .sessions import load_add_dirs, read_extra_paths
-    from .paths import encode_component
+    from .paths import encode_component, resolve_dir
 
     path = body['path']
+    if not resolve_dir(path):       # becomes a subprocess cwd below
+        return {'ok': False, 'error': 'not a directory: %s' % (path or '(empty)')}
     ctx_path, title = _write_context_file(path, body['folder'], body['sid'],
                                           body.get('account', 'default'))
     exe = get_claude_exe()
@@ -1586,6 +1587,9 @@ def api_job_start(q, body):
                 model = s.get('omniroute_exec_model') or omniroute.AUTO_MODEL
             else:
                 model = s.get('exec_model', '')
+            from .paths import resolve_dir
+            if not resolve_dir(path):   # becomes a subprocess cwd below
+                raise RuntimeError('not a directory: %s' % (path or '(empty)'))
             args, env = build_exec_launch(path, exec_folder, task, model, omni_env, cfgdir)
             if not args:
                 raise RuntimeError('claude.exe not found')
