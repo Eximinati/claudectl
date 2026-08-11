@@ -99,3 +99,45 @@ def test_status_line_error_flag(monkeypatch, tmp_path):
     monkeypatch.setattr(mcp_mod, '_mcp_error', True)
     monkeypatch.setattr(mcp_mod, '_mcp_ready', True)
     assert 'unavailable' in mcp_mod.mcp_status_line()
+
+
+# ── the real parser (every other MCP test stubs get_mcp_status) ──
+
+_LIST_OUTPUT = """Checking MCP server health...
+
+notion: https://mcp.notion.com/mcp (HTTP) - ✔ Connected
+asana: https://mcp.asana.com/sse (SSE) - ! Needs authentication
+broken-one: npx -y some-server - ✘ Failed to connect
+timed-out: npx -y other-server - Connection timed out
+"""
+
+
+def _fake_claude(monkeypatch, stdout, stderr=''):
+    import subprocess
+    class R:
+        pass
+    r = R()
+    r.stdout, r.stderr, r.returncode = stdout, stderr, 0
+    monkeypatch.setattr(mcp_mod, 'get_claude_exe', lambda: 'claude.exe')
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: r)
+
+
+def test_a_failed_server_is_listed_not_dropped(monkeypatch):
+    """`✘ Failed to connect` and `Connection timed out` matched neither branch,
+    so those servers vanished from the list entirely — the one state the user
+    most needs to see."""
+    _fake_claude(monkeypatch, _LIST_OUTPUT)
+    got = dict(mcp_mod.get_mcp_status())
+    assert got == {'notion': 'ok', 'asana': 'auth',
+                   'broken-one': 'fail', 'timed-out': 'fail'}
+
+
+def test_status_icons_are_distinct_per_state():
+    icons = {s: mcp_mod._status_icon(s) for s in ('ok', 'auth', 'fail')}
+    assert len(set(icons.values())) == 3
+    assert '✔' in icons['ok'] and '!' in icons['auth'] and '✘' in icons['fail']
+
+
+def test_parser_skips_the_header_and_blank_lines(monkeypatch):
+    _fake_claude(monkeypatch, 'Checking MCP server health...\n\n\n')
+    assert mcp_mod.get_mcp_status() == []

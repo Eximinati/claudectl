@@ -257,7 +257,11 @@ def _install_bridge():
         job = getattr(_JOBCTX, 'job', None)
         if job is None:
             return _orig_pager_confirm(title, content)
-        return _gate(job, title, '', content, content)
+        # splitlines, not the raw string: gate['diff'] is rendered with .map() in
+        # the browser, and a string is truthy so the `||[]` fallback never fires
+        # — it threw before the Approve/Reject handlers were wired, leaving the
+        # job parked with no way to resolve it.
+        return _gate(job, title, '', content, content.splitlines())
     claude_md._pager_confirm = pager_confirm
 
     _orig_text_input = ui.text_input

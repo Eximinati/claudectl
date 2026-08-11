@@ -14,6 +14,11 @@ import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Claude Code captures stdout as a PIPE, so CPython picks the locale
+# codepage (cp1252 on Windows) and any non-ASCII character in the payload
+# either mojibakes or raises — silently losing the whole hook output.
+sys.stdout.reconfigure(encoding='utf-8')
+
 
 def _enabled_for(cwd, settings):
     """Global default `memory_prompt_hook`, overridable per project via

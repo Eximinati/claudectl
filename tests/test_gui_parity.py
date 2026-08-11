@@ -1106,3 +1106,36 @@ def test_plan_edit_endpoint(monkeypatch, tmp_path):
         assert not d['ok'] and 'error' in d
     finally:
         srv.shutdown()
+
+
+def test_every_gate_publishes_diff_as_a_list_of_lines(monkeypatch, tmp_path):
+    """The frontend renders gate.diff with .map(). A string is truthy, so the
+    `||[]` fallback never fires and .map is undefined on a String — the modal
+    threw BEFORE wiring Approve/Reject, parking the job with no way out. Both
+    bridges (diffview.confirm and claude_md._pager_confirm) must agree on the
+    type; only the first one had a test, which is how this shipped."""
+    Sandbox(monkeypatch, tmp_path)
+    from claude_sessions import claude_md, diffview
+    gui_api._install_bridge()
+
+    seen = {}
+
+    def spy(job, title, old, new, diff):
+        seen[title] = diff          # never parks: the shape is what is under test
+        return True
+
+    monkeypatch.setattr(gui_api, '_gate', spy)
+    job = {'gate': None, 'decision': None, 'status': 'running',
+           'decision_evt': threading.Event(), 'messages': []}
+    monkeypatch.setattr(gui_api._JOBCTX, 'job', job, raising=False)
+    try:
+        diffview.confirm('a\n', 'b\n', 'DV')
+        claude_md._pager_confirm('PAGER', 'line one\nline two\n')
+    finally:
+        gui_api._JOBCTX.job = None
+
+    assert set(seen) == {'DV', 'PAGER'}
+    for title, diff in seen.items():
+        assert isinstance(diff, list), title
+        assert all(isinstance(l, str) for l in diff), title
+    assert seen['PAGER'] == ['line one', 'line two']

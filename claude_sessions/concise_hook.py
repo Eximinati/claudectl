@@ -7,6 +7,11 @@ tokens. Shell-agnostic; never errors.
 import sys
 import json
 
+# Claude Code captures stdout as a PIPE, so CPython picks the locale
+# codepage (cp1252 on Windows) and any non-ASCII character in the payload
+# either mojibakes or raises — silently losing the whole hook output.
+sys.stdout.reconfigure(encoding='utf-8')
+
 _RULE = (
     "Concise output (claudectl): answer directly — no preamble, no narration of "
     "what you are about to do, no recap of what you just did. Never re-print "

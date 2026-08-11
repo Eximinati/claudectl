@@ -129,7 +129,9 @@ def edit_plan(plan, action, index=None, text=''):
     n = len(steps)
     if not si:
         raise ValueError('No numbered steps found in plan')
-    if index is not None and (index < 0 or index > n or (action != 'insert' and index >= n)):
+    # `index is None` used to skip validation entirely and then raise TypeError
+    # from the indexing below — every action needs an int.
+    if index is None or index < 0 or index > n or (action != 'insert' and index >= n):
         raise ValueError(f'Step index {index} out of range (0-{n - 1})')
 
     if action == 'edit':

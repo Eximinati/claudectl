@@ -2,6 +2,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from harness import Sandbox, run_flow, typed, ENTER, ESC
@@ -610,3 +612,12 @@ def test_plan_timeout_default_and_settings_override(monkeypatch):
     assert plan_execute._plan_timeout() == 123
     monkeypatch.setattr(_c, 'load_settings', lambda: {})
     assert plan_execute._plan_timeout() == plan_execute._PLAN_TIMEOUT == 900
+
+
+def test_edit_plan_rejects_a_missing_index():
+    """`index is None` skipped the range check and then raised TypeError from the
+    indexing below — every action needs an int, and the caller only catches
+    ValueError."""
+    for action in ('edit', 'delete', 'insert', 'move'):
+        with pytest.raises(ValueError):
+            plan_execute.edit_plan(_PLAN_3, action, index=None, text='x')

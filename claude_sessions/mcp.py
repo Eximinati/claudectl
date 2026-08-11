@@ -21,7 +21,8 @@ def get_mcp_status():
     try:
         r = subprocess.run(
                 [claude_exe, 'mcp', 'list'],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True,
+                encoding='utf-8', errors='ignore', timeout=10,
                 stdin=subprocess.DEVNULL,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
@@ -31,15 +32,30 @@ def get_mcp_status():
             line = line.strip()
             if not line or line.lower().startswith('checking'):
                 continue
+            if ':' not in line:
+                continue
+            name = line.split(':')[0].strip().replace('claude.ai ', '')
             if '✔' in line or 'Connected' in line:
-                name = line.split(':')[0].strip().replace('claude.ai ', '')
                 servers.append((name, 'ok'))
             elif '!' in line or 'auth' in line.lower():
-                name = line.split(':')[0].strip().replace('claude.ai ', '')
                 servers.append((name, 'auth'))
+            else:
+                # A failed/timed-out server used to match neither branch and
+                # vanish from the list entirely — the one state the user most
+                # needs to see.
+                servers.append((name, 'fail'))
         return servers
     except Exception:
         return []
+
+
+def _status_icon(status):
+    if status == 'ok':
+        return f'{_c.C_OK}✔{_c.C_RESET}'
+    if status == 'fail':
+        return f'{_c.C_ERR}✘{_c.C_RESET}'
+    return f'{_c.C_WARN}!{_c.C_RESET}'
+
 
 mcp_servers = []
 _mcp_ready = False
@@ -119,7 +135,7 @@ def global_claude_md_menu():
     from . import config as _c
     mcp_items = []
     for name, status in mcp_servers:
-        icon = f'{_c.C_OK}✔{_c.C_RESET}' if status == 'ok' else f'{_c.C_WARN}!{_c.C_RESET}'
+        icon = _status_icon(status)
         mcp_items.append((f"{icon}  {name}", f'mcp:{name}'))
     mcp_items += [(f"{'─' * W}", None), ('📝  Edit global CLAUDE.md in editor', '__edit__')]
 
@@ -186,7 +202,7 @@ def mcp_manager_menu():
         servers = _list_servers()
         items = []
         for name, status in servers:
-            icon = f'{_c.C_OK}✔{_c.C_RESET}' if status == 'ok' else f'{_c.C_WARN}!{_c.C_RESET}'
+            icon = _status_icon(status)
             items.append((f"{icon}  {name}", f'srv:{name}'))
         if not servers:
             items.append((f"{_c.C_DIM}(no MCP servers configured){_c.C_RESET}", None))

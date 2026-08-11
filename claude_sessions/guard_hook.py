@@ -12,6 +12,13 @@ import sys
 import json
 import re
 
+# Claude Code captures our streams as pipes, so CPython picks the locale
+# codepage (cp1252 on Windows). Without this, one non-ASCII character in the
+# user's own block message raised on the write below, escaped past `return 2`,
+# and the fail-safe at the bottom converted a BLOCK into a silent ALLOW.
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 
 def main():
     if len(sys.argv) < 3:
@@ -29,10 +36,14 @@ def main():
         hit = re.search(pattern, val)
     except re.error:
         return 0
-    if hit:
+    if not hit:
+        return 0
+    # The decision is already made; explaining it must never be able to undo it.
+    try:
         sys.stderr.write('claudectl: ' + msg + '\n')
-        return 2
-    return 0
+    except Exception:
+        pass
+    return 2
 
 
 if __name__ == '__main__':
