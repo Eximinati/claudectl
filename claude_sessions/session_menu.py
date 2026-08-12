@@ -12,6 +12,50 @@ from .claude_md import scaffold_claude_md, ai_scaffold_claude_md
 from .system_prompt import edit_system_prompt
 
 
+#: Every action this screen offers, and the GUI route that does the same thing.
+#:
+#: Hoisted out of the render loop so parity can be ASSERTED rather than
+#: reviewed. `tests/test_gui_parity.py` walks this table and fails when an
+#: entry names no counterpart — drift has happened in both directions, and a
+#: hint string buried in a render call is not something a test can enumerate.
+#:
+#: (key, label, scope, route). A route of '' means the action is terminal-only
+#: BY DESIGN, and the reason belongs next to it.
+ACTIONS = [
+    ('v', 'view', 'session', '/api/transcript'),
+    ('r', 'rename', 'session', '/api/rename'),
+    ('f', 'fork', 'session', '/api/launch'),          # choice='fork:<sid>'
+    ('t', 'tag', 'session', '/api/session/tags'),
+    ('d', 'archive', 'session', '/api/session/archive'),
+    ('e', 'export', 'session', '/api/session/export'),
+    ('i', 'info', 'session', '/api/session/meta'),
+    ('F', 'files', 'session', '/api/session/changed-files'),
+    ('A', 'archived', 'session', '/api/session/archived'),
+    ('m', 'memory', 'project', '/api/memory/state'),
+    ('g', 'agents', 'project', '/api/agents/session'),
+    ('n', 'graph', 'project', '/api/graph-lite'),
+    ('X', 'plan→exec', 'project', '/api/job'),
+    ('R', 'review', 'project', '/api/job'),
+    ('a', 'ai-analyze', 'project', '/api/job'),
+    ('c', 'claude.md', 'project', '/api/claude-md'),
+    ('s', 'sys-prompt', 'project', '/api/system-prompt'),
+    ('u', 'usage', 'project', '/api/usage/project'),
+    ('w', 'status', 'project', '/api/workspace-status'),
+    ('K', 'inject context', 'project', '/api/inject/sessions'),
+    ('W', 'ctx audit', 'project', '/api/ctxaudit'),
+]
+
+#: actions reachable only from the archived view
+ARCHIVED_ACTIONS = [
+    ('d', 'restore/delete', 'session', '/api/session/restore'),
+]
+
+
+def _hints(scope):
+    return [(('⇧' + k) if k.isupper() else k, label)
+            for k, label, sc, _r in ACTIONS if sc == scope]
+
+
 def _sid_of(val):
     """Extract session id from a row value, or None for non-session rows."""
     if not val:
@@ -321,15 +365,8 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path, extra_ac
             frame.append(render.hint_keys([('d', 'restore/delete'), ('⇧A', 'back to sessions'),
                                             ('ESC', 'back')]))
         else:
-            frame.append(render.hint_keys([
-                ('v', 'view'), ('r', 'rename'), ('f', 'fork'),
-                ('t', 'tag'), ('d', 'archive'), ('e', 'export'), ('i', 'info'),
-                ('⇧F', 'files'), ('⇧A', 'archived')], prefix='session:'))
-            frame.append(render.hint_keys([
-                ('m', 'memory'), ('g', 'agents'), ('n', 'graph'), ('⇧X', 'plan→exec'),
-                ('⇧R', 'review'), ('a', 'ai-analyze'), ('c', 'claude.md'), ('s', 'sys-prompt'),
-                ('u', 'usage'), ('w', 'status'), ('⇧K', 'inject context'),
-                ('⇧W', 'ctx audit')], prefix='project:'))
+            frame.append(render.hint_keys(_hints('session'), prefix='session:'))
+            frame.append(render.hint_keys(_hints('project'), prefix='project:'))
             frame.append(render.hint_bar(
                 f"{C_DIM}/ all actions · ? help · ⇧ = Shift (capital){C_RESET}"))
         render.render_frame(frame)

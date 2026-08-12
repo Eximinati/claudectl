@@ -1697,6 +1697,11 @@ async function drawProjUsage(){
 /* tools tab */
 function drawTools(){
   paintNow(`
+    <div class="card"><h3>${ic('check')} Project health</h3>
+      <p style="color:var(--dim);font-size:13px;margin-bottom:10px">The checks the TUI's workspace screen runs — they had no GUI trace at all.</p>
+      <div id="hOut"><span class="spin"></span></div></div>
+    <div class="card"><h3>${ic('ai')} What to work on</h3>
+      <div id="bOut"><span class="spin"></span></div></div>
     <div class="card"><h3>${ic('inject')} New chat with injected context</h3>
       <p style="color:var(--dim);font-size:13px;margin-bottom:10px">Start a new session seeded with another session's transcript — from any account, into any account.</p>
       <button class="btn" onclick="injectFlow()">Choose source session…</button></div>
@@ -1714,6 +1719,28 @@ function drawTools(){
   drawAgentPicker();
   api('/api/extra-paths?'+qs(C())).then(d=>dirRows('xpaths',d.paths||[]));
   api('/api/add-dirs?'+qs(C())).then(d=>dirRows('xdirs',d.dirs||[]));
+  api('/api/health?'+qs(C())).then(d=>{const h=$('#hOut');if(!h)return;
+    const iss=(d.issues||[]),bash=(d.bash||[]);
+    h.innerHTML=(iss.length
+      ?iss.map(i=>`<div class="lrow"><span class="tag ${i.severity==='warn'?'warn':''}">${esc(i.severity)}</span>
+          <div><b>${esc(i.message)}</b><div style="color:var(--dim);font-size:12px">${esc(i.hint||'')}</div></div></div>`).join('')
+      :'<div class="empty">No issues found.</div>')
+      +(bash.length?`<h3 style="margin-top:14px">Most-run commands</h3>
+        <div style="color:var(--dim);font-size:13px;margin-bottom:8px">Allowlist candidates, taken from what this project actually ran.</div>
+        <div style="font:12px Consolas,monospace">${bash.map(b=>esc(b.command)+' ×'+b.count).join(' · ')}</div>
+        <div class="mrow"><button class="btn sm" onclick="allowlistApply()">Add to permissions</button></div>`:'');});
+  api('/api/brief?'+qs(C())).then(d=>{const b=$('#bOut');if(!b)return;
+    const sug=(d.suggestions||[]),since=(d.since_last||[]);
+    b.innerHTML=(sug.length
+      ?sug.map(s=>`<div class="lrow"><span class="tag">${esc(s.tag)}</span><div>${esc(s.text)}</div></div>`).join('')
+      :'<div class="empty">Nothing to suggest yet.</div>')
+      +(since.length?`<h3 style="margin-top:14px">Since your last session</h3>
+        <div style="font:12px Consolas,monospace;white-space:pre-wrap">${esc(since.join('\n'))}</div>`:'');});
+}
+async function allowlistApply(){
+  const r=await post('/api/health/allowlist',C());
+  toast(r.ok?`Added ${r.added} rule(s)`:(r.error||'Failed'),r.ok?'ok':'err');
+  drawTools();
 }
 /* one input row per directory */
 function _dirRow(v){return `<div class="lrow"><input value="${esc(v)}" placeholder="C:\\path\\to\\dir">

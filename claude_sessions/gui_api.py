@@ -532,9 +532,15 @@ def call(fn, q=None, body=None):
         raise
 
 
-#: names that only ever come off the wire
-_REQUEST_PARAMS = frozenset(
-    ('enc', 'sid', 'cfgdir', 'path', 'action', 'kind', 'name', 'id'))
+#: Names that only ever come off the wire, so a KeyError naming one is the
+#: caller's fault. Kept explicit rather than "any KeyError": an internal one is
+#: a real fault and must stay a 500. The list was short by five, which the
+#: endpoint floor found as five separate 500s.
+_REQUEST_PARAMS = frozenset((
+    'enc', 'sid', 'cfgdir', 'path', 'action', 'kind', 'name', 'id',
+    'dir', 'file', 'key', 'event', 'scope', 'text', 'value', 'model', 'task',
+    'url', 'query', 'q',
+))
 
 
 # ── sessions & transcript ────────────────────────────────────
@@ -1028,6 +1034,51 @@ def api_agents_session(q, body):
         save_session_agents(folder, '__project__', refs)
     n = sync_project_agents(body['path'], refs)
     return {'ok': True, 'active': n}
+
+
+def api_health(q, body):
+    """Project health — 229 lines of checks that were a README headline and had
+    no GUI trace at all. Also the permission-allowlist proposal, which is
+    derived from what this project's transcripts actually ran."""
+    from . import health
+    folder = _folder(q.get('cfgdir'), q['enc']) if q.get('enc') else None
+    issues = health.check_project(q['path'], folder)
+    return {'issues': [{'severity': s, 'message': m, 'hint': h}
+                       for s, m, h in issues],
+            'bash': [{'command': c, 'count': n}
+                     for c, n in health.frequent_bash_commands(folder)]}
+
+
+def api_health_allowlist(q, body):
+    from . import health
+    folder = _folder(body.get('cfgdir'), body['enc']) if body.get('enc') else None
+    n, err = health.propose_allowlist(body['path'], folder)
+    if err:
+        raise BadRequest(err)
+    return {'ok': True, 'added': n}
+
+
+def api_brief(q, body):
+    """What to work on, and what changed since the last session."""
+    from . import brief
+    folder = _folder(q.get('cfgdir'), q['enc']) if q.get('enc') else None
+    return {'suggestions': [{'tag': t, 'text': x}
+                            for t, x in brief.work_suggestions(q['path'], folder)],
+            'since_last': brief.session_diff(q['path'], folder)}
+
+
+def api_conventions(q, body):
+    """Conventions shared across projects, and the global CLAUDE.md block they
+    would become."""
+    from . import conventions
+    return {'conventions': conventions.collect_conventions(),
+            'block': conventions.build_block()}
+
+
+def api_conventions_sync(q, body):
+    from . import conventions
+    ok = conventions.sync_to_global()
+    return {'ok': bool(ok)}
 
 
 # ── Claude Code's own client state ───────────────────────────
@@ -2328,6 +2379,9 @@ GET_ROUTES = {
     '/api/add-dirs': api_add_dirs_get,
     '/api/path-complete': api_path_complete,
     '/api/inject/sessions': api_inject_sessions,
+    '/api/health': api_health,
+    '/api/brief': api_brief,
+    '/api/conventions': api_conventions,
     '/api/cc-settings': api_cc_settings_get,
     '/api/client/usage': api_client_usage,
     '/api/client/project': api_client_project,
@@ -2380,6 +2434,8 @@ POST_ROUTES = {
     '/api/extra-paths': api_extra_paths_set,
     '/api/add-dirs': api_add_dirs_set,
     '/api/open-path': api_open_path,
+    '/api/health/allowlist': api_health_allowlist,
+    '/api/conventions/sync': api_conventions_sync,
     '/api/cc-settings': api_cc_settings_set,
     '/api/disk/gc': api_disk_gc,
     '/api/loop-md': api_loop_md_set,
