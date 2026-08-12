@@ -99,3 +99,59 @@ def test_statusline_via_the_console_script_path_stays_light():
                        cwd=ROOT)
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == 'False False', r.stdout
+
+
+def _docs():
+    for rel in ('README.md', os.path.join('plugin', 'README.md')):
+        p = os.path.join(ROOT, rel)
+        if os.path.isfile(p):
+            yield rel, open(p, encoding='utf-8').read()
+
+
+def test_no_document_advertises_an_install_that_does_not_exist():
+    """The README told people to `pipx install claudectl`. The name is not on
+    PyPI — that command 404s — so the very first instruction a new visitor
+    followed was the one that failed.
+
+    Any line proposing it must be the line explaining that it does NOT work.
+    """
+    import re
+    bad = []
+    for rel, text in _docs():
+        for i, line in enumerate(text.splitlines(), 1):
+            if not re.search(r'\b(pip|pipx)\s+install\s+claudectl\b', line):
+                continue
+            if re.search(r'not (on PyPI|published)|both fail|404|will not', line):
+                continue                     # the caveat itself
+            bad.append('%s:%d %s' % (rel, i, line.strip()[:70]))
+    assert not bad, 'documents an install that 404s: %s' % bad
+
+
+def test_the_working_install_is_the_one_shown_first():
+    """Whatever else it says, the quickstart has to be runnable as written."""
+    text = open(os.path.join(ROOT, 'README.md'), encoding='utf-8').read()
+    quick = text[text.index('## Quickstart'):]
+    quick = quick[:quick.index('\n## ')]
+    assert 'git clone' in quick
+    assert 'claude-sessions.py' in quick, 'the quickstart never runs anything'
+
+
+def test_every_image_the_readme_shows_actually_exists():
+    """A README is the first thing anyone sees, and a broken image is the
+    loudest possible way to look unmaintained. The screenshots are generated
+    (tools/shot_gui.py --docs, tools/shot_tui.py), so a renamed capture is an
+    easy way to lose one."""
+    import re
+    text = open(os.path.join(ROOT, 'README.md'), encoding='utf-8').read()
+    missing = [src for src in re.findall(r'src="([^"]+)"', text)
+               if not src.startswith('http')
+               and not os.path.isfile(os.path.join(ROOT, src.replace('/', os.sep)))]
+    assert not missing, 'README references missing images: %s' % missing
+
+
+def test_the_readme_shows_both_interfaces():
+    """It ships a TUI and a GUI; someone opening the repo should see both
+    without reading a word."""
+    text = open(os.path.join(ROOT, 'README.md'), encoding='utf-8').read()
+    assert 'docs/img/tui-' in text, 'no TUI screenshot'
+    assert text.count('docs/img/gui-') >= 4, 'barely any GUI screenshots'

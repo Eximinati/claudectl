@@ -30,15 +30,15 @@ from claude_sessions import config as _TH_CFG    # noqa: E402
 PORT = 8793
 
 STATE = {
-    'projects': [{'name': 'Claude', 'path': 'D:\\Claude', 'encoded': 'd--claude',
-                  'accounts': ['default', 'work'], 'primary_cfgdir': '',
+    'projects': [{'name': 'acme-api', 'path': '/demo/acme-api', 'encoded': 'demo-acme-api',
+                  'accounts': ['default', 'teamA'], 'primary_cfgdir': '',
                   'auto_memory': True, 'last_active': '2m'},
-                 {'name': 'Other', 'path': 'D:\\Other', 'encoded': 'o',
-                  'accounts': ['work'], 'primary_cfgdir': 'w',
+                 {'name': 'acme-web', 'path': '/demo/acme-web', 'encoded': 'demo-acme-web',
+                  'accounts': ['teamA'], 'primary_cfgdir': 'w',
                   'auto_memory': False, 'last_active': '1d'}],
     'accounts': [{'name': 'default', 'dir': '', 'active': True},
-                 {'name': 'work', 'dir': 'w', 'active': False}],
-    'recent': [{'project': 'Claude', 'path': 'D:\\Claude', 'encoded': 'd--claude',
+                 {'name': 'teamA', 'dir': 'w', 'active': False}],
+    'recent': [{'project': 'acme-api', 'path': '/demo/acme-api', 'encoded': 'demo-acme-api',
                 'sid': 's1', 'name': 'a session', 'age': '2m', 'cfgdir': ''}],
     'options': {'efforts': ['default', 'high'], 'models': ['opus', 'sonnet'],
                 'model_labels': ['Opus', 'Sonnet'], 'perms': ['default'],
@@ -75,8 +75,8 @@ DASH = {
     'hours': [0, 1, 0, 3, 2, 0, 0, 0, 1, 0, 0, 0, 0, 2, 4, 1, 0, 0, 0, 0, 1, 0, 0, 2],
     'mcp': [{'name': 'ide', 'running': True}, {'name': 'asana', 'running': False}],
     'failover': {'running': True, 'port': 20129},
-    'recent': [{'project': 'Claude', 'title': 'a session', 'msgs': 12, 'sid': 's1',
-                'age': '2m', 'path': 'D:\\Claude', 'encoded': 'd--claude',
+    'recent': [{'project': 'acme-api', 'title': 'a session', 'msgs': 12, 'sid': 's1',
+                'age': '2m', 'path': '/demo/acme-api', 'encoded': 'demo-acme-api',
                 'cfgdir': '', 'account': 'default', 'omni': True}],
     'breakdown': {
         'days': [{'date': '2026-08-%02d' % (i + 1), 'tokens': 100000 + i * 9000,
@@ -84,21 +84,21 @@ DASH = {
                   'accounts': {'default': 100000 + i * 9000}} for i in range(14)],
         'accounts': [{'account': 'default'}],
         'projects': [
-            {'name': 'Claude', 'enc': 'd--claude', 'tokens': 900000, 'cost': 4.2,
-             'age': '2m', 'mtime': _NOW, 'accounts': ['default', 'work'],
+            {'name': 'acme-api', 'enc': 'demo-acme-api', 'tokens': 900000, 'cost': 4.2,
+             'age': '2m', 'mtime': _NOW, 'accounts': ['default', 'teamA'],
              'omni': True, 'sparkline': [1, 4, 2, 7, 3, 9, 5]},
-            {'name': 'Other', 'enc': 'o', 'tokens': 300000, 'cost': 1.1,
-             'age': '1d', 'mtime': _NOW - 90000, 'accounts': ['work'],
+            {'name': 'acme-web', 'enc': 'demo-acme-web', 'tokens': 300000, 'cost': 1.1,
+             'age': '1d', 'mtime': _NOW - 90000, 'accounts': ['teamA'],
              'sparkline': [2, 1, 3]}],
         'totals': {'omni_tokens': 120000, 'omni_saved': 7.5}},
 }
-PLAN = {'accounts': [{'account': 'default', 'email': 'me@x.ai', 'plan': 'max',
+PLAN = {'accounts': [{'account': 'default', 'email': 'demo@example.com', 'plan': 'max',
                       'status': 'ok',
                       'windows': [{'label': 'session', 'pct': 62, 'resets': 'in 3h'},
                                   {'label': 'weekly', 'pct': 88, 'resets': 'Fri'}]}]}
 ROUTES = {
     '/api/state': STATE, '/api/dashboard': DASH, '/api/usage/plan': PLAN,
-    '/api/memory/active': {'active': ['D:\\Claude']},
+    '/api/memory/active': {'active': ['/demo/acme-api']},
     '/api/search-index': {'rows': []},
     '/api/mcp': {'servers': [{'name': 'ide', 'status': 'ok'},
                              {'name': 'asana', 'status': 'down'}]},
@@ -108,7 +108,7 @@ ROUTES = {
     '/api/usage/projects': {'projects': []},
     '/api/accounts': {'accounts': [
         {'name': 'default', 'resolved': '~/.claude', 'active': True, 'dir': ''},
-        {'name': 'work', 'resolved': '~/.claude-work', 'active': False, 'dir': 'w'}]},
+        {'name': 'teamA', 'resolved': '~/.claude-teamA', 'active': False, 'dir': 'w'}]},
     # Claude Code's own state. Stubbed with CONTENT, not empties: the settings
     # editor is a grid whose column count comes from the account list, and an
     # empty one renders nothing for the overflow audit to look at.
@@ -127,7 +127,7 @@ ROUTES = {
                      'oldest_days': 120},
                     {'name': 'file-history', 'bytes': 72_000_000, 'files': 2253,
                      'oldest_days': 90}]},
-        {'account': 'work', 'dir': '~/.claude-work', 'bytes': 127_000_000,
+        {'account': 'teamA', 'dir': '~/.claude-teamA', 'bytes': 127_000_000,
          'stores': [{'name': 'projects', 'bytes': 115_000_000, 'files': 69,
                      'oldest_days': 40}]}]},
     '/api/cc-settings': {
@@ -150,10 +150,62 @@ ROUTES = {
         'accounts': [
             {'name': 'default', 'dir': '~/.claude',
              'values': {'effortLevel': 'high', 'model': 'claude-sonnet-5'}},
-            {'name': 'work', 'dir': '~/.claude-work',
+            {'name': 'teamA', 'dir': '~/.claude-teamA',
              'values': {'effortLevel': 'max'}}]},
     '/api/prompt-history': {'prompts': [
-        {'text': 'fix the parser', 'project': 'D:/Claude', 'sid': 's1', 'ts': 1}]},
+        {'text': 'fix the parser', 'project': '/demo/acme-api', 'sid': 's1', 'ts': 1}]},
+    # A workspace with no sessions in it screenshots as an advert for nothing,
+    # and the session list is the first thing the app is for.
+    '/api/sessions': {'sessions': [
+        {'sid': 'a1b2c3d4', 'title': 'retry storm on the payments upstream',
+         'preview': 'the gateway retried every 200ms and stampeded',
+         'age': '12m', 'mtime': _NOW - 720, 'count': 84, 'account': 'default',
+         'cfgdir': '', 'tokens': '412k', 'omni': False},
+        {'sid': 'b2c3d4e5', 'title': 'move invoice totals to integer cents',
+         'preview': 'a float total drifted by a cent across the rollup',
+         'age': '3h', 'mtime': _NOW - 10800, 'count': 61, 'account': 'default',
+         'cfgdir': '', 'tokens': '288k', 'omni': False},
+        {'sid': 'c3d4e5f6', 'title': 'split the checkout handler',
+         'preview': 'one function did validation, pricing and dispatch',
+         'age': '1d', 'mtime': _NOW - 86400, 'count': 137, 'account': 'teamA',
+         'cfgdir': 'w', 'tokens': '910k', 'omni': True},
+        {'sid': 'd4e5f6a7', 'title': 'add the migration gate to deploy',
+         'preview': 'a deploy went out ahead of its schema change',
+         'age': '2d', 'mtime': _NOW - 172800, 'count': 42, 'account': 'default',
+         'cfgdir': '', 'tokens': '156k', 'omni': False},
+        {'sid': 'e5f6a7b8', 'title': 'cache the search index warm-up',
+         'preview': 'cold start took 9s on every deploy',
+         'age': '4d', 'mtime': _NOW - 345600, 'count': 25, 'account': 'teamA',
+         'cfgdir': 'w', 'tokens': '77k', 'omni': True}]},
+    # The memory tab is the headline feature, so the demo workspace has a
+    # memory: an empty one screenshots as an advert for nothing.
+    '/api/memory/state': {
+        'generated_at': '2026-08-12T09:15:00Z',
+        'n_entities': 148, 'n_lessons': 9, 'n_pending': 2, 'n_unscanned': 1,
+        'hook_on': True, 'rules_on': True,
+        'est': {'coverage': 82, 'modules': 11, 'tokens': 232, 'budget': 250}},
+    '/api/lessons': {'lessons': [
+        {'id': 'l1', 'status': 'approved', 'confidence': 0.9,
+         'name': 'Retries need a jittered backoff',
+         'summary': 'The gateway retried on a fixed 200ms and stampeded the '
+                    'upstream; every retry path takes jitter now.'},
+        {'id': 'l2', 'status': 'pinned', 'confidence': 0.8,
+         'name': 'Money is integer cents, never float',
+         'summary': 'A float total drifted by a cent across the invoice '
+                    'rollup; the ledger is integer cents end to end.'},
+        {'id': 'l3', 'status': 'pending', 'confidence': 0.6,
+         'name': 'Migrations run before the deploy gate',
+         'summary': 'Observed twice: a deploy went out ahead of its schema '
+                    'change and the API 500d until the migration landed.'}]},
+    '/api/worklog': {'on': True, 'installed': True, 'entries': [
+        {'when': '2h', 'summary': 'split the checkout handler, added retries',
+         'files': ['api/checkout.py', 'api/retry.py']},
+        {'when': '1d', 'summary': 'moved totals to integer cents',
+         'files': ['billing/ledger.py']}]},
+    '/api/workspace-status': {'score': 86, 'label': 'healthy', 'lines': [
+        'memory 2h old · 148 entities · 11 modules',
+        'CLAUDE.md 232 tok of a 250 budget',
+        'git: main · clean']},
     '/api/agents': {'categories': []}, '/api/skills': {'project': [], 'templates': []},
     '/api/hooks': {'hooks': [], 'templates': []},
     '/api/omniroute/status': {'ok': False}, '/api/failover/status': {'running': False},
@@ -178,7 +230,7 @@ ROUTES = {
              {'path': 'D:/wt-a', 'name': 'wt-a', 'branch': 'feat', 'head': 'def',
               'main': False, 'dirty': 1, 'ahead': 2, 'behind': 0,
               'session': {'sid': 'deadbeef', 'title': 'refactor',
-                          'account': 'work', 'msgs': 12, 'age': 30,
+                          'account': 'teamA', 'msgs': 12, 'age': 30,
                           'live': True}}],
          'children': [
              {'path': 'D:/repos/ws/core', 'name': 'core', 'kind': 'submodule',
@@ -328,11 +380,11 @@ def main():
         check('activity says idle when nothing is live', 'idle' in foot, foot)
         pg.evaluate("""refreshDashboard.__t = 1;
           (function(){ const d = window.__DASH || {};
-            d.live = {total:3, by_account:{personal:2, Lorenzo:1}};
+            d.live = {total:3, by_account:{teamA:2, teamB:1}};
             d.hours = [0,1,0,3,2,0,0,0,1,0,0,0,0,2,4,1,0,0,0,0,1,0,0,2];
             window.__DASH = d; })()""")
         live = pg.evaluate("""(()=>{
-          const d={live:{total:3,by_account:{personal:2,Lorenzo:1}},
+          const d={live:{total:3,by_account:{teamA:2,teamB:1}},
                    hours:[0,1,0,3,2,0,0,0,1,0,0,0,0,2,4,1,0,0,0,0,1,0,0,2],
                    jobs:[],today:{sessions:9}};
           const live=d.live, nlive=live.total, jobs=0, sess=9;
@@ -340,7 +392,7 @@ def main():
             .sort((a,b)=>b[1]-a[1]).map(([n,c])=>n+(c>1?' '+c:'')).join(' · ');
           return nlive+'|'+byAcct;})()""")
         check('and names every account when they are',
-              live == '3|personal 2 · Lorenzo', live)
+              live == '3|teamA 2 · teamB', live)
         print('\n— the background stage —')
         vend = pg.evaluate("[!!window.THREE, !!window.ANI, !!window.THREE_POST]")
         check('vendored three/anime/postprocessing loaded', vend == [True, True, True], vend)

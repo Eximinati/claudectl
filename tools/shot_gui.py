@@ -24,26 +24,30 @@ sg = importlib.util.module_from_spec(_spec)
 sg.__name__ = 'sg'
 _spec.loader.exec_module(sg)
 
-OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(_ROOT, 'references')
+#: a positional argument overrides the scratch directory; flags are not it
+_ARGS = [a for a in sys.argv[1:] if not a.startswith('-')]
+OUT = _ARGS[0] if _ARGS else os.path.join(_ROOT, 'references')
 PORT = 8801
 
 # a workspace the size of a real one: 13 projects, 10 MCP servers, 3 accounts.
 # Small stub data hides exactly the bugs that matter — an oversized gauge looks
 # fine next to two projects and breaks the card next to thirteen.
 _N = time.time()
-_PROJ = [('Claude', 4199000, 'now', ['personal', 'Lorenzo']),
-         ('repos', 4562000, '12h', ['personal', 'Lorenzo']),
-         ('Documentation', 163000, '6h', ['default']),
-         ('Waste_management_model_2026', 48000, '8h', ['default']),
-         ('IKM-Drag-Drop', 91000, '1d', ['personal', 'Lorenzo']),
-         ('siglip2-finetune', 22000, '2d', ['default']),
-         ('swift_ft', 18000, '3d', ['default']),
-         ('proj8', 9000, '4d', ['personal']),
-         ('proj9', 7000, '5d', ['default']),
-         ('proj10', 5000, '6d', ['Lorenzo']),
-         ('proj11', 4000, '7d', ['default']),
-         ('proj12', 3000, '8d', ['personal']),
-         ('proj13', 2000, '9d', ['default'])]
+# Deliberately fictional. These fixtures feed the README screenshots, so
+# anything copied from a real workspace becomes a published project list.
+_PROJ = [('acme-api', 4199000, 'now', ['default', 'teamA']),
+         ('acme-web', 4562000, '12h', ['default', 'teamA']),
+         ('acme-docs', 163000, '6h', ['default']),
+         ('forecasting-model', 48000, '8h', ['default']),
+         ('checkout-service', 91000, '1d', ['default', 'teamA']),
+         ('vision-finetune', 22000, '2d', ['default']),
+         ('mobile-client', 18000, '3d', ['default']),
+         ('billing-worker', 9000, '4d', ['teamA']),
+         ('search-index', 7000, '5d', ['default']),
+         ('infra-terraform', 5000, '6d', ['teamB']),
+         ('design-system', 4000, '7d', ['default']),
+         ('data-pipeline', 3000, '8d', ['teamA']),
+         ('scratchpad', 2000, '9d', ['default'])]
 sg.DASH['breakdown']['projects'] = [
     {'name': n, 'enc': n.lower(), 'tokens': t, 'cost': t / 2e5, 'age': a,
      'mtime': _N - i * 4000, 'accounts': acc, 'omni': i % 3 == 0,
@@ -54,8 +58,8 @@ sg.ROUTES['/api/mcp'] = {'servers': [{'name': 'server-%d' % i,
                                       'status': 'ok' if i == 0 else 'down'}
                                      for i in range(10)]}
 _ACCTS = [('default', 87, '01:40', 59, 'Sun 09:00'),
-          ('personal', 82, '03:09', 57, 'Sat 08:59'),
-          ('Lorenzo', 45, '04:50', 48, 'Mon 02:00')]
+          ('teamA', 82, '03:09', 57, 'Sat 08:59'),
+          ('teamB', 45, '04:50', 48, 'Mon 02:00')]
 sg.PLAN['accounts'] = [
     {'account': n, 'email': n, 'plan': 'max', 'status': 'ok',
      'windows': [{'label': 'session', 'pct': sp, 'resets': sr},
@@ -64,7 +68,7 @@ sg.PLAN['accounts'] = [
 sg.STATE['accounts'] = [{'name': n, 'dir': n, 'active': n == 'default'}
                         for n, *_ in _ACCTS]
 sg.STATE['projects'] = [
-    {'name': p['name'], 'path': os.path.join('D:\\', p['name']),
+    {'name': p['name'], 'path': '/demo/' + p['name'],
      'encoded': p['enc'], 'accounts': p['accounts'], 'primary_cfgdir': '',
      'auto_memory': i < 2, 'last_active': p['age']}
     for i, p in enumerate(sg.DASH['breakdown']['projects'])]
@@ -187,7 +191,8 @@ def main():
         print(chr(10) + '— modal audit —')
         for name, opener in (
             ('launch', "askLaunch({title:'New session',sub:'Demo',isNew:true,"
-                       "path:'D:\\Claude',enc:'d--claude',choice:'new',cfgdir:''})"),
+                       "path:'/demo/acme-api',enc:'demo-acme-api',"
+                       "choice:'new',cfgdir:''})"),
             ('guide', "openGuide&&openGuide()"),
         ):
             try:
@@ -227,6 +232,17 @@ def main():
             audit_page(pg, page)
             if page in ('plugins', 'ostyles', 'client'):
                 pg.screenshot(path=os.path.join(OUT, f'_shot_{page}.png'))
+        # ── project tabs ──
+        # The page walk above only drives the GLOBAL pages; the project side is
+        # where most of the app lives, and it had never been captured.
+        print(chr(10) + '— project tabs —')
+        pg.evaluate("openProject(ST.projects[0])")
+        pg.wait_for_timeout(800)
+        for tab in ('sessions', 'memory', 'tools'):
+            pg.evaluate(f"TAB='{tab}';go('project')")
+            pg.wait_for_timeout(800)
+            audit_page(pg, 'tab ' + tab)
+            pg.screenshot(path=os.path.join(OUT, f'_shot_tab_{tab}.png'))
         pg.evaluate("go('home')")
         pg.wait_for_timeout(600)
 
@@ -260,6 +276,38 @@ def main():
     srv.shutdown()
     print('\nJS errors:', errs if errs else 'none')
     print('shots →', OUT)
+    if '--docs' in sys.argv:
+        export_docs()
+
+
+#: the captures the README uses. `references/` is gitignored — it holds
+#: third-party design material we cannot redistribute — so the handful of shots
+#: that ship are copied into a tracked directory deliberately, by name, rather
+#: than by publishing the whole scratch folder.
+DOC_SHOTS = {
+    '_shot_dash.png': 'gui-dashboard.png',
+    '_shot_tab_sessions.png': 'gui-sessions.png',
+    '_shot_tab_memory.png': 'gui-memory.png',
+    '_shot_client.png': 'gui-claude-code.png',
+    '_shot_usage.png': 'gui-usage.png',
+    '_skin_graph.png': 'gui-skin-graph.png',
+    '_skin_crt.png': 'gui-skin-crt.png',
+}
+
+
+def export_docs():
+    import shutil
+    dest = os.path.join(_ROOT, 'docs', 'img')
+    os.makedirs(dest, exist_ok=True)
+    n = 0
+    for src, name in DOC_SHOTS.items():
+        p = os.path.join(OUT, src)
+        if not os.path.isfile(p):
+            print('  MISSING', src)
+            continue
+        shutil.copyfile(p, os.path.join(dest, name))
+        n += 1
+    print('exported %d/%d shots → %s' % (n, len(DOC_SHOTS), dest))
 
 
 if __name__ == '__main__':

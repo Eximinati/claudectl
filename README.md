@@ -2,35 +2,130 @@
 
 <p align="center">
   <b>The workspace layer for Claude Code.</b><br>
-  Persistent project memory, an interactive architecture graph, MCP awareness, and per-project launch control — in a fast terminal UI or a native desktop GUI.
+  Your projects stop being a stream of chats and start being workspaces —
+  with memory, history, and per-project launch control.
 </p>
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-blue">
-  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078D6">
-  <img alt="Dependencies" src="https://img.shields.io/badge/python%20deps-zero%20(stdlib)-brightgreen">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-0078D6">
+  <img alt="Dependencies" src="https://img.shields.io/badge/runtime%20deps-zero%20(stdlib)-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-1310-brightgreen">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
   <img alt="Claude Code" src="https://img.shields.io/badge/for-Claude%20Code-8A5CF6">
 </p>
 
 <p align="center">
-  <img alt="Architecture graph" src="docs/graph-real.gif" width="820">
-  <br><sub>The live interactive architecture graph — rotating dodecahedron nodes, per-project bubbles, flowing dependency links (captured from the real HTML view).</sub>
+  <img alt="claudectl dashboard" src="docs/img/gui-dashboard.png" width="900">
 </p>
 
 ---
 
-Claude Code treats your work as a stream of chats. **claudectl treats each project as a persistent workspace** — sessions stay browsable and searchable, project context lives in maintained CLAUDE.md files, a Claude-built **semantic memory** layer feeds the agent real project knowledge, an interactive **architecture graph** shows how the codebase connects, MCP servers are visible at a glance, and every launch is configured per project. Switching projects stops feeling like losing the agent's memory.
+## What problem does this solve?
 
-**Why claudectl**
+Claude Code is excellent inside a session and forgetful between them. Every new
+session starts from nothing, your old sessions are hard to find, and the only
+way to give the agent context is a `CLAUDE.md` that grows until it costs more
+than it's worth.
 
-- 🧠 **Intelligent memory, not a memory dump** — nobody else does task-scoped, token-budgeted injection at the launcher: a micro-index always on (≤250 tok), per-module detail loaded only when Claude touches those files, and an optional per-prompt hook that injects just the subgraph relevant to what you asked.
+**claudectl sits in front of Claude Code and fixes that.** Pick a project, see
+every session you've ever had in it, and launch with the model, effort,
+permissions and context you meant. Underneath, it maintains a semantic memory
+of the codebase and injects only the part relevant to what you just asked.
+
+It is a terminal UI and a desktop GUI over the same engine — use whichever you
+prefer, they do the same things.
+
+## Quickstart
+
+> **Note** — claudectl is not on PyPI yet, so `pip install claudectl` will not
+> work. Clone and run; there is nothing to build and no dependencies to install.
+
+```bash
+git clone https://github.com/babarmuhammad/claudectl.git
+cd claudectl
+python claude-sessions.py          # terminal UI
+python claude-sessions.py --gui    # desktop GUI
+```
+
+Requires **Python 3.10+** and the
+[Claude Code CLI](https://docs.anthropic.com/claude-code) (auto-detected on
+PATH or at `~/.local/bin/`). No API key — it uses the Claude Code auth you
+already have. No third-party packages.
+
+On Windows you can double-click `Open Repo cmd.bat` instead.
+
+### Or use it from inside a session
+
+claudectl also ships as a Claude Code plugin — three commands and eight skills,
+without leaving the session:
+
+```
+/plugin marketplace add babarmuhammad/claudectl
+/plugin install claudectl@claudectl
+```
+
+| | |
+|---|---|
+| `/claudectl:recall <topic>` | This project's relevant memory, scored locally — no model call |
+| `/claudectl:status` | Memory age, repos and worktrees, health checks |
+| `/claudectl:review` | Review the current diff against this project's learned conventions |
+
+## What it looks like
+
+<table>
+<tr>
+<td width="50%"><img alt="Session browser" src="docs/img/gui-sessions.png"><br>
+<sub><b>Every session, every project.</b> Search, tag, fork, resume, archive,
+export — across multiple Claude accounts at once.</sub></td>
+<td width="50%"><img alt="Project memory" src="docs/img/gui-memory.png"><br>
+<sub><b>Memory Claude built about your code.</b> Entities, relations and
+lessons, with the token cost of every block shown before you spend it.</sub></td>
+</tr>
+<tr>
+<td><img alt="Usage" src="docs/img/gui-usage.png"><br>
+<sub><b>Where the tokens went.</b> Per day, per project, per account, per
+model — read from your own transcripts, not an API.</sub></td>
+<td><img alt="Claude Code's own state" src="docs/img/gui-claude-code.png"><br>
+<sub><b>Claude Code itself, made visible.</b> Which skills and plugins you
+actually use, what is on disk, and a typed editor for every account's
+settings.</sub></td>
+</tr>
+</table>
+
+The terminal UI is the same tool, keyboard-first:
+
+<p align="center">
+  <img alt="claudectl TUI — project picker" src="docs/img/tui-main.png" width="49%">
+  <img alt="claudectl TUI — sessions" src="docs/img/tui-sessions.png" width="49%">
+</p>
+
+<p align="center">
+  <img alt="Architecture graph" src="docs/graph-real.gif" width="820">
+  <br><sub><b>The architecture graph</b> — every module and its dependencies,
+  expandable down to single files (Python · C/C++ · C# · JS/TS).</sub>
+</p>
+
+<details>
+<summary><b>29 palettes, 7 skins, 4 themed worlds</b> — click to see two of them</summary>
+<br>
+<img alt="Graph world" src="docs/img/gui-skin-graph.png" width="49%">
+<img alt="CRT skin" src="docs/img/gui-skin-crt.png" width="49%">
+<br><sub>A skin changes the shape of the app, not just its colours — corner
+treatment, type scale, density, chassis and background scene.</sub>
+</details>
+
+---
+
+## Why claudectl
+
+- 🧠 **Intelligent memory, not a memory dump** — task-scoped, token-budgeted injection at the launcher: a micro-index always on (≤250 tok), per-module detail loaded only when Claude touches those files, and an optional per-prompt hook that injects just the subgraph relevant to what you asked.
 - 📚 **It learns from every session** — durable lessons (fixes, decisions, preferences) distilled from transcripts, human-reviewed, injected when relevant, decayed when stale.
-- 🕸️ **See your architecture** — an animated, expandable dependency graph (Python · C/C++ · C# · JS/TS) that opens at the project level and drills down to single files.
+- 🕸️ **See your architecture** — an animated, expandable dependency graph that opens at the project level and drills down to single files.
 - 🩺 **Auto-solves common Claude Code pain** — pre-launch health checks, context-loss insurance after `/compact`, permission-fatigue killer, token-burn advisor, daily usage tracking.
 - 🤖 **Adaptive agents** — the right subagents suggested (or auto-applied) per project from local signals.
-- 📦 **Workspace, not chats** — browse, search, tag, fork, resume, and archive every Claude Code session across every project.
-- ⚡ **Zero runtime dependencies** — pure Python standard library, Windows-native, uses your existing Claude Code auth (no extra API key).
+- 📦 **Workspace, not chats** — browse, search, tag, fork, resume and archive every Claude Code session across every project and account.
+- ⚡ **Zero runtime dependencies** — pure Python standard library; uses your existing Claude Code auth.
 
 ### How claudectl saves tokens
 
@@ -46,29 +141,13 @@ Without claudectl, a big project either starves the agent (no context) or floods
 
 ## Contents
 
-- [Features](#features)
-  - [Model failover](#model-failover--retry-a-dead-model-instead-of-hanging--settings--failover)
-  - [Status line](#status-line-claudectl-statusline)
-  - [Checkpoints](#checkpoints-sessions-menu)
-- [Install](#install)
-  - [Requirements](#requirements)
-  - [Setup](#setup)
-    - [TUI setup](#tui-setup)
-    - [GUI setup](#gui-setup)
-  - [Installing the agent library](#installing-the-agent-library)
-- [Usage](#usage)
-  - [Main screen](#main-screen)
-  - [Built-in screens](#built-in-screens)
-  - [Key bindings](#key-bindings)
-  - [Command line](#command-line)
-- [Reference](#reference)
-  - [Per-project files](#per-project-files)
-  - [Workspace status](#workspace-status)
-  - [CLAUDE.md auto-generation](#claudemd-auto-generation)
-  - [Global CLAUDE.md](#global-claudemd)
-  - [Session encoding](#session-encoding)
-  - [File layout](#file-layout)
-- [Troubleshooting](#troubleshooting)
+| | |
+|---|---|
+| [Features](#features) | everything it does, grouped |
+| [Install](#install) | full setup, GUI shell options, desktop shortcut |
+| [Usage](#usage) | screens, key bindings, command line |
+| [Reference](#reference) | file layout, per-project files, session encoding |
+| [Troubleshooting](#troubleshooting) | when something is not where you expect |
 
 ---
 
@@ -312,30 +391,35 @@ Everything above, as a native desktop app — full feature parity with the TUI, 
 
 - Python 3.10+
 - Windows, macOS or Linux
-- [Claude Code CLI](https://docs.anthropic.com/claude-code) installed (auto-detected at `%USERPROFILE%\.local\bin\claude.exe` or on PATH; overridable in Settings)
-- Any text editor — Notepad++ / VS Code are auto-detected, Windows Notepad is the fallback (overridable in Settings)
+- [Claude Code CLI](https://docs.anthropic.com/claude-code) installed (auto-detected at `~/.local/bin/` or on PATH; overridable in Settings)
+- Any text editor — Notepad++ / VS Code / `$EDITOR` are auto-detected (overridable in Settings)
 
 ### Setup
 
-#### TUI setup
-
-**Option A — pipx (recommended)**
-
-```
-pipx install claudectl
-claudectl
-```
-
-That's it — `claudectl` launches the session browser and starts Claude directly.
-
-**Option B — clone and run**
+#### Clone and run
 
 ```
 git clone https://github.com/babarmuhammad/claudectl.git
 cd claudectl
+python claude-sessions.py
 ```
 
-Double-click `Open Repo cmd.bat` (or run it from a terminal).
+There is nothing to build and no dependencies to install. On Windows you can
+double-click `Open Repo cmd.bat` instead of using a terminal.
+
+#### Installing it as a command
+
+**claudectl is not published on PyPI yet** — `pip install claudectl` and
+`pipx install claudectl` both fail with a 404. To get a `claudectl` command on
+your PATH today, install this checkout:
+
+```
+pip install -e .        # or: pipx install .
+claudectl
+```
+
+That gives you `claudectl`, `claudectl --gui`, `claudectl review`,
+`claudectl recall "<topic>"` and `claudectl statusline` from anywhere.
 
 #### Inside a Claude Code session
 
@@ -369,8 +453,8 @@ pip install PyQt6 PyQt6-WebEngine
 Start it with:
 
 ```
-claudectl --gui          # pipx install
-py claude-sessions.py --gui   # clone
+python claude-sessions.py --gui   # from the checkout
+claudectl --gui                   # after `pip install -e .`
 ```
 
 `gui_shell` in Settings picks the window: `auto` (Qt → Edge app window → browser), `qt`, `edge`, or `browser`. The bottom-left **TUI/GUI** toggle (or the `ui_mode` setting) selects which interface starts by default; `--tui` / `--gui` always override.
