@@ -273,12 +273,30 @@ def find_editor():
 
 def open_in_editor(path):
     """Open path in the best available editor. Returns True if launched."""
-    import subprocess
     editor = find_editor()
     if not editor:
         return False
+    return _spawn_editor(editor, path)
+
+
+def _spawn_editor(exe, path):
+    """The one place an editor process is started.
+
+    The window is asked NOT to take the foreground. claudectl opens an editor
+    as a side effect of a screen the user is already looking at, so stealing
+    focus interrupts them — and during a test run it interrupts whatever else
+    they were doing. Windows honours this through STARTUPINFO
+    (SW_SHOWNOACTIVATE); an app that ignores it is out of our hands.
+    """
+    import subprocess
+    kw = {}
+    if os.name == 'nt':
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 4          # SW_SHOWNOACTIVATE
+        kw['startupinfo'] = si
     try:
-        subprocess.Popen([editor, path])
+        subprocess.Popen([exe, path], **kw)
         return True
     except Exception:
         return False

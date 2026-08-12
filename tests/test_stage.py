@@ -240,8 +240,7 @@ def test_the_setting_is_offered_and_persisted():
     assert "id=\"sStage\"" in PAGE
     assert "post('/api/settings',{stage:ST.stage})" in PAGE
     assert "localStorage.setItem('ctl_stage'" in PAGE
-    import inspect
-    assert "'stage'" in inspect.getsource(gui._Handler.do_POST)
+    assert 'stage' in gui._SETTING_KEYS
 
 
 def test_lite_is_documented_as_the_tearing_escape_hatch():
@@ -268,14 +267,8 @@ def test_every_setting_the_gui_can_post_actually_survives_a_reload():
     `theme` happened to be declared, which is why it was the only appearance
     setting that appeared to work. Reading the POST allowlist straight out of the
     handler means a new setting cannot be added without also being declared."""
-    import re
     from claude_sessions.config import _DEFAULT_SETTINGS
-    src = inspect.getsource(gui._Handler.do_POST)
-    body = src[src.index("elif u.path == '/api/settings':"):]
-    body = body[:body.index('save_settings')]
-    tup = re.search(r"for k in \((.*?)\):", body, re.S)
-    assert tup, 'could not read the settings allowlist'
-    keys = re.findall(r"'([a-z_]+)'", tup.group(1))
+    keys = list(gui._SETTING_KEYS)
     assert 'world' in keys and 'surface' in keys, keys
     undeclared = [k for k in keys if k not in _DEFAULT_SETTINGS]
     assert not undeclared, f'accepted but discarded on read: {undeclared}'

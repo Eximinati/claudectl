@@ -9,6 +9,7 @@ from .config import (COST_PER_MTOK, CACHE_READ_MULT, CACHE_WRITE_MULT,
 from .sessions import (get_session_stats, scan_sessions, format_age, load_name,
                        _is_anthropic_model, _used_omni)
 from . import sessions as _sessions
+from . import config as _c
 from . import render
 from . import store
 
@@ -36,13 +37,12 @@ def save_disk_cache():
     global _cache_dirty
     if not _cache_dirty or _disk_cache is None:
         return
-    pruned = {p: v for p, v in _disk_cache.items() if os.path.exists(p)}
-    try:
-        with open(cache_file, 'w', encoding='utf-8') as f:
-            json.dump(pruned, f)
-        _cache_dirty = False
-    except Exception:
-        pass
+    # snapshot first: a GUI job thread writing to the cache while this iterated
+    # raised "dictionary changed size during iteration" and lost the whole save
+    snapshot = dict(_disk_cache)
+    pruned = {p: v for p, v in snapshot.items() if os.path.exists(p)}
+    _c.write_json_atomic(cache_file, pruned)
+    _cache_dirty = False
 
 
 def get_session_stats_cached(jsonl_path):

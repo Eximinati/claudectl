@@ -2,6 +2,8 @@ import json
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import claude_sessions.config as config
@@ -63,6 +65,48 @@ def test_get_config_dir_expands(monkeypatch, tmp_path):
 def test_find_editor_returns_existing_or_none():
     e = config.find_editor()
     assert e is None or os.path.exists(e)
+
+
+def test_every_editor_launch_goes_through_one_spawn_point(monkeypatch):
+    """Sixteen call sites across eight modules import `open_in_editor` BY VALUE,
+    so patching it has to be repeated per module — and four of those modules
+    were missed, which is how a test run popped a real Notepad++ into the
+    foreground. `_spawn_editor` is below that binding, so one patch covers
+    every caller and a new caller cannot escape it."""
+    seen = []
+    monkeypatch.setattr(config, 'find_editor', lambda: 'EDITOR.EXE')
+    monkeypatch.setattr(config, '_spawn_editor',
+                        lambda exe, path: (seen.append((exe, path)), True)[1])
+    assert config.open_in_editor('X.md') is True
+    assert seen == [('EDITOR.EXE', 'X.md')]
+
+
+@pytest.mark.real_editor          # reaches the real _spawn_editor; Popen is faked
+def test_the_editor_window_does_not_take_the_foreground(monkeypatch):
+    """claudectl opens an editor as a side effect of a screen the user is
+    already looking at; stealing focus interrupts them."""
+    if os.name != 'nt':
+        pytest.skip('STARTUPINFO is a Windows mechanism')
+    import subprocess
+    captured = {}
+
+    def fake_popen(argv, **kw):
+        captured.update(kw)
+        return object()
+
+    monkeypatch.setattr(subprocess, 'Popen', fake_popen)
+    assert config._spawn_editor('EDITOR.EXE', 'X.md') is True
+    si = captured.get('startupinfo')
+    assert si is not None, 'no STARTUPINFO — the window will take focus'
+    assert si.dwFlags & subprocess.STARTF_USESHOWWINDOW
+    assert si.wShowWindow == 4          # SW_SHOWNOACTIVATE
+
+
+def test_the_suite_cannot_spawn_a_real_editor():
+    """conftest's autouse guard, asserted rather than assumed — otherwise the
+    next module that opens an editor pops a window mid-run again."""
+    assert config._spawn_editor.__name__ == '<lambda>', \
+        'the editor spawn is not stubbed — a test run can open a real window'
 
 
 def test_get_claude_exe_returns_existing_or_none():

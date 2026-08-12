@@ -57,13 +57,10 @@ def test_motion_level_is_in_the_state_payload(monkeypatch, tmp_path):
 def test_only_the_new_key_is_persisted():
     """The four old keys are read for back-compat but never written again, so they
     age out of settings.json instead of lingering as dead config forever."""
-    src = open(__import__('claude_sessions.gui', fromlist=['x']).__file__,
-               encoding='utf-8').read()
-    allow = src[src.index("for k in ('default_effort'"):]
-    allow = allow[:allow.index('):')]
-    assert "'motion'" in allow
+    from claude_sessions.gui import _SETTING_KEYS
+    assert 'motion' in _SETTING_KEYS
     for dead in ('theme_motion_scope', 'theme_motion_bg', 'theme_motion_intensity'):
-        assert f"'{dead}'" not in allow, f'{dead} is still being written'
+        assert dead not in _SETTING_KEYS, f'{dead} is still being written'
 
 
 # ── the gates ─────────────────────────────────────────────────

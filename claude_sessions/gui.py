@@ -314,6 +314,15 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _drain(self, n):
+        """Discard n bytes of request body in fixed-size chunks."""
+        left = n
+        while left > 0:
+            chunk = self.rfile.read(min(65536, left))
+            if not chunk:
+                return
+            left -= len(chunk)
+
     def _host_ok(self):
         """A DNS-rebound request reaches us with the attacker's hostname in Host
         — this is the check that stops it. Runs even on the unguarded routes."""
@@ -356,31 +365,44 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if not self._guard():
             return
-        if u.path == '/api/state':
-            self._send(200, state_payload())
-        elif u.path == '/api/sessions':
-            self._send(200, {'sessions': list_sessions(q.get('enc', ''))})
-        elif u.path.startswith('/api/job/'):
+        if u.path.startswith('/api/job/'):
             from .gui_api import job_status
             st = job_status(u.path.rsplit('/', 1)[1])
             self._send(200 if st else 404, st or {'error': 'no such job'})
-        else:
-            from . import gui_api
-            fn = gui_api.GET_ROUTES.get(u.path)
-            if fn is None:
-                self._send(404, {'error': 'not found'})
-                return
-            try:
-                import time
-                t0 = time.time()
-                out = fn(q, None)
-                dt = time.time() - t0
-                if dt > 0.5:
-                    _c.log.warning('gui api GET %s slow: %.2fs', u.path, dt)
-                self._send(200, out)
-            except Exception as e:
-                _c.log.exception('gui api GET %s failed', u.path)
-                self._send(500, {'error': str(e)})
+            return
+        from . import gui_api
+        fn = _LOCAL_GET.get(u.path) or gui_api.GET_ROUTES.get(u.path)
+        if fn is None:
+            self._send(404, {'error': 'not found'})
+            return
+        self._api('GET', u.path, fn, q, None)
+
+    def _api(self, verb, path, fn, q, body):
+        """One place where an endpoint's result — or its failure — becomes a
+        response. The hardcoded routes used to bypass this and let an exception
+        reach BaseHTTPRequestHandler, which answers with an HTML traceback the
+        SPA's resp.json() then chokes on."""
+        from . import gui_api
+        import time
+        t0 = time.time()
+        try:
+            out = gui_api.call(fn, q, body)
+        except gui_api.BadRequest as e:
+            self._send(400, {'error': str(e)})
+            return
+        except ValueError as e:
+            # store.project_folder rejecting a name that could not have come
+            # from the encoder is the caller's fault, not ours
+            self._send(400, {'error': str(e)})
+            return
+        except Exception as e:
+            _c.log.exception('gui api %s %s failed', verb, path)
+            self._send(500, {'error': str(e)})
+            return
+        dt = time.time() - t0
+        if dt > 0.5:
+            _c.log.warning('gui api %s %s slow: %.2fs', verb, path, dt)
+        self._send(200, out)
 
     def _serve_vendor(self, rel):
         """Vendored browser libraries (three.js, anime.js) — see gui_html.
@@ -428,59 +450,32 @@ class _Handler(BaseHTTPRequestHandler):
             return
         try:
             n = int(self.headers.get('Content-Length', 0))
+        except Exception:
+            self._send(400, {'error': 'bad content-length'})
+            return
+        if n > MAX_BODY:
+            # Content-Length was trusted verbatim and read unbounded: one
+            # request could pin as much memory as it liked.
+            #
+            # The oversized body still has to be drained in bounded chunks
+            # before answering. Replying and closing while the client is still
+            # writing resets the connection, and the client then sees a socket
+            # error instead of the 413 — which is how this first showed up: the
+            # test passed alone and failed in a full run.
+            self._drain(min(n, MAX_DRAIN))
+            self.close_connection = True
+            self._send(413, {'error': 'body too large'})
+            return
+        try:
             body = json.loads(self.rfile.read(n) or b'{}')
         except Exception:
             self._send(400, {'error': 'bad json'})
             return
+        if not isinstance(body, dict):
+            self._send(400, {'error': 'body must be a JSON object'})
+            return
         u = urlparse(self.path)
-        if u.path == '/api/launch':
-            opts = {'effort': '', 'model': '', 'perm': '', 'name': '',
-                    'worktree': '', 'agent': '', 'agents_json': '', 'cfgdir': '',
-                    'max_thinking': '', 'subagent_model': ''}
-            opts.update({k: str(v) for k, v in (body.get('opts') or {}).items()
-                         if k in opts})
-            ok, err = launch_session(body.get('path', ''), body.get('enc', ''),
-                                     body.get('choice', 'new'), opts)
-            self._send(200 if ok else 500, {'ok': ok, 'error': err})
-        elif u.path == '/api/rename':
-            ok = rename_session(body.get('enc', ''), body.get('cfgdir', ''),
-                                body.get('sid', ''), body.get('name', ''))
-            self._send(200 if ok else 500, {'ok': ok})
-        elif u.path == '/api/settings':
-            s = load_settings()
-            if body.get('ui_mode') in ('tui', 'gui'):
-                s['ui_mode'] = body['ui_mode']
-            for k in ('default_effort', 'default_model', 'default_permission',
-                      'default_max_thinking', 'default_subagent_model',
-                      'extract_model', 'review_model', 'review_min_confidence',
-                      # 'motion' replaced theme_motion/_scope/_bg/_intensity;
-                      # the old keys are read for back-compat (_motion_level)
-                      # but never written again, so they age out of settings.json
-                      'gui_shell', 'theme', 'motion', 'skin', 'stage', 'world',
-                      'surface',
-                      'otel_enabled', 'otel_endpoint', 'otel_protocol',
-                      'otel_headers',
-                      'editor', 'claude_exe',
-                      'plan_model', 'exec_model', 'omniroute_base_url',
-                      'omniroute_exec_model', 'failover_port', 'failover_quiet'):
-                if k in body:
-                    s[k] = body[k]
-            # failover_models is user input that a detached daemon reads back —
-            # sanitize at this trust boundary rather than in the daemon.
-            if 'failover_models' in body:
-                raw = body['failover_models']
-                if isinstance(raw, str):
-                    raw = raw.replace(',', '\n').split('\n')
-                s['failover_models'] = [
-                    str(m).strip() for m in (raw or []) if str(m).strip()][:8]
-            # api_key only overwritten when the user actually typed a new one —
-            # never blanked by a settings-save round-trip that omits it because
-            # the frontend never receives the raw key back to resubmit
-            if body.get('omniroute_api_key'):
-                s['omniroute_api_key'] = body['omniroute_api_key']
-            save_settings(s)
-            self._send(200, {'ok': True})
-        elif u.path.startswith('/api/job/') and u.path.endswith('/decide'):
+        if u.path.startswith('/api/job/') and u.path.endswith('/decide'):
             from .gui_api import job_decide
             jid = u.path.split('/')[3]
             ok = job_decide(jid, bool(body.get('apply')))
@@ -490,22 +485,144 @@ class _Handler(BaseHTTPRequestHandler):
             jid = u.path.split('/')[3]
             ok = job_cancel(jid)
             self._send(200 if ok else 404, {'ok': ok})
-        else:
-            from . import gui_api
-            fn = gui_api.POST_ROUTES.get(u.path)
-            if fn is None:
-                self._send(404, {'error': 'not found'})
-                return
-            try:
-                self._send(200, fn({}, body))
-            except Exception as e:
-                _c.log.exception('gui api POST %s failed', u.path)
-                self._send(500, {'error': str(e)})
+            return
+        from . import gui_api
+        fn = _LOCAL_POST.get(u.path) or gui_api.POST_ROUTES.get(u.path)
+        if fn is None:
+            self._send(404, {'error': 'not found'})
+            return
+        self._api('POST', u.path, fn, {}, body)
+
+
+# ── the endpoints that live here rather than in gui_api ──────
+# Same (q, body) -> dict shape as every other route, so they go through the
+# same parameter checks and the same error mapping. Held apart from gui_api's
+# tables only because they call this module's launch/rename/settings helpers.
+
+def _api_state(q, body):
+    return state_payload()
+
+
+def _api_sessions(q, body):
+    return {'sessions': list_sessions(q.get('enc', ''))}
+
+
+def _api_launch(q, body):
+    opts = {'effort': '', 'model': '', 'perm': '', 'name': '',
+            'worktree': '', 'agent': '', 'agents_json': '', 'cfgdir': '',
+            'max_thinking': '', 'subagent_model': ''}
+    opts.update({k: str(v) for k, v in (body.get('opts') or {}).items()
+                 if k in opts})
+    ok, err = launch_session(body.get('path', ''), body.get('enc', ''),
+                             body.get('choice', 'new'), opts)
+    if not ok:
+        # a bad path or an unlaunchable choice is the caller's mistake; it used
+        # to come back as a 500 that read like the server had broken
+        from .gui_api import BadRequest
+        raise BadRequest(err)
+    return {'ok': True, 'error': ''}
+
+
+def _api_rename(q, body):
+    ok = rename_session(body.get('enc', ''), body.get('cfgdir', ''),
+                        body.get('sid', ''), body.get('name', ''))
+    if not ok:
+        from .gui_api import BadRequest
+        raise BadRequest('could not rename that session')
+    return {'ok': True}
+
+
+_SETTING_KEYS = (
+    'default_effort', 'default_model', 'default_permission',
+    'default_max_thinking', 'default_subagent_model',
+    'extract_model', 'review_model', 'review_min_confidence',
+    # 'motion' replaced theme_motion/_scope/_bg/_intensity; the old keys are
+    # read for back-compat (_motion_level) but never written again, so they age
+    # out of settings.json
+    'gui_shell', 'theme', 'motion', 'skin', 'stage', 'world', 'surface',
+    'otel_enabled', 'otel_endpoint', 'otel_protocol', 'otel_headers',
+    'editor', 'claude_exe',
+    'plan_model', 'exec_model', 'omniroute_base_url',
+    'omniroute_exec_model', 'failover_port', 'failover_quiet')
+
+
+def _api_settings(q, body):
+    s = load_settings()
+    if body.get('ui_mode') in ('tui', 'gui'):
+        s['ui_mode'] = body['ui_mode']
+    for k in _SETTING_KEYS:
+        if k in body:
+            s[k] = body[k]
+    # failover_models is user input that a detached daemon reads back —
+    # sanitize at this trust boundary rather than in the daemon.
+    if 'failover_models' in body:
+        raw = body['failover_models']
+        if isinstance(raw, str):
+            raw = raw.replace(',', '\n').split('\n')
+        s['failover_models'] = [
+            str(m).strip() for m in (raw or []) if str(m).strip()][:8]
+    # api_key only overwritten when the user actually typed a new one — never
+    # blanked by a settings-save round-trip that omits it because the frontend
+    # never receives the raw key back to resubmit
+    if body.get('omniroute_api_key'):
+        s['omniroute_api_key'] = body['omniroute_api_key']
+    save_settings(s)
+    return {'ok': True}
+
+
+_LOCAL_GET = {'/api/state': _api_state, '/api/sessions': _api_sessions}
+_LOCAL_POST = {'/api/launch': _api_launch, '/api/rename': _api_rename,
+               '/api/settings': _api_settings}
+
+
+#: the biggest thing the SPA legitimately posts is an edited system prompt or a
+#: plan; a megabyte is far above that and far below "pin all the memory"
+MAX_BODY = 1024 * 1024
+
+#: how much of an over-sized body is drained before the connection is dropped.
+#: Bounded, so this is not itself the unbounded read it exists to prevent.
+MAX_DRAIN = 8 * 1024 * 1024
+
+#: ThreadingHTTPServer starts one thread per connection with no ceiling. The
+#: SPA opens a handful; anything past this is a client that has gone wrong.
+MAX_CONNECTIONS = 32
+
+
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+
+    def server_close(self):
+        # The two background loops outlive the server otherwise: closing the
+        # socket says nothing to a thread parked in a sleep.
+        try:
+            from .gui_api import stop_auto_memory_scheduler
+            stop_auto_memory_scheduler()
+            from .usage import stop_background
+            stop_background()
+        except Exception:
+            _c.log.exception('gui: stopping background loops failed')
+        super().server_close()
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(timeout=5):
+            self.shutdown_request(request)
+            return
+        super().process_request(request, client_address)
 
 
 def make_server(port=0):
     """Bind 127.0.0.1:<port> (0 = ephemeral). Returns the server object."""
-    return ThreadingHTTPServer(('127.0.0.1', port), _Handler)
+    return _Server(('127.0.0.1', port), _Handler)
 
 
 #: a Chromium that accepts --app=<url>, for the chromeless standalone window.

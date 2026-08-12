@@ -164,7 +164,8 @@ def test_dashboard_jobs_elapsed_is_int(monkeypatch, tmp_path):
     job = {'id': 'fakejob123', 'status': 'running', 'label': 'test job',
            'messages': [], 'error': '', 'gate': None, 'decision': None,
            'decision_evt': threading.Event(), 'inputs': [], 'started': time.time(),
-           'cancelled': False, 'cancel_event': threading.Event(), 'procs': []}
+           'cancelled': False, 'cancel_event': threading.Event(), 'procs': [],
+           'lock': threading.RLock()}
     with gui_api._JOBS_LOCK:
         gui_api._JOBS[job['id']] = job
     srv, base = _serve(monkeypatch)

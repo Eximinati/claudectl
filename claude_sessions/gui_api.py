@@ -119,6 +119,32 @@ def _job(jid):
         return _JOBS.get(jid)
 
 
+#: terminal jobs kept for the UI to read a result off; and the age past which a
+#: job still claiming to run is a leak, not work in progress
+_KEEP_TERMINAL = 50
+_STUCK_AFTER = 6 * 3600
+
+
+def _reap_locked():
+    """Trim the registry. Call with _JOBS_LOCK held.
+
+    Only terminal jobs used to be trimmed, so a 'running' or 'awaiting' job
+    whose thread died in a way that left no terminal status stayed in the
+    registry forever — and reaping ran only when a NEW job started, so an idle
+    app never cleaned up at all.
+    """
+    now = time.time()
+    for j in list(_JOBS.values()):
+        if j['status'] in ('running', 'awaiting') and now - j['started'] > _STUCK_AFTER:
+            j['status'] = 'error'
+            j['error'] = j.get('error') or 'abandoned after %dh' % (_STUCK_AFTER // 3600)
+    terminal = [j for j in _JOBS.values() if j['status'] not in ('running', 'awaiting')]
+    if len(terminal) > _KEEP_TERMINAL:
+        terminal.sort(key=lambda j: j['started'], reverse=True)
+        for j in terminal[_KEEP_TERMINAL:]:
+            _JOBS.pop(j['id'], None)
+
+
 def start_job(label, fn, inputs=None):
     """Run fn() on a daemon thread under the UI bridge. Returns job id.
     inputs: queued answers for any text_input the flow asks for."""
@@ -128,14 +154,14 @@ def start_job(label, fn, inputs=None):
            'decision': None, 'decision_evt': threading.Event(),
            'inputs': list(inputs or []), 'started': time.time(),
            'cancelled': False,
+           # its own lock: _JOBS_LOCK covers the REGISTRY, and four threads
+           # (the job body, the poll loop, job_decide and job_cancel) mutate
+           # the dict's contents — status, gate, decision, procs
+           'lock': threading.RLock(),
            'cancel_event': threading.Event(), 'procs': []}
     with _JOBS_LOCK:
         _JOBS[jid] = job
-        terminal = [j for j in _JOBS.values() if j['status'] != 'running']
-        if len(terminal) > 50:                 # keep newest 50 terminal, drop rest
-            terminal.sort(key=lambda j: j['started'], reverse=True)
-            for j in terminal[50:]:
-                _JOBS.pop(j['id'], None)
+        _reap_locked()
 
     def _run():
         from . import memory
@@ -172,25 +198,33 @@ def job_status(jid):
     job = _job(jid)
     if not job:
         return None
-    out = {k: job[k] for k in ('id', 'status', 'label', 'messages', 'error')}
-    out['elapsed'] = int(time.time() - job['started'])
-    if job['status'] == 'awaiting' and job['gate']:
-        g = job['gate']
-        out['gate'] = {'title': g['title'], 'diff': g['diff'],
-                       'old_len': len(g.get('old', '')), 'new_len': len(g.get('new', ''))}
-    if job['status'] == 'done':
-        out['result'] = _jsonable(job['result'])
+    with job['lock']:
+        out = {k: job[k] for k in ('id', 'status', 'label', 'messages', 'error')}
+        out['messages'] = list(out['messages'])
+        out['elapsed'] = int(time.time() - job['started'])
+        if job['status'] == 'awaiting' and job['gate']:
+            g = job['gate']
+            out['gate'] = {'title': g['title'], 'diff': g['diff'],
+                           'old_len': len(g.get('old', '')),
+                           'new_len': len(g.get('new', ''))}
+            left = job.get('gate_deadline', 0) - time.time()
+            out['gate_seconds_left'] = max(0, int(left))
+        if job['status'] == 'done':
+            out['result'] = _jsonable(job['result'])
     return out
 
 
 def job_decide(jid, apply):
     """Answer a pending confirm gate."""
     job = _job(jid)
-    if not job or job['status'] != 'awaiting':
+    if not job:
         return False
-    job['decision'] = bool(apply)
-    job['status'] = 'running'
-    job['decision_evt'].set()
+    with job['lock']:
+        if job['status'] != 'awaiting':
+            return False
+        job['decision'] = bool(apply)
+        job['status'] = 'running'
+        job['decision_evt'].set()
     return True
 
 
@@ -198,16 +232,18 @@ def job_cancel(jid):
     job = _job(jid)
     if not job:
         return False
-    if job['status'] == 'awaiting':      # a cancel at the gate = reject
-        job['decision'] = False
+    with job['lock']:
+        if job['status'] == 'awaiting':      # a cancel at the gate = reject
+            job['decision'] = False
+            job['decision_evt'].set()
+        job['cancelled'] = True
         job['status'] = 'cancelled'
-        job['decision_evt'].set()
-    job['cancelled'] = True
-    job['cancel_event'].set()
-    for p in list(job.get('procs', [])):
+        job['cancel_event'].set()
+        # snapshot under the lock: _run_cancellable's finally removes from this
+        # list, so iterating it unlocked raced with its own cleanup
+        procs = list(job.get('procs', []))
+    for p in procs:
         _proc.kill_tree(p)
-    if job['status'] != 'cancelled':
-        job['status'] = 'cancelled'
     return True
 
 
@@ -271,15 +307,30 @@ def _install_bridge():
     ui.confirm = ui_confirm
 
 
+#: how long an approval gate waits before rejecting itself. It was an hour, on
+#: the theory that a user might wander off — but a job parked for an hour is
+#: holding a worker thread and, usually, a claude subprocess. The countdown is
+#: reported in job_status so the wait is visible rather than mysterious.
+GATE_TIMEOUT = 300
+
+
 def _gate(job, title, old, new, diff):
     """Park the job until the GUI approves/rejects the proposed content."""
-    job['gate'] = {'title': title, 'old': old, 'new': new, 'diff': diff}
-    job['decision'] = None
-    job['decision_evt'].clear()
-    job['status'] = 'awaiting'
-    job['decision_evt'].wait(timeout=3600)
-    job['gate'] = None
-    return bool(job['decision'])
+    with job['lock']:
+        job['gate'] = {'title': title, 'old': old, 'new': new, 'diff': diff}
+        job['decision'] = None
+        job['decision_evt'].clear()
+        job['gate_deadline'] = time.time() + GATE_TIMEOUT
+        job['status'] = 'awaiting'
+    answered = job['decision_evt'].wait(timeout=GATE_TIMEOUT)
+    with job['lock']:
+        job['gate'] = None
+        if not answered and job['status'] == 'awaiting':
+            job['status'] = 'running'
+            job['messages'].append(
+                {'ok': False, 'text': 'no answer in %ds — treated as reject'
+                                      % GATE_TIMEOUT})
+        return bool(job['decision'])
 
 
 _install_bridge()
@@ -294,6 +345,7 @@ _install_bridge()
 # needed — that's for the TUI, whose process exits on launch).
 
 _sched_started = False
+_sched_stop = threading.Event()
 
 
 def _refresh_project(path, folder, auto_cap=6):
@@ -364,22 +416,31 @@ def start_auto_memory_scheduler():
     _sched_started = True
     import threading
     from .config import load_settings
+    _sched_stop.clear()
 
     def _loop():
-        import time as _t
-        _t.sleep(2)                       # let the server settle before first pass
-        while True:
+        # wait(), not sleep(): server_close() must be able to end this, and a
+        # thread parked in sleep(3600) cannot be told anything
+        if _sched_stop.wait(2):           # let the server settle first
+            return
+        while not _sched_stop.is_set():
             try:
                 _auto_scan_pass()
             except Exception:
                 _c.log.exception('gui: auto-memory scheduler tick failed')
-            interval = load_settings().get('auto_memory_interval', 3600)
             try:
-                _t.sleep(max(60, int(interval)))
+                interval = max(60, int(load_settings().get('auto_memory_interval', 3600)))
             except Exception:
-                _t.sleep(3600)
+                interval = 3600
+            _sched_stop.wait(interval)
 
     threading.Thread(target=_loop, daemon=True).start()
+
+
+def stop_auto_memory_scheduler():
+    global _sched_started
+    _sched_stop.set()
+    _sched_started = False
 
 
 # ── shared helpers ───────────────────────────────────────────
@@ -408,8 +469,72 @@ def _folder(cfgdir, enc):
     """The project folder for a request-supplied `enc`. Raises ValueError when
     `enc` is not something `paths.encode_component` could have produced — it
     reaches roughly forty endpoints straight off the wire."""
-    from . import store
-    return store.project_folder(cfgdir, enc)
+    return _store.project_folder(cfgdir, enc)
+
+
+class BadRequest(ValueError):
+    """A request the caller got wrong. 400, never 500."""
+
+
+def _cfgdir_ok(v):
+    """An account directory claudectl actually knows about.
+
+    Unvalidated, this parameter is a filesystem read primitive: it is joined
+    with 'projects' and a name on about forty endpoints, so any directory on
+    the machine could be walked by asking for it.
+    """
+    want = os.path.normcase(os.path.abspath(v))
+    return any(os.path.normcase(os.path.abspath(d)) == want
+               for _n, d in _c.all_config_dirs())
+
+
+#: checked by NAME, wherever they appear. These three are the ones that reach
+#: the filesystem; `path` is deliberately absent, because several endpoints
+#: legitimately take a directory that does not exist yet, and every path that
+#: becomes a subprocess cwd already goes through paths.resolve_dir.
+PARAM_CHECKS = {
+    'enc': lambda v: _store.is_encoded(v),
+    'sid': lambda v: _store.is_encoded(v),
+    'cfgdir': _cfgdir_ok,
+}
+
+
+def check_params(params):
+    """Raise BadRequest for any known parameter present but malformed."""
+    if not isinstance(params, dict):
+        return
+    for name, ok in PARAM_CHECKS.items():
+        v = params.get(name)
+        if v in (None, ''):
+            continue
+        if not isinstance(v, str) or not ok(v):
+            raise BadRequest('invalid %s' % name)
+
+
+def call(fn, q=None, body=None):
+    """Run one endpoint with its parameters checked, translating the two ways a
+    caller can be wrong into 400s.
+
+    A missing parameter used to surface as a KeyError caught by the generic
+    handler and returned as 500 {"error": "'enc'"} — indistinguishable, to the
+    SPA, from the server breaking.
+    """
+    check_params(q)
+    check_params(body)
+    try:
+        return fn(q or {}, body)
+    except KeyError as e:
+        # Only a KeyError naming a REQUEST parameter is the caller's fault; an
+        # internal one is still a 500 and still gets logged as such.
+        key = e.args[0] if e.args else ''
+        if key in _REQUEST_PARAMS:
+            raise BadRequest('missing parameter: %s' % key)
+        raise
+
+
+#: names that only ever come off the wire
+_REQUEST_PARAMS = frozenset(
+    ('enc', 'sid', 'cfgdir', 'path', 'action', 'kind', 'name', 'id'))
 
 
 # ── sessions & transcript ────────────────────────────────────
@@ -1706,7 +1831,9 @@ def api_job_start(q, body):
             return {'ok': ok, 'model_used': used, 'message': msg}
         jid = start_job(f'Sending a real test request via {model}', _live)
     else:
-        return {'ok': False, 'error': f'unknown job kind {kind!r}'}
+        # 400, not a 200 carrying ok:false — the SPA treats a 200 as "the
+        # server understood me" and shows the generic failure toast
+        raise BadRequest('unknown job kind %r' % (kind,))
     return {'ok': True, 'job': jid}
 
 

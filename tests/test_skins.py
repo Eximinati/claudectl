@@ -190,9 +190,7 @@ def test_skin_setting_round_trips():
     src = open(gui.__file__, encoding='utf-8').read()
     assert "'skin': s.get('skin', '')" in src
     assert "'skins':" in src
-    allow = src[src.index("for k in ('default_effort'"):]
-    allow = allow[:allow.index('):')]
-    assert "'skin'" in allow, 'the skin choice is never saved'
+    assert 'skin' in gui._SETTING_KEYS, 'the skin choice is never saved'
 
 
 def test_settings_offers_the_picker():

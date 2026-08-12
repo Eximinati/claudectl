@@ -812,8 +812,10 @@ def test_unknown_job_kind_rejected(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     srv, base = _serve()
     try:
+        # 400, not a 200 carrying ok:false — the SPA reads any 200 as "the
+        # server understood me"
         code, d = _req(base + '/api/job', {'kind': 'rm_rf_everything'})
-        assert not d['ok'] and 'unknown' in d['error']
+        assert code == 400 and 'unknown' in d['error']
     finally:
         srv.shutdown()
 

@@ -181,22 +181,31 @@ def _poll_account(name, d, active):
     return status == 'ok'
 
 
+#: set by stop_background() so server_close() actually ends this loop; every
+#: sleep below is a wait on it rather than time.sleep, because a thread parked
+#: in sleep(_RETRY_MAX) cannot be told anything
+_stop = threading.Event()
+
+
 def _background():
-    """Poll every configured account forever, recording each one's health."""
+    """Poll every configured account until told to stop, recording each one's
+    health."""
     fails = 0
-    while True:
+    while not _stop.is_set():
         active = os.path.normcase(os.path.abspath(_c.config_dir))
         any_ok = False
         for name, d in _targets():
+            if _stop.is_set():
+                return
             any_ok = _poll_account(name, d, active) or any_ok
-            time.sleep(1)            # small gap between accounts (avoid a burst)
+            _stop.wait(1)            # small gap between accounts (avoid a burst)
         if any_ok:
             fails = 0
             sleep = _REFRESH_SEC
         else:                        # nothing live at all — exponential backoff
             fails += 1
             sleep = min(_RETRY_BASE * (2 ** max(0, fails - 1)), _RETRY_MAX)
-        time.sleep(sleep)
+        _stop.wait(sleep)
 
 
 def _ensure_started():
@@ -205,7 +214,15 @@ def _ensure_started():
         if _started:
             return
         _started = True
+    _stop.clear()
     threading.Thread(target=_background, daemon=True).start()
+
+
+def stop_background():
+    global _started
+    _stop.set()
+    with _lock:
+        _started = False
 
 
 def refresh_now():

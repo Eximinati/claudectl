@@ -37,3 +37,31 @@ for _var in _AMBIENT:
 def _no_ambient_claude_env(monkeypatch):
     for var in _AMBIENT:
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_editor(monkeypatch, request):
+    """No test may open a real editor window.
+
+    The Sandbox already stubbed `config.open_in_editor` and three modules that
+    had imported it by value — but `agents`, `skills`, `mcp` and `hooks` had
+    imported it by value too, so those screens spawned a real Notepad++ that
+    took the foreground in the middle of a test run. Enumerating the callers is
+    what failed; this blocks the spawn itself, so a new caller (or a test that
+    never builds a Sandbox) cannot reintroduce it.
+
+    A test that wants to exercise the real launcher asks for it with
+    @pytest.mark.real_editor.
+    """
+    if request.node.get_closest_marker('real_editor'):
+        return
+    from claude_sessions import config
+    opened = []
+    monkeypatch.setattr(config, '_spawn_editor',
+                        lambda exe, path: (opened.append((exe, path)), True)[1])
+    return opened
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        'markers', 'real_editor: allow this test to spawn a real editor process')

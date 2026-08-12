@@ -15,6 +15,7 @@ import os
 import re
 import json
 import threading
+import time
 
 from . import config as _c
 
@@ -23,6 +24,8 @@ from . import config as _c
 _tls = threading.local()
 _bg_lock = threading.Lock()
 _bg_active = set()          # project paths currently refreshing in the background
+_bg_spawned = {}            # project path -> when a detached worker was last spawned
+_BG_SPAWN_COOLDOWN = 60
 
 SCHEMA_VERSION = 3
 MEM_SUBDIR = os.path.join('.claudectl', 'memory')
@@ -217,8 +220,17 @@ def spawn_background_worker(project_path, proj_folder):
     root = os.path.abspath(project_path or '')
     if not root or not os.path.isdir(root):
         return None
-    if scan_lock_status(project_path) is not None or root in _bg_active:
+    if scan_lock_status(project_path) is not None:
         return None
+    # Claim under the lock. The check used to be an unsynchronised read of
+    # _bg_active that nothing ever wrote here, so two callers arriving together
+    # both passed it and both spawned a detached worker — and the child only
+    # takes scan.lock some milliseconds later. The claim is time-boxed because
+    # the child, not this process, decides when the work is done.
+    with _bg_lock:
+        if time.monotonic() - _bg_spawned.get(root, 0) < _BG_SPAWN_COOLDOWN:
+            return None
+        _bg_spawned[root] = time.monotonic()
     pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     env = os.environ.copy()
     env['PYTHONPATH'] = pkg_parent + (
