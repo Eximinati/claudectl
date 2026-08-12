@@ -1,8 +1,6 @@
 import os
 import sys
-import msvcrt
 import time
-import ctypes
 
 from .config import W, EFFORTS, EFFORT_LABELS, MODELS, MODEL_LABELS
 from .config import PERMS, PERM_LABELS, PERM_RISKY, THINKING_CAPS, THINKING_LABELS
@@ -12,27 +10,14 @@ from .config import use_16color_fallback
 from .sessions import load_extra_paths, save_extra_paths
 from . import render
 from . import config as _c
+from . import term
 
 
 # ── VT mode ──────────────────────────────────────────────────
 
-_VT_ENABLED = False
-
-def _enable_vt_mode():
-    global _VT_ENABLED
-    try:
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.GetStdHandle(-11)
-        mode = ctypes.c_ulong()
-        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
-            if kernel32.SetConsoleMode(handle, mode.value | 0x0004):
-                _VT_ENABLED = True
-    except Exception:
-        pass
-    if not _VT_ENABLED:
-        use_16color_fallback()
-
-_enable_vt_mode()
+_VT_ENABLED = term.enable_vt()
+if not _VT_ENABLED:
+    use_16color_fallback()
 
 
 def _cls():
@@ -47,7 +32,7 @@ def _cls():
         except Exception:
             pass
     else:
-        os.system('cls')
+        term.clear()
 
 
 # ── keyboard input ───────────────────────────────────────────
@@ -56,21 +41,10 @@ def _cls():
 #   ('back',) ('del',) ('char', c)
 
 def _key_event():
-    key = ord(msvcrt.getch())
-    if key in (0, 224):
-        k2 = ord(msvcrt.getch())
-        return {72: ('up',), 80: ('down',), 75: ('left',), 77: ('right',),
-                83: ('del',)}.get(k2, None)
-    if key == 13: return ('enter',)
-    if key == 27: return ('esc',)
-    if key == 8:  return ('back',)
-    if key == 9:  return ('tab',)
-    if 32 <= key <= 126 or key > 127:
-        try:
-            return ('char', chr(key))
-        except ValueError:
-            return None
-    return None
+    # via the module, never `= term.key_event` — a by-value binding at import
+    # is the bug this codebase keeps re-learning, and it would freeze the
+    # backend the test harness swaps.
+    return term.key_event()
 
 
 _term_size = None
@@ -106,7 +80,7 @@ def wait_event():
     while True:
         if _pushback:
             return _pushback.pop(0)
-        if msvcrt.kbhit():
+        if term.kbhit():
             ev = _key_event()
             if ev:
                 return ev
@@ -120,14 +94,14 @@ def poll_event():
     """Non-blocking: return an event if one is pending, else None."""
     if _pushback:
         return _pushback.pop(0)
-    if msvcrt.kbhit():
+    if term.kbhit():
         return _key_event()
     return None
 
 
 def flush_input():
-    while msvcrt.kbhit():
-        msvcrt.getch()
+    while term.kbhit():
+        term.getch()
 
 
 def pause(msg='  Press Enter to continue...'):

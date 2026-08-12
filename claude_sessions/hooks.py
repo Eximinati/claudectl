@@ -9,6 +9,7 @@ Stop, ...). This edits the `hooks` block; disabled hooks are parked under
 import json
 import os
 import re
+import sys
 
 from .config import W, config_dir
 from .ui import menu, text_input, flash, pause, confirm, _cls
@@ -37,6 +38,19 @@ def _py_hook(script):
     import sys
     p = os.path.join(os.path.dirname(os.path.abspath(__file__)), script)
     return f'"{sys.executable}" "{p}"'
+
+
+def _beep(times):
+    """An audible ping, per platform. PowerShell's [console]::beep exists only
+    on Windows; macOS has afplay/osascript, and a POSIX terminal takes a bare
+    BEL, which `printf` emits without needing a subshell that supports \\a."""
+    if os.name == 'nt':
+        one = '[console]::beep(%d,%d)' % (800 if times == 1 else 1000,
+                                          200 if times == 1 else 150)
+        return 'powershell -c "%s"' % ';'.join([one] * times)
+    if sys.platform == 'darwin':
+        return ';'.join(['osascript -e "beep"'] * times)
+    return "printf '%s'" % (r'\a' * times)
 
 
 def _guard(field, pattern, msg):
@@ -141,14 +155,12 @@ TEMPLATES = {
     },
     'notify-on-stop': {
         'event': 'Stop',
-        'entry': {'hooks': [{'type': 'command',
-                             'command': 'powershell -c "[console]::beep(800,200)"'}]},
+        'entry': {'hooks': [{'type': 'command', 'command': _beep(1)}]},
         'desc': 'Beep when Claude finishes a turn',
     },
     'notify-on-input-needed': {
         'event': 'Notification',
-        'entry': {'hooks': [{'type': 'command',
-                             'command': 'powershell -c "[console]::beep(1000,150);[console]::beep(1000,150)"'}]},
+        'entry': {'hooks': [{'type': 'command', 'command': _beep(2)}]},
         'desc': 'Double-beep when Claude needs your input',
     },
     'session-start-git-status': {

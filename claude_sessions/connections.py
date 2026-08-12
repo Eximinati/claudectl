@@ -901,7 +901,11 @@ def open_graph(path):
     if not path:
         return False, 'no graph file to open'
     try:
-        os.startfile(path)   # Windows default browser
+        if hasattr(os, 'startfile'):
+            os.startfile(path)          # Windows default browser
+        else:
+            import webbrowser
+            webbrowser.open('file://' + os.path.abspath(path))
         return True, ''
     except Exception as e:
         _c.log.exception('connections: open_graph failed')

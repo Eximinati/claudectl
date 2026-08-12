@@ -1,8 +1,15 @@
 """Reusable TUI simulation harness for claudectl tests.
 
-Drives interactive screens with a scripted fake msvcrt, captures rendered
-output for assertions, and sandboxes all config/data paths into tmp dirs so
-tests never touch the real ~/.claude.
+Drives interactive screens with a scripted keyboard, captures rendered output
+for assertions, and sandboxes all config/data paths into tmp dirs so tests
+never touch the real ~/.claude.
+
+The script is patched into `term`, not into `msvcrt`: a module-level
+`import msvcrt` here made POSIX collect ZERO tests, since every TUI test file
+imports this one. The key scripts stay written in Windows scancodes and
+`term.BACKEND` is pinned to 'windows' so the same decoder runs everywhere —
+the point of running the suite on Linux is to exercise the screens, not to
+re-script 600 tests.
 """
 
 import json
@@ -12,9 +19,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import msvcrt   # noqa: E402  (patched per-test)
-
-from claude_sessions import config, sessions, stats, render, ui  # noqa: E402
+from claude_sessions import config, sessions, stats, render, term, ui  # noqa: E402
 from claude_sessions import usage as usage_mod                   # noqa: E402
 from claude_sessions import mcp as mcp_mod                       # noqa: E402
 
@@ -40,7 +45,7 @@ class OutOfKeys(SystemExit):
 
 
 class TuiScript:
-    """Fake msvcrt fed from a key list. kbhit() True while keys remain."""
+    """Fake keyboard fed from a key list. kbhit() True while keys remain."""
 
     def __init__(self, keys):
         self.keys = list(keys)
@@ -62,9 +67,9 @@ class TuiScript:
         return True
 
     def install(self, monkeypatch):
-        monkeypatch.setattr(msvcrt, 'getch', self.getch)
-        monkeypatch.setattr(msvcrt, 'getwch', self.getwch)
-        monkeypatch.setattr(msvcrt, 'kbhit', self.kbhit)
+        monkeypatch.setattr(term, 'BACKEND', 'windows')
+        monkeypatch.setattr(term, 'getch', self.getch)
+        monkeypatch.setattr(term, 'kbhit', self.kbhit)
         # flush_input would eat scripted keys (kbhit is always True)
         monkeypatch.setattr(ui, 'flush_input', lambda: None)
 

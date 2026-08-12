@@ -508,10 +508,24 @@ def make_server(port=0):
     return ThreadingHTTPServer(('127.0.0.1', port), _Handler)
 
 
-_EDGE_PATHS = (
-    r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
-    r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
-)
+#: a Chromium that accepts --app=<url>, for the chromeless standalone window.
+#: Absolute paths on Windows (Edge is not on PATH there); a name lookup
+#: elsewhere. Falls back to a plain browser tab when none is found.
+if os.name == 'nt':
+    _EDGE_PATHS = (
+        r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+        r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
+    )
+elif sys.platform == 'darwin':
+    _EDGE_PATHS = (
+        '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    )
+else:
+    import shutil as _shutil
+    _EDGE_PATHS = tuple(p for p in (
+        _shutil.which('microsoft-edge'), _shutil.which('google-chrome'),
+        _shutil.which('chromium'), _shutil.which('chromium-browser')) if p)
 
 
 def run_gui(open_browser=True):

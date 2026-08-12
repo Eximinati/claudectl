@@ -227,21 +227,32 @@ def all_config_dirs():
 
 # ── executable discovery ────────────────────────────────────
 
+def _editor_candidates():
+    if os.name == 'nt':
+        return [
+            r'C:\Program Files\Notepad++\notepad++.exe',
+            r'C:\Program Files (x86)\Notepad++\notepad++.exe',
+            os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Programs',
+                         'Notepad++', 'notepad++.exe'),
+            shutil.which('notepad++'),
+            shutil.which('code'),
+            os.path.join(os.environ.get('WINDIR', r'C:\Windows'), 'notepad.exe'),
+            shutil.which('notepad'),
+        ]
+    # $VISUAL/$EDITOR first: on POSIX the user has already answered this
+    # question, and answering it differently is the wrong kind of opinion.
+    return [shutil.which(os.environ.get('VISUAL', '') or os.environ.get('EDITOR', '')),
+            shutil.which('code'), shutil.which('gedit'), shutil.which('kate'),
+            shutil.which('nano'), shutil.which('vim'), shutil.which('vi')]
+
+
 def find_editor():
-    """Best available text editor. Settings override > Notepad++ > VS Code > notepad."""
+    """Best available text editor. Settings override first, then a per-platform
+    table."""
     override = load_settings().get('editor', '')
     if override and os.path.exists(override):
         return override
-    candidates = [
-        r'C:\Program Files\Notepad++\notepad++.exe',
-        r'C:\Program Files (x86)\Notepad++\notepad++.exe',
-        os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Programs', 'Notepad++', 'notepad++.exe'),
-        shutil.which('notepad++'),
-        shutil.which('code'),
-        os.path.join(os.environ.get('WINDIR', r'C:\Windows'), 'notepad.exe'),
-        shutil.which('notepad'),
-    ]
-    for exe in candidates:
+    for exe in _editor_candidates():
         if exe and os.path.exists(exe):
             return exe
     return None
@@ -261,14 +272,17 @@ def open_in_editor(path):
 
 
 def get_claude_exe():
-    """Locate claude.exe. Settings override > default install path > PATH. None if missing."""
+    """Locate the Claude Code binary. Settings override > default install path
+    > PATH. None if missing. The install path is the same on every platform;
+    only the file extension differs."""
     override = load_settings().get('claude_exe', '')
     if override and os.path.exists(override):
         return override
-    default = os.path.join(_USERPROFILE, '.local', 'bin', 'claude.exe')
+    exe = 'claude.exe' if os.name == 'nt' else 'claude'
+    default = os.path.join(_USERPROFILE, '.local', 'bin', exe)
     if os.path.exists(default):
         return default
-    for name in ('claude.exe', 'claude'):
+    for name in (exe, 'claude'):
         found = shutil.which(name)
         if found:
             return found

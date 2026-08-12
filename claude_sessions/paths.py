@@ -68,12 +68,23 @@ def find_actual_path(encoded, max_depth=8, folder=None):
             if mtime is not None:
                 _path_cache[folder] = (mtime, got)
             return got
-    if '--' not in encoded:
-        return None
-    drive_part, rest = encoded.split('--', 1)
-    if not drive_part:          # UNC (leading '--'); only the transcript knows it
-        return None
-    base = drive_part + ':\\'
+    # Fallback only — the transcript's own `cwd` above is exact, and this walk
+    # is guesswork against a lossy encoding. Where it STARTS is the only
+    # platform-specific part: 'D--Claude' names a drive, '-home-mab-proj' names
+    # the root.
+    if os.name == 'nt':
+        if '--' not in encoded:
+            return None
+        drive_part, rest = encoded.split('--', 1)
+        if not drive_part:      # UNC (leading '--'); only the transcript knows it
+            return None
+        base = drive_part + ':\\'
+        fold = str.lower                       # NTFS is case-insensitive
+    else:
+        if not encoded.startswith('-'):
+            return None
+        base, rest = '/', encoded[1:]
+        fold = str                             # and POSIX is not
     if not os.path.exists(base):
         return None
 
@@ -87,9 +98,9 @@ def find_actual_path(encoded, max_depth=8, folder=None):
                        if os.path.isdir(os.path.join(current, d))]
         except (PermissionError, OSError):
             return None
-        rem_l = remaining.lower()
+        rem_l = fold(remaining)
         for subdir in subdirs:
-            enc = encode_component(subdir).lower()   # NTFS is case-insensitive
+            enc = fold(encode_component(subdir))
             if enc == rem_l:
                 return os.path.join(current, subdir)
             if rem_l.startswith(enc + '-'):

@@ -117,7 +117,8 @@ def run():
         return
 
     # ── UTF-8 console ─────────────────────────────────────────────
-    os.system('chcp 65001 >nul 2>&1')
+    if os.name == 'nt':      # POSIX terminals are already UTF-8
+        os.system('chcp 65001 >nul 2>&1')
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     except Exception:

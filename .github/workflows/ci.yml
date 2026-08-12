@@ -12,13 +12,20 @@ on:
 
 jobs:
   test:
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         # requires-python is >=3.10; test the ends of that claim, not just the
         # middle. 3.13/3.14 were never exercised despite being supported.
         python-version: ['3.10', '3.12', '3.13', '3.14']
+        os: [windows-latest]
+        # The POSIX port has one input backend and one spawn table to get
+        # wrong, not a per-version surface — one interpreter each is the
+        # signal, and four more would only re-run the same branch.
+        include:
+          - {os: ubuntu-latest, python-version: '3.12'}
+          - {os: macos-latest, python-version: '3.12'}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,7 +44,7 @@ jobs:
           if (-not $line) { $out | Select-Object -Last 5; throw 'could not read the collected count' }
           $n = [int]$line.Matches[0].Groups[1].Value
           Write-Host "collected $n tests"
-          if ($n -lt 1055) { throw "collected only $n tests — expected at least 1055" }
+          if ($n -lt 1080) { throw "collected only $n tests — expected at least 1080" }
       - name: Run tests
         run: python -m pytest tests/ -v
       - name: Verify package imports
@@ -72,7 +79,10 @@ jobs:
         shell: pwsh
         run: |
           python -m venv .wheeltest
-          $py = '.wheeltest\Scripts\python.exe'
+          # $IsWindows is pwsh-only and absent in Windows PowerShell 5.1, where
+          # the Scripts path is the right answer anyway.
+          $py = if ($IsWindows -eq $false) { '.wheeltest/bin/python' }
+                else { '.wheeltest\Scripts\python.exe' }
           $whl = (Get-ChildItem dist\*.whl | Select-Object -First 1).FullName
           & $py -m pip install --quiet $whl
           & $py -c "import claude_sessions.skills as s, glob, os, sys; d=s.bundled_templates_dir(); n=len(glob.glob(os.path.join(d,'*','SKILL.md'))); print('templates:', n, d); sys.exit(0 if n >= 8 else 1)"
