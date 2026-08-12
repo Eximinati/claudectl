@@ -53,6 +53,22 @@ def test_the_bundled_skill_templates_are_covered_by_a_glob():
     assert not missing, 'templates that would not ship: %s' % missing
 
 
+def test_the_plugin_bundle_is_tracked_by_git():
+    """The plugin is installed from the REPO by `/plugin marketplace add`, not
+    from the wheel — so the failure mode is not a missing glob but a file that
+    never got committed, which looks identical from inside a working tree."""
+    want = [os.path.join('.claude-plugin', 'marketplace.json'),
+            os.path.join('plugin', '.claude-plugin', 'plugin.json'),
+            os.path.join('plugin', 'skills', 'commit-message', 'SKILL.md'),
+            os.path.join('plugin', 'commands', 'recall.md')]
+    r = subprocess.run(['git', 'check-ignore'] + want, cwd=ROOT,
+                       capture_output=True, text=True, encoding='utf-8',
+                       errors='ignore', timeout=60)
+    assert r.returncode != 0, 'gitignored plugin files: %s' % r.stdout
+    for rel in want:
+        assert os.path.isfile(os.path.join(ROOT, rel)), rel
+
+
 def test_the_console_script_target_exists_and_is_thin():
     """`claudectl statusline` runs on every conversation turn. main's import
     chain pulls urllib/ssl/http.client via `usage`; cli.py must dispatch before

@@ -44,7 +44,7 @@ jobs:
           if (-not $line) { $out | Select-Object -Last 5; throw 'could not read the collected count' }
           $n = [int]$line.Matches[0].Groups[1].Value
           Write-Host "collected $n tests"
-          if ($n -lt 1270) { throw "collected only $n tests — expected at least 1270" }
+          if ($n -lt 1285) { throw "collected only $n tests — expected at least 1285" }
       - name: Run tests
         run: python -m pytest tests/ -v
       - name: Verify package imports
@@ -88,6 +88,24 @@ jobs:
           & $py -c "import claude_sessions.skills as s, glob, os, sys; d=s.bundled_templates_dir(); n=len(glob.glob(os.path.join(d,'*','SKILL.md'))); print('templates:', n, d); sys.exit(0 if n >= 8 else 1)"
           & $py -c "import claude_sessions.gui_html as g, sys; sys.exit(0 if len(g.PAGE) > 10000 and g.VENDOR_FILES else 1)"
           if ($LASTEXITCODE -ne 0) { throw 'the wheel is missing shipped data files' }
+
+  plugin:
+    # The same validation the community plugin review runs. Cheap, and the
+    # failure it catches — a manifest a user cannot install — is invisible
+    # from inside the repo.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm install -g @anthropic-ai/claude-code
+      - run: claude plugin validate .
+      - run: claude plugin validate ./plugin
+      - name: The bundled skills match the package templates
+        run: python tools/gen_plugin.py --check
+      - name: The generated API reference is current
+        run: python tools/gen_api_docs.py --check
 
   gui-smoke:
     # Scheduled only — needs a Chromium download and a software GL stack.

@@ -311,7 +311,7 @@ Everything above, as a native desktop app — full feature parity with the TUI, 
 ### Requirements
 
 - Python 3.10+
-- Windows 10 or Windows 11
+- Windows, macOS or Linux
 - [Claude Code CLI](https://docs.anthropic.com/claude-code) installed (auto-detected at `%USERPROFILE%\.local\bin\claude.exe` or on PATH; overridable in Settings)
 - Any text editor — Notepad++ / VS Code are auto-detected, Windows Notepad is the fallback (overridable in Settings)
 
@@ -336,6 +336,27 @@ cd claudectl
 ```
 
 Double-click `Open Repo cmd.bat` (or run it from a terminal).
+
+#### Inside a Claude Code session
+
+claudectl also ships as a Claude Code plugin, which puts its three most useful
+commands and its eight skills inside the session itself:
+
+```
+/plugin marketplace add babarmuhammad/claudectl
+/plugin install claudectl@claudectl
+```
+
+| | |
+|---|---|
+| `/claudectl:recall <topic>` | This project's task-relevant memory, scored locally — no model call |
+| `/claudectl:status` | Memory age, repositories and worktrees, health checks |
+| `/claudectl:review` | Review the current diff against this project's own learned conventions |
+
+The commands shell out to the `claudectl` CLI, so install that too; the skills
+work on their own. The plugin deliberately ships **no hooks** — claudectl's own
+hook manager owns those, and two owners for one `settings.json` entry means the
+recall hook runs twice per prompt.
 
 #### GUI setup
 
