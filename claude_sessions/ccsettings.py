@@ -22,33 +22,66 @@ from . import hooks
 
 __all__ = ['SCHEMA', 'read', 'write', 'read_all']
 
-#: (kind, choices, help). kind: bool | str | int | enum | list | json
+#: (kind, choices, help, group). kind: bool | str | int | enum | list | json
+#:
 #: Only keys claudectl can validate are here. A key it does not know is still
 #: preserved — nothing outside this table is ever touched.
+#:
+#: `group` exists for the editor: twenty-one raw camelCase keys in one flat
+#: list is a wall, and the answer to "where do I change how much it thinks" is
+#: not findable by scanning it. The order of this dict IS the display order.
 SCHEMA = {
-    'model':                  ('str', [], 'Default model id for new sessions'),
-    'fallbackModel':          ('str', [], 'Model used when the primary is overloaded'),
-    'availableModels':        ('list', [], 'Restrict the model picker to these ids'),
+    # — how it answers —
+    'model':                  ('str', [], 'Default model id for new sessions',
+                               'Model & reasoning'),
+    'fallbackModel':          ('str', [], 'Model used when the primary is overloaded',
+                               'Model & reasoning'),
+    'availableModels':        ('list', [], 'Restrict the model picker to these ids',
+                               'Model & reasoning'),
     'effortLevel':            ('enum', ['low', 'medium', 'high', 'xhigh', 'max'],
-                               'Default reasoning effort'),
-    'alwaysThinkingEnabled':  ('bool', [], 'Think before every response'),
-    'autoCompactEnabled':     ('bool', [], 'Compact the context automatically'),
-    'autoCompactWindow':      ('int', [], 'Tokens of context to keep when compacting'),
-    'autoMemoryEnabled':      ('bool', [], "Let Claude Code maintain its own memory"),
-    'claudeMdExcludes':       ('list', [], 'Glob patterns of CLAUDE.md files to skip'),
-    'cleanupPeriodDays':      ('int', [], 'Days of transcripts and snapshots to keep'),
-    'fileCheckpointingEnabled': ('bool', [], 'Snapshot files before edits (/rewind)'),
-    'editorMode':             ('enum', ['normal', 'vim'], 'Prompt editing mode'),
-    'teammateMode':           ('str', [], 'Agent-teams behaviour'),
-    'disableAllHooks':        ('bool', [], 'Master switch for every hook'),
-    'disableBundledSkills':   ('bool', [], 'Do not load the built-in skills'),
-    'autoUpdatesChannel':     ('enum', ['stable', 'latest'], 'Which build to update to'),
-    'axScreenReader':         ('bool', [], 'Screen-reader friendly output'),
-    'attribution':            ('json', [], 'Co-authored-by / commit attribution'),
-    'env':                    ('json', [], 'Environment variables for every session'),
-    'sandbox':                ('json', [], 'Sandboxing policy (macOS/Linux/WSL2 only)'),
-    'theme':                  ('str', [], "Claude Code's own colour theme"),
+                               'Default reasoning effort', 'Model & reasoning'),
+    'alwaysThinkingEnabled':  ('bool', [], 'Think before every response',
+                               'Model & reasoning'),
+    # — what it remembers —
+    'autoCompactEnabled':     ('bool', [], 'Compact the context automatically',
+                               'Context & memory'),
+    'autoCompactWindow':      ('int', [], 'Tokens of context to keep when compacting',
+                               'Context & memory'),
+    'autoMemoryEnabled':      ('bool', [], "Let Claude Code maintain its own memory",
+                               'Context & memory'),
+    'claudeMdExcludes':       ('list', [], 'Glob patterns of CLAUDE.md files to skip',
+                               'Context & memory'),
+    # — the terminal —
+    'editorMode':             ('enum', ['normal', 'vim'], 'Prompt editing mode',
+                               'Editing & interface'),
+    'theme':                  ('str', [], "Claude Code's own colour theme",
+                               'Editing & interface'),
+    'axScreenReader':         ('bool', [], 'Screen-reader friendly output',
+                               'Editing & interface'),
+    # — what it keeps and how it updates —
+    'cleanupPeriodDays':      ('int', [], 'Days of transcripts and snapshots to keep',
+                               'Sessions & maintenance'),
+    'fileCheckpointingEnabled': ('bool', [], 'Snapshot files before edits (/rewind)',
+                                 'Sessions & maintenance'),
+    'autoUpdatesChannel':     ('enum', ['stable', 'latest'], 'Which build to update to',
+                               'Sessions & maintenance'),
+    # — what it is allowed to load —
+    'teammateMode':           ('str', [], 'Agent-teams behaviour', 'Teams & extensions'),
+    'disableAllHooks':        ('bool', [], 'Master switch for every hook',
+                               'Teams & extensions'),
+    'disableBundledSkills':   ('bool', [], 'Do not load the built-in skills',
+                               'Teams & extensions'),
+    # — raw JSON, for the ones with no simpler shape —
+    'attribution':            ('json', [], 'Co-authored-by / commit attribution',
+                               'Advanced'),
+    'env':                    ('json', [], 'Environment variables for every session',
+                               'Advanced'),
+    'sandbox':                ('json', [], 'Sandboxing policy (macOS/Linux/WSL2 only)',
+                               'Advanced'),
 }
+
+#: display order, taken from SCHEMA rather than repeated
+GROUPS = list(dict.fromkeys(v[3] for v in SCHEMA.values()))
 
 
 def read(cfgdir=None):
@@ -73,7 +106,7 @@ def write(key, value, cfgdir=None):
     """
     if key not in SCHEMA:
         return False, 'unknown setting %r' % (key,)
-    kind, choices, _help = SCHEMA[key]
+    kind, choices = SCHEMA[key][0], SCHEMA[key][1]
     if value is None or value == '':
         s = hooks._load(cfgdir)
         if key not in s:

@@ -262,9 +262,15 @@ html.mo-off .btn:hover,html.mo-off .btn:active{transform:none}
 .uwin.hot .upct{color:var(--err)}
 .uwin .urst{color:var(--dim2);font-family:var(--mono);font-size:var(--fs-micro);
   overflow:hidden;text-overflow:ellipsis}
-.tabs{display:flex;gap:2px;padding:0 26px;background:var(--bg2);
+/* The strip's padding and the tab's own padding used to STACK, so the first
+   tab's label sat 16px right of the page title and the cards below it — the
+   one thing on this column that did not share its left edge. The row is inset
+   by the difference instead, so the label lands on 26px while each tab keeps
+   its full click target and underline width. */
+.tabs{--tab-px:16px;display:flex;gap:2px;padding:0 calc(26px - var(--tab-px));
+  background:var(--bg2);
   border-bottom:1px solid var(--line);position:sticky;top:0;z-index:4}
-.tab{padding:9px 16px;cursor:pointer;color:var(--dim);font-size:12.5px;
+.tab{padding:9px var(--tab-px);cursor:pointer;color:var(--dim);font-size:12.5px;
   border-bottom:2px solid transparent;font-weight:600;
   text-transform:uppercase;letter-spacing:.06em;
   transition:color var(--t-f),border-color var(--t-f)}
@@ -450,6 +456,16 @@ html.mo-off .tchart .omnibg{animation:none}
 .rowtune{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);
   padding:14px 18px;max-width:940px;margin-top:-2px}
 .empty{color:var(--dim);text-align:center;margin-top:7vh}
+/* the 7vh above is for a whole page with nothing in it. Inside a card it
+   pushes a one-line "nothing here" down by 70px and leaves the card looking
+   broken, so an in-card empty state opts out. */
+.card .empty{margin-top:0;padding:16px 0;font-size:13px}
+/* three equal columns that size to their own content rather than stretching
+   to the tallest — an empty column next to a full one must not inherit its
+   height */
+.cols3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:14px 18px;align-items:start}
+@media(max-width:900px){.cols3{grid-template-columns:1fr}}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
   padding:16px 18px;margin-bottom:12px;max-width:940px;
   transition:border-color var(--t-f),box-shadow var(--t-f)}
@@ -480,6 +496,47 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
     letter-spacing:.06em;flex:none;min-width:80px}
   .tbl .num{text-align:left}
 }
+/* the disk sweep's controls: `.mrow` right-aligns for a modal's buttons, which
+   is the wrong shape for a form control that belongs beside its own label */
+.gcbar{display:flex;align-items:flex-end;gap:12px;margin-top:12px;flex-wrap:wrap}
+.gcbar #gcOut{color:var(--dim);font-size:13px;padding-bottom:8px}
+
+/* ── Claude Code settings editor ──────────────────────────────
+   A grid, not a table: the label column has to be wide and readable while the
+   value columns stay equal whatever the account names are, and `table-layout`
+   cannot express that without fixed pixel widths per column. */
+.cctable{display:grid;
+  grid-template-columns:minmax(220px,2fr) repeat(var(--cc-accts,1),minmax(120px,1fr)) 36px;
+  align-items:center;column-gap:12px;font-size:13px}
+.ccrow{display:contents}
+.ccrow>*{padding:7px 0;border-bottom:1px solid var(--panel2)}
+/* the account names must stay visible: this list is taller than the viewport */
+.cchead>*{position:sticky;top:0;z-index:2;background:var(--panel);
+  color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.7px;
+  border-bottom:1px solid var(--line);padding-bottom:6px}
+.ccgrp{grid-column:1/-1;margin-top:14px;padding:6px 0 4px;
+  color:var(--txt);font-size:11px;font-weight:600;text-transform:uppercase;
+  letter-spacing:.9px;border-bottom:1px solid var(--line)}
+.cclbl{display:flex;gap:8px;align-items:flex-start;padding-right:8px}
+.cclbl code{color:var(--dim2);font:var(--fs-micro)/1.5 var(--mono);margin-left:6px}
+.cchelp{color:var(--dim);font-size:12px;margin-top:1px}
+/* set / unset / accounts-disagree, in one glance down the left edge */
+.ccdot{width:6px;height:6px;border-radius:50%;flex:none;margin-top:6px}
+.ccdot.on{background:var(--ok,#7ee787)}
+.ccdot.warn{background:var(--warn,#e3b341)}
+.ccdot.off{background:var(--line)}
+.ccrow.differ .cclbl b{color:var(--warn,#e3b341)}
+.ccall{display:flex;justify-content:flex-end}
+.ccall .btn{opacity:0;transition:opacity var(--t-f)}
+.cctable:hover .ccall .btn{opacity:.55}
+.ccall .btn:hover{opacity:1}
+@media(max-width:719px){
+  .cctable{grid-template-columns:1fr}
+  .cchead,.ccall{display:none}
+  .ccrow>*{border-bottom:0;padding:3px 0}
+  .ccrow{display:block;border-bottom:1px solid var(--panel2);padding:8px 0}
+}
+
 /* segmented ▰▱ meters: the fill's width still comes from the inline style each
    caller already sets, so every bar in the app picks this up with no JS change */
 .bar{height:8px;border-radius:2px;overflow:hidden;min-width:80px}
@@ -512,10 +569,21 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .fld{margin-bottom:2px}
 .fld label{display:block;color:var(--dim);font-size:11px;text-transform:uppercase;
   letter-spacing:.8px;margin-bottom:4px}
-.fld select,.fld input,.fld textarea{width:100%;background:var(--bg);
+/* `.fld` gives the layout; the generic selector gives the LOOK. Only `.fld`
+   used to be styled, so any control written without that wrapper fell through
+   to the browser default and rendered as a white box on a dark page — which
+   is exactly what happened the first time the Claude Code settings editor
+   shipped. Styling the element itself makes that unreachable rather than
+   something the next author has to remember. Range and checkbox keep their
+   native painting. */
+.fld select,.fld input,.fld textarea,
+#content input:not([type=range]):not([type=checkbox]):not([type=radio]),
+#content select,#content textarea{width:100%;background:var(--bg);
   border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 10px;
   color:var(--txt);font-size:13px;outline:none;font-family:inherit;
   transition:border-color var(--t-f),box-shadow var(--t-f)}
+#content input:focus,#content select:focus,#content textarea:focus{
+  border-color:var(--cyan);box-shadow:0 0 0 3px rgba(125,207,255,.12)}
 .fld textarea{min-height:90px;resize:vertical}
 .fld select:focus,.fld input:focus,.fld textarea:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(125,207,255,.12)}
 .mrow{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
@@ -949,6 +1017,9 @@ html.mo-off *,html.mo-off *::before,html.mo-off *::after{
   .nav .it.sel::before,.tab.sel::before{content:none}
   .side .foot{justify-content:center;padding:10px 4px}
   .content,.top,.ubar,.tabs,.jban{padding-left:14px;padding-right:14px}
+  /* same trick as above, and it has to be restated because this block sets the
+     padding directly: the tab keeps 14px of its own, the row keeps none */
+  .tabs{--tab-px:14px;padding-left:0;padding-right:0}
 }
 
 /* ══ skins ════════════════════════════════════════════════════════════════════

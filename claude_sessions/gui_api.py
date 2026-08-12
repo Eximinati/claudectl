@@ -1497,8 +1497,10 @@ def api_cc_settings_get(q, body):
     """Claude Code's own settings.json, per account, with the schema that says
     how to draw each control."""
     from . import ccsettings
-    return {'schema': {k: {'kind': v[0], 'choices': v[1], 'help': v[2]}
+    return {'schema': {k: {'kind': v[0], 'choices': v[1], 'help': v[2],
+                           'group': v[3]}
                        for k, v in ccsettings.SCHEMA.items()},
+            'groups': ccsettings.GROUPS,
             'accounts': [{'name': n, 'dir': d, 'values': ccsettings.read(d)}
                          for n, d in _c.all_config_dirs()]}
 

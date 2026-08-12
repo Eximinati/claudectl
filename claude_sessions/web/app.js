@@ -890,6 +890,11 @@ async function refreshDashboard(){
   try{[d,plan]=await Promise.all([api('/api/dashboard',{signal:ac.signal}),
                                  api('/api/usage/plan',{signal:ac.signal})]);}
   catch(e){if(e.name==='AbortError')return;d=null;}
+  // The poll outlives the page. Same lesson as NAV_ID and paint(), in a timer
+  // rather than a renderer: everything below writes into elements that only
+  // exist on home, and navigating away while the fetch was in flight left it
+  // dereferencing null. It surfaced as an unrelated page getting slower.
+  if(!$('#dashProjects'))return;
   if(d){
     const bd=d.breakdown||{days:[],accounts:[],projects:[],totals:{}};
     setV($('#dashChart'),tokenChart(bd.days||[],bd.accounts||[]));
@@ -2149,6 +2154,7 @@ async function pgClient(nav){
   const [use,bg,disk,cc]=await Promise.all([
     api('/api/client/usage'),api('/api/background-agents'),
     api('/api/disk'),api('/api/cc-settings')]);
+  CCACCTS=cc.accounts||[];
   const useRows=(k,label)=>{
     const rows=(use[k]||[]);
     if(!rows.length)return `<div class="empty">No ${label} recorded as used yet.</div>`;
@@ -2172,7 +2178,7 @@ async function pgClient(nav){
   if(!paint(nav,`
     <div class="card"><h3>${ic('ai')} What is actually being used</h3>
       <p style="color:var(--dim);font-size:13px;margin-bottom:10px">Straight from Claude Code's own counters — the only record of which skills, plugins and agents are live rather than dead weight.</p>
-      <div class="bento3">
+      <div class="cols3">
         <div>${useRows('skills','Skill')}</div>
         <div>${useRows('plugins','Plugin')}</div>
         <div>${useRows('agents','Agent')}</div></div></div>
@@ -2180,46 +2186,92 @@ async function pgClient(nav){
       <h3 style="margin-top:14px">Agent teams</h3>${teamCard}</div>
     <div class="card"><h3>${ic('folder')} Disk</h3>
       <table class="tbl"><tr><th>Account</th><th class="num">Total</th><th>Stores</th></tr>${diskRows}</table>
-      <div class="mrow" style="margin-top:10px">
-        <input id="gcDays" type="number" min="1" value="30" style="width:90px" title="Keep this many days">
+      <div class="gcbar">
+        <div class="fld" style="width:110px"><label for="gcDays">Keep days</label>
+          <input id="gcDays" type="number" min="1" value="30"></div>
         <button class="btn sm" onclick="gcRun(false)">Preview cleanup</button>
-        <span id="gcOut" style="color:var(--dim);font-size:13px"></span></div></div>
+        <span id="gcOut"></span></div></div>
     <div class="card"><h3>${ic('settings')} Claude Code settings</h3>
-      <p style="color:var(--dim);font-size:13px;margin-bottom:10px">Written into each account's own settings.json. Blank clears the key rather than writing a default.</p>
+      <p style="color:var(--dim);font-size:13px;margin-bottom:12px">
+        Written into each account's own <code>settings.json</code>. Leaving a field empty
+        <b>removes</b> the key rather than writing a default — Claude Code treats
+        <i>off</i> and <i>absent</i> differently.</p>
       ${ccTable(cc)}</div>
     <div class="card"><h3>${ic('search')} Prompt history</h3>
-      <div class="mrow"><input id="phQ" placeholder="search every prompt you have typed"
-        onkeydown="if(event.key==='Enter')phSearch()"><button class="btn sm" onclick="phSearch()">Search</button></div>
+      <div class="gcbar">
+        <div class="fld" style="flex:1;min-width:220px">
+          <input id="phQ" placeholder="search every prompt you have typed"
+            onkeydown="if(event.key==='Enter')phSearch()"></div>
+        <button class="btn sm" onclick="phSearch()">Search</button></div>
       <div id="phOut"></div></div>`))return;
 }
+/* Twenty-one raw camelCase keys against three unlabelled columns of white
+   browser-default inputs is what this was. Three things fix it: the controls
+   go through `.fld` so they are the app's inputs and follow the skin, the
+   rows are grouped under headings so the list is scannable, and each row says
+   whether it is set anywhere and whether the accounts agree. */
 function ccTable(cc){
-  const accts=cc.accounts||[],sch=cc.schema||{};
-  return `<table class="tbl"><tr><th>Setting</th>`
-    +accts.map(a=>`<th>${esc(a.name)}</th>`).join('')+`</tr>`
-    +Object.keys(sch).map(k=>{
-      const s=sch[k];
-      return `<tr><td title="${esc(s.help)}">${esc(k)}<div style="color:var(--dim2);font-size:11px">${esc(s.help)}</div></td>`
-        +accts.map(a=>`<td>${ccInput(k,s,a)}</td>`).join('')+'</tr>';}).join('')
-    +'</table>';
+  const accts=cc.accounts||[],sch=cc.schema||{},groups=cc.groups||[];
+  if(!accts.length)return '<div class="empty">No accounts configured.</div>';
+  const head=`<div class="ccrow cchead"><div></div>`
+    +accts.map(a=>`<div title="${esc(a.dir)}">${esc(a.name)}</div>`).join('')
+    +`<div></div></div>`;
+  const body=groups.map(g=>{
+    const keys=Object.keys(sch).filter(k=>sch[k].group===g);
+    if(!keys.length)return '';
+    return `<div class="ccgrp">${esc(g)}</div>`+keys.map(k=>ccRow(k,sch[k],accts)).join('');
+  }).join('');
+  return `<div class="cctable" style="--cc-accts:${accts.length}">${head}${body}</div>`;
+}
+function ccRow(k,s,accts){
+  const vals=accts.map(a=>a.values[k]);
+  const set=vals.filter(v=>v!==undefined).length;
+  const differ=set>0&&new Set(vals.map(v=>JSON.stringify(v))).size>1;
+  const state=!set?'<span class="ccdot off" title="not set anywhere"></span>'
+    :differ?'<span class="ccdot warn" title="the accounts disagree"></span>'
+    :'<span class="ccdot on" title="set, and the same everywhere"></span>';
+  return `<div class="ccrow${differ?' differ':''}">
+    <div class="cclbl">${state}<div><b>${esc(ccName(k))}</b>
+      <code>${esc(k)}</code>
+      <div class="cchelp">${esc(s.help)}</div></div></div>`
+    +accts.map(a=>`<div class="fld">${ccInput(k,s,a)}</div>`).join('')
+    +`<div class="ccall"><button class="btn sm" title="Apply the first account's value to all"
+        onclick="ccAll('${k}')">${ic('group')}</button></div></div>`;
+}
+/* autoCompactWindow -> "Auto compact window". The raw key still shows, because
+   it is what the documentation and settings.json call it. */
+function ccName(k){
+  const s=k.replace(/([a-z0-9])([A-Z])/g,'$1 $2').toLowerCase();
+  return s.charAt(0).toUpperCase()+s.slice(1);
 }
 function ccInput(k,s,a){
-  const v=a.values[k],id='cc_'+k+'_'+btoa(a.dir).replace(/[^a-zA-Z0-9]/g,'');
+  const v=a.values[k],id=ccId(k,a.dir);
   const set=`onchange="ccSet('${k}',this,'${esc(a.dir)}')"`;
   if(s.kind==='bool')
-    return `<select id="${id}" ${set}><option value=""${v===undefined?' selected':''}>(unset)</option>
-      <option value="true"${v===true?' selected':''}>true</option>
-      <option value="false"${v===false?' selected':''}>false</option></select>`;
+    return `<select id="${id}" ${set}><option value=""${v===undefined?' selected':''}>—</option>
+      <option value="true"${v===true?' selected':''}>on</option>
+      <option value="false"${v===false?' selected':''}>off</option></select>`;
   if(s.kind==='enum')
-    return `<select id="${id}" ${set}><option value="">(unset)</option>`
+    return `<select id="${id}" ${set}><option value="">—</option>`
       +s.choices.map(c=>`<option${v===c?' selected':''}>${esc(c)}</option>`).join('')+'</select>';
-  const shown=v===undefined?'':(typeof v==='object'?JSON.stringify(v):(Array.isArray(v)?v.join(', '):v));
-  return `<input id="${id}" value="${esc(String(shown))}" ${set} style="width:100%">`;
+  const shown=v===undefined?'':(Array.isArray(v)?v.join(', '):(typeof v==='object'?JSON.stringify(v):v));
+  const ph=s.kind==='json'?'{ }':(s.kind==='list'?'a, b, c':(s.kind==='int'?'number':'—'));
+  return `<input id="${id}" value="${esc(String(shown))}" placeholder="${esc(ph)}" ${set}>`;
 }
+function ccId(k,dir){return 'cc_'+k+'_'+btoa(dir).replace(/[^a-zA-Z0-9]/g,'');}
 async function ccSet(key,el,dir){
   const r=await post('/api/cc-settings',{key,value:el.value,cfgdir:dir});
   toast(r.ok?(r.message||'Saved'):(r.error||'Failed'),r.ok?'ok':'err');
-  if(!r.ok)drawPage('client');
+  drawPage('client');          // redraw so the set/differs marker is honest
 }
+async function ccAll(key){
+  const first=$('#'+ccId(key,(CCACCTS[0]||{}).dir||''));
+  if(!first)return;
+  const r=await post('/api/cc-settings',{key,value:first.value,all_accounts:true});
+  toast(r.ok?'Applied to every account':'Failed',r.ok?'ok':'err');
+  drawPage('client');
+}
+let CCACCTS=[];
 async function gcRun(apply){
   const days=parseInt(($('#gcDays')||{}).value||'30',10)||30;
   const r=await post('/api/disk/gc',{days,apply});

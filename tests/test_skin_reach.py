@@ -204,3 +204,51 @@ def test_no_look_may_change_how_big_the_ui_is():
     # the sizes themselves must still be declared in exactly one place
     assert '.card h3{font-size:14px}' in _CSS
     assert '.kpi .kv2{font-size:20px}' in _CSS
+
+
+# ── form controls ────────────────────────────────────────────
+
+def test_a_bare_input_cannot_render_as_a_white_browser_default():
+    """Only `.fld input` was styled, so any control written without that
+    wrapper fell through to the browser default and rendered as a WHITE box on
+    a dark page. That shipped: the first cut of the Claude Code settings editor
+    was three columns of white rectangles.
+
+    The fix is not a convention to remember — it is that the element itself is
+    styled inside `#content`, which is where every page renders.
+    """
+    assert '#content input:not([type=range])' in _CSS, \
+        'a bare <input> in a page is unstyled again'
+    assert '#content select' in _CSS and '#content textarea' in _CSS
+    # the block those selectors join has to be the one that paints the surface
+    block = _CSS[_CSS.index('#content input:not([type=range])'):]
+    block = block[:block.index('}')]
+    assert 'background:var(--bg)' in block and 'color:var(--txt)' in block
+
+
+def test_the_native_controls_keep_their_own_painting():
+    """A range slider or a checkbox restyled as a text field is worse than the
+    default, not better."""
+    sel = _CSS[_CSS.index('#content input:not([type=range])'):]
+    sel = sel[:sel.index('{')]
+    for kind in ('range', 'checkbox', 'radio'):
+        assert ':not([type=%s])' % kind in sel, kind
+
+
+def test_the_tab_row_shares_the_content_column_left_edge():
+    """The strip's padding and the tab's own padding used to stack, so the
+    first tab label sat 16px right of the page title and of every card below
+    it — the one thing on the column that did not line up."""
+    # `.tabs{` appears twice — the narrow-window override comes first in the
+    # file, so match the declaration that actually sets the inset
+    tabs = _CSS[_CSS.index('.tabs{--tab-px'):]
+    tabs = tabs[:tabs.index('}')]
+    assert 'calc(26px - var(--tab-px))' in tabs
+    assert '.tab{padding:9px var(--tab-px)' in _CSS, \
+        'the tab no longer takes its padding from the shared inset'
+
+
+def test_an_in_card_empty_state_is_not_pushed_down_a_screen():
+    """`.empty` carries margin-top:7vh for a whole page with nothing in it.
+    Inside a card that leaves a one-line message floating 70px down."""
+    assert '.card .empty{margin-top:0' in _CSS

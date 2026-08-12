@@ -109,6 +109,51 @@ ROUTES = {
     '/api/accounts': {'accounts': [
         {'name': 'default', 'resolved': '~/.claude', 'active': True, 'dir': ''},
         {'name': 'work', 'resolved': '~/.claude-work', 'active': False, 'dir': 'w'}]},
+    # Claude Code's own state. Stubbed with CONTENT, not empties: the settings
+    # editor is a grid whose column count comes from the account list, and an
+    # empty one renders nothing for the overflow audit to look at.
+    '/api/client/usage': {
+        'skills': [{'name': 'artifact-design', 'count': 7, 'last_used': '18d'},
+                   {'name': 'claude-api', 'count': 4, 'last_used': '6d'}],
+        'plugins': [{'name': 'caveman@caveman', 'count': 2473, 'last_used': '86m'}],
+        'agents': [{'name': 'bg', 'count': 0, 'last_used': '59d'}]},
+    '/api/background-agents': {
+        'daemon': {'running': False, 'workers': [], 'recognised': True,
+                   'updated': '8d'},
+        'teams': {'teams': [], 'tasks': [], 'recognised': False}},
+    '/api/disk': {'bytes': 795_000_000, 'accounts': [
+        {'account': 'default', 'dir': '~/.claude', 'bytes': 569_000_000,
+         'stores': [{'name': 'projects', 'bytes': 495_000_000, 'files': 1065,
+                     'oldest_days': 120},
+                    {'name': 'file-history', 'bytes': 72_000_000, 'files': 2253,
+                     'oldest_days': 90}]},
+        {'account': 'work', 'dir': '~/.claude-work', 'bytes': 127_000_000,
+         'stores': [{'name': 'projects', 'bytes': 115_000_000, 'files': 69,
+                     'oldest_days': 40}]}]},
+    '/api/cc-settings': {
+        'groups': ['Model & reasoning', 'Context & memory', 'Advanced'],
+        'schema': {
+            'model': {'kind': 'str', 'choices': [], 'group': 'Model & reasoning',
+                      'help': 'Default model id for new sessions'},
+            'effortLevel': {'kind': 'enum',
+                            'choices': ['low', 'medium', 'high', 'xhigh', 'max'],
+                            'group': 'Model & reasoning',
+                            'help': 'Default reasoning effort'},
+            'alwaysThinkingEnabled': {'kind': 'bool', 'choices': [],
+                                      'group': 'Model & reasoning',
+                                      'help': 'Think before every response'},
+            'autoCompactWindow': {'kind': 'int', 'choices': [],
+                                  'group': 'Context & memory',
+                                  'help': 'Tokens of context to keep when compacting'},
+            'env': {'kind': 'json', 'choices': [], 'group': 'Advanced',
+                    'help': 'Environment variables for every session'}},
+        'accounts': [
+            {'name': 'default', 'dir': '~/.claude',
+             'values': {'effortLevel': 'high', 'model': 'claude-sonnet-5'}},
+            {'name': 'work', 'dir': '~/.claude-work',
+             'values': {'effortLevel': 'max'}}]},
+    '/api/prompt-history': {'prompts': [
+        {'text': 'fix the parser', 'project': 'D:/Claude', 'sid': 's1', 'ts': 1}]},
     '/api/agents': {'categories': []}, '/api/skills': {'project': [], 'templates': []},
     '/api/hooks': {'hooks': [], 'templates': []},
     '/api/omniroute/status': {'ok': False}, '/api/failover/status': {'running': False},
