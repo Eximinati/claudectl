@@ -561,7 +561,7 @@ function modalGate(J,gate){
 const NAV=[['usage','chart','Usage'],['searchp','search','Search'],['mcp','plug','MCP servers'],
   ['agents','robot','Agents'],['skills','ai','Skills'],['hooks','link','Hooks'],
   ['plugins','folder','Plugins'],['ostyles','palette','Output styles'],
-  ['accounts','group','Accounts'],
+  ['accounts','group','Accounts'],['client','ai','Claude Code'],
   ['settings','settings','Settings'],['helpp','help','Help']];
 /* Nav rows carry no gauge. They used to each own an animated canvas, which put
    ~10 looping surfaces in the chrome to encode numbers about pages you weren't
@@ -2103,15 +2103,120 @@ async function applyAgents(){
 async function drawPage(id){
   $('#ttl').textContent=({usage:'Usage',searchp:'Search all sessions',mcp:'MCP servers',
     agents:'Agents',skills:'Skills',hooks:'Hooks',plugins:'Plugins',
-    ostyles:'Output styles',accounts:'Accounts',settings:'Settings',
-    helpp:'Help'})[id]||id;
+    ostyles:'Output styles',accounts:'Accounts',client:'Claude Code',
+    settings:'Settings',helpp:'Help'})[id]||id;
   $('#tpath').textContent='';
   // the token is taken BEFORE the fetches start; each page function drops its
   // write if navigation moved on while it was waiting
   const nav=paintNow(LOADING);
   await ({usage:pgUsage,searchp:pgSearch,mcp:pgMcp,agents:pgAgents,skills:pgSkills,
           hooks:pgHooks,plugins:pgPlugins,ostyles:pgOStyles,
-          accounts:pgAccounts,settings:pgSettings,helpp:pgHelp}[id])(nav);
+          accounts:pgAccounts,client:pgClient,settings:pgSettings,
+          helpp:pgHelp}[id])(nav);
+}
+
+/* Claude Code's OWN state: what it records about itself, which claudectl had
+   never opened. Read-only except the settings editor and the disk sweep, and
+   the sweep reports before it ever deletes. */
+async function pgClient(nav){
+  const [use,bg,disk,cc]=await Promise.all([
+    api('/api/client/usage'),api('/api/background-agents'),
+    api('/api/disk'),api('/api/cc-settings')]);
+  const useRows=(k,label)=>{
+    const rows=(use[k]||[]);
+    if(!rows.length)return `<div class="empty">No ${label} recorded as used yet.</div>`;
+    return `<table class="tbl"><tr><th>${label}</th><th class="num">Uses</th><th>Last</th></tr>`
+      +rows.map(r=>`<tr><td>${esc(r.name)}</td><td class="num">${r.count||''}</td>
+        <td style="color:var(--dim)">${esc(r.last_used)}</td></tr>`).join('')+'</table>';};
+  const d=bg.daemon||{},tm=bg.teams||{};
+  const bgCard=!d.recognised
+    ?'<div class="empty">No background-agent daemon on this machine.</div>'
+    :(d.workers||[]).length
+      ?`<table class="tbl"><tr><th>Worker</th><th>State</th></tr>`+
+        d.workers.map(w=>`<tr><td>${esc(w.id)}</td><td>${esc(w.state||'')}</td></tr>`).join('')+'</table>'
+      :`<div class="empty">No background agents running${d.updated?' (roster updated '+esc(d.updated)+' ago)':''}.</div>`;
+  const teamCard=!tm.recognised
+    ?'<div class="empty">Agent teams are not in use on this machine.</div>'
+    :`<div style="color:var(--dim);font-size:13px">${(tm.teams||[]).length} team(s), ${(tm.tasks||[]).length} task director(ies)</div>`;
+  const mb=b=>(b/1048576).toFixed(1)+' MB';
+  const diskRows=(disk.accounts||[]).map(a=>
+    `<tr><td><b>${esc(a.account)}</b></td><td class="num">${mb(a.bytes)}</td>
+      <td style="color:var(--dim);font-size:12px">${(a.stores||[]).map(s=>esc(s.name)+' '+mb(s.bytes)).join(' · ')}</td></tr>`).join('');
+  if(!paint(nav,`
+    <div class="card"><h3>${ic('ai')} What is actually being used</h3>
+      <p style="color:var(--dim);font-size:13px;margin-bottom:10px">Straight from Claude Code's own counters — the only record of which skills, plugins and agents are live rather than dead weight.</p>
+      <div class="bento3">
+        <div>${useRows('skills','Skill')}</div>
+        <div>${useRows('plugins','Plugin')}</div>
+        <div>${useRows('agents','Agent')}</div></div></div>
+    <div class="card"><h3>${ic('robot')} Background agents</h3>${bgCard}
+      <h3 style="margin-top:14px">Agent teams</h3>${teamCard}</div>
+    <div class="card"><h3>${ic('folder')} Disk</h3>
+      <table class="tbl"><tr><th>Account</th><th class="num">Total</th><th>Stores</th></tr>${diskRows}</table>
+      <div class="mrow" style="margin-top:10px">
+        <input id="gcDays" type="number" min="1" value="30" style="width:90px" title="Keep this many days">
+        <button class="btn sm" onclick="gcRun(false)">Preview cleanup</button>
+        <span id="gcOut" style="color:var(--dim);font-size:13px"></span></div></div>
+    <div class="card"><h3>${ic('settings')} Claude Code settings</h3>
+      <p style="color:var(--dim);font-size:13px;margin-bottom:10px">Written into each account's own settings.json. Blank clears the key rather than writing a default.</p>
+      ${ccTable(cc)}</div>
+    <div class="card"><h3>${ic('search')} Prompt history</h3>
+      <div class="mrow"><input id="phQ" placeholder="search every prompt you have typed"
+        onkeydown="if(event.key==='Enter')phSearch()"><button class="btn sm" onclick="phSearch()">Search</button></div>
+      <div id="phOut"></div></div>`))return;
+}
+function ccTable(cc){
+  const accts=cc.accounts||[],sch=cc.schema||{};
+  return `<table class="tbl"><tr><th>Setting</th>`
+    +accts.map(a=>`<th>${esc(a.name)}</th>`).join('')+`</tr>`
+    +Object.keys(sch).map(k=>{
+      const s=sch[k];
+      return `<tr><td title="${esc(s.help)}">${esc(k)}<div style="color:var(--dim2);font-size:11px">${esc(s.help)}</div></td>`
+        +accts.map(a=>`<td>${ccInput(k,s,a)}</td>`).join('')+'</tr>';}).join('')
+    +'</table>';
+}
+function ccInput(k,s,a){
+  const v=a.values[k],id='cc_'+k+'_'+btoa(a.dir).replace(/[^a-zA-Z0-9]/g,'');
+  const set=`onchange="ccSet('${k}',this,'${esc(a.dir)}')"`;
+  if(s.kind==='bool')
+    return `<select id="${id}" ${set}><option value=""${v===undefined?' selected':''}>(unset)</option>
+      <option value="true"${v===true?' selected':''}>true</option>
+      <option value="false"${v===false?' selected':''}>false</option></select>`;
+  if(s.kind==='enum')
+    return `<select id="${id}" ${set}><option value="">(unset)</option>`
+      +s.choices.map(c=>`<option${v===c?' selected':''}>${esc(c)}</option>`).join('')+'</select>';
+  const shown=v===undefined?'':(typeof v==='object'?JSON.stringify(v):(Array.isArray(v)?v.join(', '):v));
+  return `<input id="${id}" value="${esc(String(shown))}" ${set} style="width:100%">`;
+}
+async function ccSet(key,el,dir){
+  const r=await post('/api/cc-settings',{key,value:el.value,cfgdir:dir});
+  toast(r.ok?(r.message||'Saved'):(r.error||'Failed'),r.ok?'ok':'err');
+  if(!r.ok)drawPage('client');
+}
+async function gcRun(apply){
+  const days=parseInt(($('#gcDays')||{}).value||'30',10)||30;
+  const r=await post('/api/disk/gc',{days,apply});
+  const mb=(r.bytes/1048576).toFixed(1);
+  if(apply){$('#gcOut').textContent=`deleted ${r.files} files (${mb} MB)`;drawPage('client');return;}
+  $('#gcOut').innerHTML=r.files
+    ?`would delete <b>${r.files}</b> files (${mb} MB), keeping ${r.kept} named or tagged session(s)
+       <button class="btn sm danger" onclick="gcApply(${days},${r.files},'${mb}')">Delete them</button>`
+    :'nothing older than that';
+}
+async function gcApply(days,files,mb){
+  if(!await confirmBox('Delete '+files+' files?',
+    'Frees about '+mb+' MB of Claude Code transcripts and snapshots. Sessions you named or tagged are kept. This cannot be undone.'))return;
+  await gcRun(true);
+}
+async function phSearch(){
+  const q=($('#phQ')||{}).value||'';
+  const r=await api('/api/prompt-history?'+qs({q,limit:100}));
+  const rows=(r.prompts||[]);
+  $('#phOut').innerHTML=rows.length
+    ?'<div class="dlist">'+rows.map(p=>`<div class="lrow" style="display:block">
+        <div style="font:12px Consolas,monospace;white-space:pre-wrap">${esc(p.text)}</div>
+        <div style="color:var(--dim2);font-size:11px">${esc(p.project)}</div></div>`).join('')+'</div>'
+    :'<div class="empty">No matching prompts.</div>';
 }
 
 async function pgUsage(nav){

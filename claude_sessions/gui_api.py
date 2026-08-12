@@ -1030,6 +1030,47 @@ def api_agents_session(q, body):
     return {'ok': True, 'active': n}
 
 
+# ── Claude Code's own client state ───────────────────────────
+
+def api_client_usage(q, body):
+    """What is actually being used versus carried as dead weight."""
+    from . import clientstate
+    return clientstate.usage_rollup(q.get('cfgdir') or None)
+
+
+def api_client_project(q, body):
+    """Claude Code's own record for one project: cost, tokens, MCP approval
+    state, allowed tools. Distinct from claudectl's own stats, which are
+    derived from transcripts."""
+    from . import clientstate
+    st = clientstate.project_state(q['path'], q.get('cfgdir') or None)
+    return {'state': st, 'known': bool(st)}
+
+
+def api_prompt_history(q, body):
+    from . import clientstate
+    return {'prompts': clientstate.prompt_history(
+        q.get('q', ''), int(q.get('limit') or 200), q.get('cfgdir') or None)}
+
+
+def api_background_agents(q, body):
+    from . import clientstate
+    return {'daemon': clientstate.daemon_roster(q.get('cfgdir') or None),
+            'teams': clientstate.teams(q.get('cfgdir') or None)}
+
+
+def api_disk(q, body):
+    from . import clientstate
+    return clientstate.disk_report()
+
+
+def api_disk_gc(q, body):
+    from . import diskgc
+    return diskgc.run(days=int(body.get('days') or 0),
+                      apply=bool(body.get('apply')),
+                      cfgdir=body.get('cfgdir') or None)
+
+
 def api_worklog_get(q, body):
     from .config import load_settings
     from .worklog import load_worklog
@@ -1399,6 +1440,64 @@ def api_memory_map(q, body):
 def api_open_editor(q, body):
     from .config import open_in_editor
     return {'ok': bool(open_in_editor(body['file']))}
+
+
+def api_cc_settings_get(q, body):
+    """Claude Code's own settings.json, per account, with the schema that says
+    how to draw each control."""
+    from . import ccsettings
+    return {'schema': {k: {'kind': v[0], 'choices': v[1], 'help': v[2]}
+                       for k, v in ccsettings.SCHEMA.items()},
+            'accounts': [{'name': n, 'dir': d, 'values': ccsettings.read(d)}
+                         for n, d in _c.all_config_dirs()]}
+
+
+def api_cc_settings_set(q, body):
+    from . import ccsettings
+    cfgdir = body.get('cfgdir') or None
+    key = body['key']
+    if body.get('all_accounts'):
+        results = {n: ccsettings.write(key, body.get('value'), d)
+                   for n, d in _c.all_config_dirs()}
+        return {'ok': all(ok for ok, _m in results.values()),
+                'per_account': {n: m for n, (_ok, m) in results.items()}}
+    ok, msg = ccsettings.write(key, body.get('value'), cfgdir)
+    if not ok:
+        raise BadRequest(msg)
+    return {'ok': True, 'message': msg}
+
+
+def _loop_md_path(scope, path, cfgdir):
+    """`loop.md` is Claude Code's repeating-instruction file: the project one at
+    <project>/.claude/loop.md, the user one at <account>/loop.md."""
+    if scope == 'user':
+        return os.path.join(cfgdir or _c.config_dir, 'loop.md')
+    from .paths import resolve_dir
+    d = resolve_dir(path)
+    if not d:
+        raise BadRequest('not a directory: %s' % (path or '(empty)'))
+    return os.path.join(d, '.claude', 'loop.md')
+
+
+def api_loop_md_get(q, body):
+    p = _loop_md_path(q.get('scope', 'project'), q.get('path', ''), q.get('cfgdir'))
+    try:
+        text = open(p, encoding='utf-8', errors='ignore').read()
+    except OSError:
+        text = ''
+    return {'text': text, 'file': p, 'exists': os.path.isfile(p)}
+
+
+def api_loop_md_set(q, body):
+    p = _loop_md_path(body.get('scope', 'project'), body.get('path', ''),
+                      body.get('cfgdir'))
+    text = body.get('text', '')
+    if not text.strip() and os.path.isfile(p):
+        os.remove(p)
+        return {'ok': True, 'file': p, 'removed': True}
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    _c.write_atomic(p, text)
+    return {'ok': True, 'file': p}
 
 
 def api_system_prompt_get(q, body):
@@ -2229,6 +2328,13 @@ GET_ROUTES = {
     '/api/add-dirs': api_add_dirs_get,
     '/api/path-complete': api_path_complete,
     '/api/inject/sessions': api_inject_sessions,
+    '/api/cc-settings': api_cc_settings_get,
+    '/api/client/usage': api_client_usage,
+    '/api/client/project': api_client_project,
+    '/api/prompt-history': api_prompt_history,
+    '/api/background-agents': api_background_agents,
+    '/api/disk': api_disk,
+    '/api/loop-md': api_loop_md_get,
     '/api/omniroute/status': api_omniroute_status,
     '/api/omniroute/models': api_omniroute_models,
     '/api/plan/last': api_plan_last,
@@ -2274,6 +2380,9 @@ POST_ROUTES = {
     '/api/extra-paths': api_extra_paths_set,
     '/api/add-dirs': api_add_dirs_set,
     '/api/open-path': api_open_path,
+    '/api/cc-settings': api_cc_settings_set,
+    '/api/disk/gc': api_disk_gc,
+    '/api/loop-md': api_loop_md_set,
     '/api/inject/launch': api_inject_launch,
     '/api/job': api_job_start,
     '/api/plan/edit': api_plan_edit,

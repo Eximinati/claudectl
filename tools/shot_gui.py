@@ -218,12 +218,14 @@ def main():
 
         # ── manager pages ──
         print(chr(10) + '— page audit —')
-        for page in ('plugins', 'ostyles', 'skills', 'hooks', 'agents',
-                     'settings', 'accounts'):
+        # from NAV rather than a hardcoded list — see the same fix in
+        # smoke_gui: the list had fallen a page behind, and an unaudited page
+        # is where a wide table quietly breaks card fit
+        for page in pg.evaluate('NAV.map(n => n[0])'):
             pg.evaluate(f"go('{page}')")
             pg.wait_for_timeout(700)
             audit_page(pg, page)
-            if page in ('plugins', 'ostyles'):
+            if page in ('plugins', 'ostyles', 'client'):
                 pg.screenshot(path=os.path.join(OUT, f'_shot_{page}.png'))
         pg.evaluate("go('home')")
         pg.wait_for_timeout(600)

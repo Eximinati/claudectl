@@ -18,19 +18,47 @@ from . import render
 
 settings_path = os.path.join(config_dir, 'settings.json')
 
-# Valid Claude Code hook events (for AI-generation validation).
-#: Claude Code exposes 32 lifecycle events. This set is what claudectl's manager
-#: knows how to place and toggle — not all 32, but every one claudectl has a
-#: reason to use. The ones added beyond the original nine are the ones a
-#: WORKSPACE manager specifically wants: it launches worktrees, it sells a
-#: permission-fatigue killer, it manages a subagent library, and it sells
-#: context-loss insurance after /compact.
-EVENTS = {'PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SubagentStop',
-          'SessionStart', 'SessionEnd', 'Notification', 'PreCompact',
-          # newly covered
-          'PostCompact', 'SubagentStart', 'PermissionRequest', 'PermissionDenied',
-          'WorktreeCreate', 'WorktreeRemove', 'TaskCreated', 'TaskCompleted',
-          'FileChanged'}
+# Valid Claude Code hook events.
+#: All 31 of them. The manager used to know 18, which meant the other 13 could
+#: neither be placed nor even SEEN — a hook someone had configured by hand in
+#: one of those events was invisible in a screen that claimed to list them.
+#: The value is the matcher's meaning, or '' where the event takes none; the
+#: manager uses it to prompt for the right thing instead of a generic string.
+EVENT_MATCHERS = {
+    'PreToolUse': 'tool name',
+    'PostToolUse': 'tool name',
+    'PostToolUseFailure': 'tool name',
+    'PostToolBatch': '',
+    'UserPromptSubmit': '',
+    'UserPromptExpansion': 'command name',
+    'Stop': '',
+    'StopFailure': 'error type',
+    'SubagentStart': 'agent type',
+    'SubagentStop': 'agent type',
+    'SessionStart': 'startup | resume | clear | compact | fork',
+    'SessionEnd': 'end reason',
+    'Setup': 'init | maintenance',
+    'Notification': 'notification type',
+    'MessageDisplay': '',
+    'PreCompact': 'manual | auto',
+    'PostCompact': 'manual | auto',
+    'InstructionsLoaded': 'load reason',
+    'PermissionRequest': 'tool name',
+    'PermissionDenied': 'tool name',
+    'ConfigChange': 'configuration source',
+    'CwdChanged': '',
+    'DirectoryAdded': '',
+    'WorktreeCreate': '',
+    'WorktreeRemove': '',
+    'TaskCreated': '',
+    'TaskCompleted': '',
+    'TeammateIdle': '',
+    'FileChanged': 'filenames to watch',
+    'Elicitation': 'MCP server name',
+    'ElicitationResult': 'MCP server name',
+}
+
+EVENTS = set(EVENT_MATCHERS)
 
 def _py_hook(script):
     """Absolute `"<python>" "<claude_sessions/script>"` — runs regardless of the
@@ -225,6 +253,40 @@ TEMPLATES = {
         'event': 'SessionEnd',
         'entry': {'hooks': [{'type': 'command', 'command': _py_hook('worklog_hook.py')}]},
         'desc': 'Record the session on exit so auto-memory has it to learn from',
+    },
+    'log-failed-tools': {
+        # a turn that failed is the one worth reading back later, and it is
+        # exactly what PostToolUse cannot see
+        'event': 'PostToolUseFailure',
+        'entry': {'hooks': [{'type': 'command', 'command': _py_hook('logbash_hook.py')}]},
+        'desc': 'Record every tool failure alongside the bash log',
+    },
+    'log-failed-turns': {
+        'event': 'StopFailure',
+        'entry': {'hooks': [{'type': 'command', 'command': _py_hook('logbash_hook.py')}]},
+        'desc': 'Record turns that ended in failure rather than completion',
+    },
+    'audit-loaded-context': {
+        # pairs with the Context Weight Audit: that screen ESTIMATES what will
+        # load, this says what actually did
+        'event': 'InstructionsLoaded',
+        'entry': {'hooks': [{'type': 'command', 'command': _py_hook('logbash_hook.py')}]},
+        'desc': 'Record what context actually loaded (pairs with the context audit)',
+    },
+    'notify-config-change': {
+        'event': 'ConfigChange',
+        'entry': {'hooks': [{'type': 'command', 'command': _beep(1)}]},
+        'desc': 'Beep when something changes settings.json under you',
+    },
+    'memory-stale-on-cwd-change': {
+        'event': 'CwdChanged',
+        'entry': {'hooks': [{'type': 'command', 'command': _py_hook('worklog_hook.py')}]},
+        'desc': 'Re-evaluate project memory when the session changes directory',
+    },
+    'notify-teammate-idle': {
+        'event': 'TeammateIdle',
+        'entry': {'hooks': [{'type': 'command', 'command': _beep(2)}]},
+        'desc': 'Double-beep when an agent teammate goes idle and needs work',
     },
 }
 

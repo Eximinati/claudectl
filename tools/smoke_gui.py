@@ -445,8 +445,12 @@ def main():
         pg.evaluate("startDashboard()")
 
         print('\n— every page renders —')
-        for p in ['usage', 'searchp', 'mcp', 'agents', 'skills', 'hooks',
-                  'plugins', 'ostyles', 'accounts', 'settings', 'helpp', 'home']:
+        # taken from NAV, not a hardcoded list: the list had already fallen
+        # behind by one page, and a page nobody checks is a page nobody knows
+        # is broken
+        pages = pg.evaluate('NAV.map(n => n[0])') + ['home']
+        check('page list came from NAV', len(pages) > 8, pages)
+        for p in pages:
             before = len(errs)
             pg.evaluate(f"go('{p}')")
             pg.wait_for_timeout(500)
