@@ -354,16 +354,46 @@ def is_installed(cfgdir=None):
     return 'claude_sessions' in str(sl.get('command', ''))
 
 
+def blockers(cfgdir=None):
+    """Why an INSTALLED statusline still will not appear. [] when nothing is
+    in the way.
+
+    Installed and visible are different questions, and answering only the first
+    is how an account ends up correctly configured and blank. Both conditions
+    here are silent in Claude Code — nothing is printed, the line is simply not
+    drawn — which is precisely why they belong on the screen that claims the
+    thing is installed.
+    """
+    from . import hooks
+    s = hooks._load(cfgdir)
+    out = []
+    # Observed on this machine, across three accounts: the two rendering in
+    # fullscreen show the statusline, the one on the classic renderer does not.
+    # Claude Code documents the `tui` setting and documents statusLine, but not
+    # that the second depends on the first.
+    if s.get('tui') not in ('fullscreen',):
+        out.append(('classic-tui',
+                    'this account renders in classic mode, where the statusline '
+                    'is not drawn — set tui to fullscreen, or run /tui in a session'))
+    if s.get('disableAllHooks'):
+        out.append(('hooks-disabled',
+                    'disableAllHooks is on, which turns the statusline off with '
+                    'everything else'))
+    return out
+
+
 def by_account():
-    """[(name, cfgdir, installed)] — the per-account truth.
+    """[(name, cfgdir, installed, blockers)] — the per-account truth.
 
     The statusline is a property of the USER, but it is configured per account
     dir, so "installed" was never a single bool. Reporting it as one is what
-    hid the bug: with three accounts configured, only the active one was ever
-    written, and every surface said "installed".
+    hid the first bug: with three accounts configured, only the active one was
+    ever written, and every surface said "installed". `blockers` is the second
+    half of the same lesson — the write can succeed everywhere and the line
+    still never appear.
     """
     from . import hooks
-    return [(n, d, is_installed(d)) for n, d in hooks.account_dirs()]
+    return [(n, d, is_installed(d), blockers(d)) for n, d in hooks.account_dirs()]
 
 
 def install(cfgdir=None):

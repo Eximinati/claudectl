@@ -349,3 +349,61 @@ def test_otel_keys_survive_a_reload():
     from claude_sessions.config import _DEFAULT_SETTINGS
     for k in ('otel_enabled', 'otel_endpoint', 'otel_protocol', 'otel_headers'):
         assert k in _DEFAULT_SETTINGS, k
+
+
+# ── installed is not the same question as visible ────────────
+
+def _acct(tmp_path, monkeypatch, settings):
+    import json as _json
+    from claude_sessions import hooks
+    p = tmp_path / 'settings.json'
+    p.write_text(_json.dumps(settings), encoding='utf-8')
+    monkeypatch.setattr(hooks, 'settings_path', str(p))
+    return str(tmp_path)
+
+
+def test_the_classic_renderer_is_reported_as_a_blocker(tmp_path, monkeypatch):
+    """The bug this exists for: three accounts, all three carrying a correct
+    statusLine, and the one on the classic renderer showed nothing. Every
+    surface said "installed", which was true and useless — Claude Code draws
+    no statusline in classic mode and says nothing about it."""
+    d = _acct(tmp_path, monkeypatch, {'statusLine': {'command': 'claude_sessions'}})
+    codes = [c for c, _why in sl.blockers(d)]
+    assert 'classic-tui' in codes
+    why = dict(sl.blockers(d))['classic-tui']
+    assert 'fullscreen' in why, 'the message has to name the fix'
+
+
+def test_fullscreen_clears_the_blocker(tmp_path, monkeypatch):
+    d = _acct(tmp_path, monkeypatch,
+              {'tui': 'fullscreen', 'statusLine': {'command': 'claude_sessions'}})
+    assert sl.blockers(d) == []
+
+
+def test_the_documented_default_value_still_blocks(tmp_path, monkeypatch):
+    """`tui` takes 'fullscreen' or 'default'; only the first draws it."""
+    d = _acct(tmp_path, monkeypatch,
+              {'tui': 'default', 'statusLine': {'command': 'claude_sessions'}})
+    assert [c for c, _w in sl.blockers(d)] == ['classic-tui']
+
+
+def test_disabling_every_hook_is_reported_too(tmp_path, monkeypatch):
+    d = _acct(tmp_path, monkeypatch,
+              {'tui': 'fullscreen', 'disableAllHooks': True,
+               'statusLine': {'command': 'claude_sessions'}})
+    assert [c for c, _w in sl.blockers(d)] == ['hooks-disabled']
+
+
+def test_by_account_carries_the_blockers_next_to_installed(tmp_path, monkeypatch):
+    from claude_sessions import hooks
+    a, b = tmp_path / 'a', tmp_path / 'b'
+    for p, extra in ((a, {}), (b, {'tui': 'fullscreen'})):
+        p.mkdir()
+        (p / 'settings.json').write_text(
+            json.dumps(dict(extra, statusLine={'command': 'claude_sessions'})),
+            encoding='utf-8')
+    monkeypatch.setattr(hooks, 'account_dirs',
+                        lambda: [('classic', str(a)), ('full', str(b))])
+    rows = {n: (done, [c for c, _w in bl]) for n, _d, done, bl in sl.by_account()}
+    assert rows['classic'] == (True, ['classic-tui'])
+    assert rows['full'] == (True, [])

@@ -2304,13 +2304,17 @@ def api_statusline(q, body):
         preview = statusline.plain(statusline.render(payload))
     except Exception as e:
         preview = f'(preview failed: {e})'
-    accounts = [{'name': n, 'cfgdir': d, 'installed': done}
-                for n, d, done in statusline.by_account()]
+    accounts = [{'name': n, 'cfgdir': d, 'installed': done,
+                 'blockers': [{'code': c, 'why': w} for c, w in blocked]}
+                for n, d, done, blocked in statusline.by_account()]
     return {'installed': all(a['installed'] for a in accounts) if accounts else False,
             # `partial` is the state the pre-fix single-account installer left
             # behind, and the whole reason the flat bool above is not enough.
             'partial': any(a['installed'] for a in accounts)
             and not all(a['installed'] for a in accounts),
+            # installed everywhere and still invisible somewhere: the second
+            # half of the same lesson
+            'blocked': any(a['installed'] and a['blockers'] for a in accounts),
             'accounts': accounts,
             'preview': preview, 'command': statusline._command()}
 

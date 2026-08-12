@@ -95,7 +95,7 @@ def test_installed_state_is_reported_per_account(monkeypatch, tmp_path):
     dirs = _accounts(monkeypatch, tmp_path)
     sl.install(dirs[0][1])
 
-    state = dict((name, done) for name, _d, done in sl.by_account())
+    state = dict((name, done) for name, _d, done, _blocked in sl.by_account())
 
     assert state == {'default': True, 'personal': False, 'Lorenzo': False}
 

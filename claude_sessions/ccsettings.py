@@ -52,6 +52,11 @@ SCHEMA = {
     'claudeMdExcludes':       ('list', [], 'Glob patterns of CLAUDE.md files to skip',
                                'Context & memory'),
     # — the terminal —
+    # fullscreen vs classic is not cosmetic: an installed statusLine is simply
+    # not drawn by the classic renderer, silently — see statusline.blockers
+    'tui':                    ('enum', ['fullscreen', 'default'],
+                               'Renderer. The statusline only shows in fullscreen',
+                               'Editing & interface'),
     'editorMode':             ('enum', ['normal', 'vim'], 'Prompt editing mode',
                                'Editing & interface'),
     'theme':                  ('str', [], "Claude Code's own colour theme",

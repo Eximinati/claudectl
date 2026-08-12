@@ -3549,23 +3549,45 @@ async function slRefresh(){
   // The statusline is configured per account dir, so "installed" was never one
   // bool. PARTIAL is the state a machine is left in by the old single-account
   // installer, and showing it is how you can tell the two apart at a glance.
-  const st=d.partial?'partial':(d.installed?'installed':'not installed');
+  // Installed and VISIBLE are different questions. An account can carry a
+  // perfectly good statusLine and still show nothing — the classic renderer
+  // does not draw one — so "installed" alone was a true answer to the wrong
+  // question, which is exactly how this looked like it was working.
+  const st=d.partial?'partial':(d.blocked?'installed, not showing'
+    :(d.installed?'installed':'not installed'));
   dot.textContent=st;
-  dot.className='tag'+(d.installed?' ok':(d.partial?' warn':''));
+  dot.className='tag'+(d.blocked||d.partial?' warn':(d.installed?' ok':''));
   btn.textContent=d.installed?'Remove from every account':'Install for every account';
   btn.className='btn'+(d.installed?' danger':' pri');
   if(prev)prev.textContent=d.preview||'—';
   const accts=d.accounts||[];
   // one row per account only when there is more than one — a single-account
   // user should not be shown an account picker they never asked about
-  if(acc)acc.innerHTML=accts.length<2?'':accts.map((a,i)=>
-    `<div class="kv"><span>${esc(a.name)}</span><span>
-       <span class="tag${a.installed?' ok':''}">${a.installed?'installed':'—'}</span>
+  if(acc)acc.innerHTML=accts.length<2?'':accts.map((a,i)=>{
+    const bl=a.blockers||[];
+    return `<div class="kv"><span>${esc(a.name)}</span><span>
+       <span class="tag${bl.length&&a.installed?' warn':(a.installed?' ok':'')}">${
+         a.installed?(bl.length?'not showing':'installed'):'—'}</span>
        <button class="btn sm" onclick="slOne(${i})">${a.installed?'remove':'install'}</button>
-     </span></div>`).join('');
+     </span></div>`
+     +(a.installed&&bl.length?`<div class="kv"><span></span>
+        <span style="color:var(--warn);font-size:12px">${esc(bl[0].why)}
+        ${bl[0].code==='classic-tui'
+          ?`<button class="btn sm" onclick="slFullscreen(${i})">Switch to fullscreen</button>`:''}
+        </span></div>`:'');}).join('');
   SL_ACCTS=accts;
 }
 let SL_ACCTS=[];
+/* one click for the thing the warning just described, rather than sending the
+   user off to find the key themselves */
+async function slFullscreen(i){
+  const a=SL_ACCTS[i];if(!a)return;
+  const r=await post('/api/cc-settings',
+    {key:'tui',value:'fullscreen',cfgdir:a.cfgdir});
+  toast(r.ok?'Fullscreen renderer enabled — restart that session':(r.error||'Failed'),
+    r.ok?'ok':'err');
+  slRefresh();
+}
 async function slOne(i){
   const a=SL_ACCTS[i];if(!a)return;
   const r=await post('/api/statusline',
