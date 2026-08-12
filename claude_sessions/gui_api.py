@@ -24,6 +24,8 @@ import time
 import uuid
 
 from . import config as _c
+from . import proc as _proc     # `proc` is a local name for a Popen throughout
+from . import store as _store
 
 
 # ── job model ────────────────────────────────────────────────
@@ -66,14 +68,7 @@ def _run_cancellable(cmd, input_text=None, capture_output=True, text=True,
             if job['cancel_event'].wait(timeout=1.0):
                 break
         if not killed.is_set() and proc.poll() is None:
-            try:
-                if os.name == 'nt':
-                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)],
-                                   capture_output=True)
-                else:
-                    proc.kill()
-            except Exception:
-                pass
+            _proc.kill_tree(proc)
 
     t = threading.Thread(target=_watch, daemon=True)
     t.start()
@@ -210,14 +205,7 @@ def job_cancel(jid):
     job['cancelled'] = True
     job['cancel_event'].set()
     for p in list(job.get('procs', [])):
-        if p.poll() is None:
-            try:
-                p.kill()
-                if os.name == 'nt':
-                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(p.pid)],
-                                   capture_output=True)
-            except Exception:
-                pass
+        _proc.kill_tree(p)
     if job['status'] != 'cancelled':
         job['status'] = 'cancelled'
     return True
@@ -345,7 +333,7 @@ def _auto_projects():
     for p in gui.list_projects():
         if (pd.get(p['encoded']) or {}).get('auto_memory'):
             out.append((p['path'],
-                        os.path.join(p['primary_cfgdir'], 'projects', p['encoded']),
+                        _store.project_folder(p['primary_cfgdir'], p['encoded']),
                         p['encoded']))
     return out
 
@@ -402,7 +390,7 @@ def _entries():
     from .paths import find_actual_path
     out = []
     for _name, acct_dir in _c.all_config_dirs():
-        pdir = os.path.join(acct_dir, 'projects')
+        pdir = _store.projects_root(acct_dir)
         if not os.path.isdir(pdir):
             continue
         for enc in os.listdir(pdir):
@@ -417,7 +405,11 @@ def _entries():
 
 
 def _folder(cfgdir, enc):
-    return os.path.join(cfgdir or _c.config_dir, 'projects', enc)
+    """The project folder for a request-supplied `enc`. Raises ValueError when
+    `enc` is not something `paths.encode_component` could have produced — it
+    reaches roughly forty endpoints straight off the wire."""
+    from . import store
+    return store.project_folder(cfgdir, enc)
 
 
 # ── sessions & transcript ────────────────────────────────────
@@ -625,7 +617,7 @@ def api_dashboard(q, body):
     # itself started, so anything opened by `claude` directly never showed up.
     recent = []
     for r in bd.get('recent', []):
-        pf = os.path.join(r['cfgdir'], 'projects', r['encoded'])
+        pf = _store.project_folder(r['cfgdir'], r['encoded'])
         recent.append({'id': r['sid'], 'sid': r['sid'], 'path': r['path'],
                        'encoded': r['encoded'], 'cfgdir': r['cfgdir'],
                        'project': os.path.basename(r['path']) or r['path'],
@@ -684,7 +676,7 @@ def api_graph_lite(q, body):
     if hit and now - hit[0] < _GLITE_TTL:
         return hit[1]
 
-    proj_folder = os.path.join(cfgdir, 'projects', enc) if enc else None
+    proj_folder = _folder(cfgdir, enc) if enc else None
     try:
         g = connections.build_hierarchy(path, proj_folder)
     except Exception:
@@ -1058,9 +1050,9 @@ def api_accounts_terminal(q, body):
     if not exe:
         return {'ok': False, 'error': 'claude.exe not found'}
     name = body.get('name', 'claude')
-    subprocess.Popen(['cmd', '/c', 'start', f'claude [{name}]', 'cmd', '/c', exe],
-                     env=_env_for(body.get('dir', '')))
-    return {'ok': True}
+    p, err = _proc.spawn_terminal([exe], env=_env_for(body.get('dir', '')),
+                                  title=f'claude [{name}]')
+    return {'ok': bool(p), 'error': err} if err else {'ok': True}
 
 
 # ── memory suite ─────────────────────────────────────────────
@@ -1381,7 +1373,7 @@ def api_inject_launch(q, body):
     if not exe:
         return {'ok': False, 'error': 'claude.exe not found'}
     target_dir = body.get('target_cfgdir') or _c.config_dir
-    target_folder = os.path.join(target_dir, 'projects', encode_component(path))
+    target_folder = _store.project_folder(target_dir, encode_component(path))
     env = os.environ.copy()
     env['CLAUDE_CONFIG_DIR'] = target_dir
     extra = read_extra_paths(target_folder)
@@ -1402,9 +1394,8 @@ def api_inject_launch(q, body):
     if add_dirs:
         args += ['--add-dir', *add_dirs]
     title_arg = f'claude — {os.path.basename(path) or path}'
-    subprocess.Popen(['cmd', '/c', 'start', title_arg, 'cmd', '/c'] + args,
-                     cwd=path, env=env)
-    return {'ok': True}
+    p, err = _proc.spawn_terminal(args, cwd=path, env=env, title=title_arg)
+    return {'ok': bool(p), 'error': err} if err else {'ok': True}
 
 
 
@@ -1533,7 +1524,7 @@ def api_job_start(q, body):
         exec_folder = folder
         if cfgdir and cfgdir != config_dir:
             from .paths import encode_component
-            exec_folder = os.path.join(cfgdir, 'projects', encode_component(path))
+            exec_folder = _store.project_folder(cfgdir, encode_component(path))
 
         def _launch():
             import subprocess
@@ -1600,8 +1591,9 @@ def api_job_start(q, body):
             if not args:
                 raise RuntimeError('claude.exe not found')
             title = f"claude — {os.path.basename(path)}"
-            subprocess.Popen(['cmd', '/c', 'start', title, 'cmd', '/c'] + args,
-                             cwd=path, env=env)
+            _p, err = _proc.spawn_terminal(args, cwd=path, env=env, title=title)
+            if err:
+                raise RuntimeError(err)
             return {'model': model, 'via': via}
         jid = start_job('Launching execute session' + (' (per-step)' if per_step else ''), _launch)
     elif kind == 'plan_replan':

@@ -15,6 +15,7 @@ from .mcp import mcp_status_line, global_claude_md_menu, mcp_servers, mcp_manage
 from .usage import usage_status_line
 from .ui import _cls
 from . import render
+from . import store
 
 
 def _workspace_status_cli():
@@ -145,7 +146,7 @@ def run():
     # sessions started under another account stay reachable here.
     entries = []
     for _acct_name, acct_dir in all_config_dirs():
-        acct_projects_dir = os.path.join(acct_dir, 'projects')
+        acct_projects_dir = store.projects_root(acct_dir)
         if not os.path.exists(acct_projects_dir):
             continue
         for name in os.listdir(acct_projects_dir):
@@ -203,8 +204,8 @@ def run():
         for i, sess in enumerate(recent):
             lr_proj    = os.path.basename(sess['project_path']) or sess['project_path']
             sid        = sess['session_id']
-            pf         = os.path.join(sess.get('cfgdir') or config_dir, 'projects',
-                                      sess.get('encoded_name', ''))
+            _enc       = sess.get('encoded_name', '')
+            pf         = store.project_folder(sess.get('cfgdir'), _enc) if _enc else ''
             jsonl      = os.path.join(pf, f"{sid}.jsonl")
             # Session name: manual rename > AI transcript title > preview > id.
             lr_name    = (load_name(pf, sid) or get_session_title(jsonl)
@@ -262,7 +263,7 @@ def run():
             encoded_name = sess['encoded_name']
             sess_cfgdir  = sess.get('cfgdir') or config_dir
             opts['cfgdir'] = sess_cfgdir if sess_cfgdir != config_dir else ''
-            proj_folder  = os.path.join(sess_cfgdir, 'projects', encoded_name)
+            proj_folder  = store.project_folder(sess_cfgdir, encoded_name)
             choice       = f"resume:{sess['session_id']}"
 
         elif sel == '__open_path__':
@@ -284,7 +285,7 @@ def run():
                 continue
             _, path, encoded_name, sid, acct_dir = hit
             opts['cfgdir'] = acct_dir if acct_dir != config_dir else ''
-            proj_folder = os.path.join(acct_dir, 'projects', encoded_name)
+            proj_folder = store.project_folder(acct_dir, encoded_name)
             choice      = f"resume:{sid}"
 
         elif sel == '__usage_stats__':
@@ -332,10 +333,10 @@ def run():
             idx = int(sel[len('__proj_'):-2])
             _, path, encoded_name, primary_dir, other_dirs = grouped[idx]
             opts['cfgdir'] = primary_dir if primary_dir != config_dir else ''
-            proj_folder  = os.path.join(primary_dir, 'projects', encoded_name)
+            proj_folder  = store.project_folder(primary_dir, encoded_name)
 
             sessions = scan_sessions(proj_folder)
-            extra_accounts = [(_account_name_for(d), os.path.join(d, 'projects', encoded_name))
+            extra_accounts = [(_account_name_for(d), store.project_folder(d, encoded_name))
                               for d in other_dirs] or None
 
             project_name = os.path.basename(path) or path
@@ -595,7 +596,7 @@ def build_launch_command(path, encoded_name, choice, opts):
 
     # config dir: from the choice line (bat path) else the module default
     cfgdir = opts.get('cfgdir') or config_dir
-    proj_folder = os.path.join(cfgdir, 'projects', encoded_name) if encoded_name else None
+    proj_folder = store.project_folder(cfgdir, encoded_name) if encoded_name else None
 
     env = os.environ.copy()
     # Pin the account/config dir explicitly — overrides any ambient
@@ -684,7 +685,12 @@ def _direct_launch(path, encoded_name, choice, opts):
         sys.exit(1)
 
     if args is None:   # choice == 'terminal'
-        subprocess.call('cmd /k', cwd=path, env=env, shell=True)
+        # In THIS window, not a new one — the TUI is exiting to hand the
+        # console over. `shell=True` here passed a string to cmd for no reason;
+        # the list form cannot be reinterpreted.
+        subprocess.call(['cmd', '/k'] if os.name == 'nt'
+                        else [os.environ.get('SHELL') or '/bin/sh'],
+                        cwd=path, env=env)
         return
 
     try:

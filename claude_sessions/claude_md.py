@@ -6,6 +6,7 @@ import queue
 import threading
 import subprocess
 import shutil
+from itertools import islice
 
 from .config import (W, _AUTOGEN_START, _AUTOGEN_END, _SESSIONS_START, _SESSIONS_END,
                      _AI_MARKER, _MEMORY_START, _MEMORY_END)
@@ -282,7 +283,7 @@ def _build_autogen_block(project_path, proj_folder, commits=None):
             if os.path.exists(rp):
                 try:
                     with open(rp, 'r', encoding='utf-8', errors='ignore') as f:
-                        lines = f.readlines()[:15]
+                        lines = list(islice(f, 15))
                     block += "\n**README:**\n" + ''.join(lines) + "\n"
                     break
                 except Exception:
@@ -806,10 +807,6 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
         threading.Thread(target=_read_stdout, daemon=True).start()
         threading.Thread(target=_read_stderr, daemon=True).start()
 
-        # Collect ALL raw events to a log so we can inspect structure if needed
-        _dbg_log = os.path.join(os.environ['TEMP'], 'ai_analyze_debug.jsonl')
-        _dbg_f = open(_dbg_log, 'w', encoding='utf-8')
-
         printed_len = 0
         result_content = ''
         spin_i = 0
@@ -822,8 +819,6 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
                     if raw is None:
                         done = True
                         break
-                    _dbg_f.write(raw if raw.endswith('\n') else raw + '\n')
-                    _dbg_f.flush()
                     raw = raw.strip()
                     if not raw:
                         continue
@@ -913,8 +908,6 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
                         cancelled = True
                         done = True
                         break
-
-        _dbg_f.close()
 
         proc.wait()
 

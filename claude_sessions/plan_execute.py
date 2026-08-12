@@ -16,6 +16,7 @@ import re
 import subprocess
 
 from . import config as _c
+from . import store
 
 PLAN_FILE = os.path.join('.claudectl', 'plan-latest.md')
 
@@ -530,7 +531,7 @@ def run(project_path, proj_folder, project_name, plan=None, per_step=False, shou
         cfgdir = picked if picked != config_dir else ''
         if cfgdir:
             from .paths import encode_component
-            proj_folder = os.path.join(cfgdir, 'projects', encode_component(project_path))
+            proj_folder = store.project_folder(cfgdir, encode_component(project_path))
 
     task = text_input(f"Task to plan ({plan_model} · {effort or 'default'} effort) "
                        f"then execute ({exec_model} via {exec_via}):")

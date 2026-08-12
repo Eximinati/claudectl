@@ -68,34 +68,21 @@ def _edited_paths(jsonl):
     Read straight off the tool calls — the same source `filesS` uses — so no
     extra parse pass is introduced for this feature.
     """
-    import json
+    from . import transcripts
     seen, order = set(), []
-    try:
-        fh = open(jsonl, encoding='utf-8', errors='replace')
-    except OSError:
-        return []
-    with fh:
-        for line in fh:
-            if 'file_path' not in line:
+    for o in transcripts.iter_json(jsonl, prefilter='file_path'):
+        content = (o.get('message') or {}).get('content')
+        if not isinstance(content, list):
+            continue
+        for c in content:
+            if not isinstance(c, dict) or c.get('type') != 'tool_use':
                 continue
-            try:
-                o = json.loads(line)
-            except Exception:
+            if c.get('name') not in ('Write', 'Edit', 'NotebookEdit', 'MultiEdit'):
                 continue
-            msg = o.get('message') or {}
-            content = msg.get('content')
-            if not isinstance(content, list):
-                continue
-            for c in content:
-                if not isinstance(c, dict) or c.get('type') != 'tool_use':
-                    continue
-                if c.get('name') not in ('Write', 'Edit', 'NotebookEdit',
-                                         'MultiEdit'):
-                    continue
-                fp = (c.get('input') or {}).get('file_path')
-                if fp and fp not in seen:
-                    seen.add(fp)
-                    order.append(fp)
+            fp = (c.get('input') or {}).get('file_path')
+            if fp and fp not in seen:
+                seen.add(fp)
+                order.append(fp)
     return order
 
 

@@ -111,36 +111,9 @@ def base_url(s=None):
 # ── lifecycle ────────────────────────────────────────────────
 
 def _pid_alive(pid):
-    """True/False, or None when undeterminable (caller decides). Copy of
-    memory._pid_alive — same Windows constraint applies."""
-    try:
-        pid = int(pid)
-    except Exception:
-        return False
-    if pid <= 0:
-        return False
-    if os.name == 'nt':
-        # NEVER os.kill(pid, 0) on Windows — it TERMINATES the process.
-        try:
-            import ctypes
-            k32 = ctypes.windll.kernel32
-            h = k32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
-            if not h:
-                return False
-            try:
-                code = ctypes.c_ulong()
-                if k32.GetExitCodeProcess(h, ctypes.byref(code)):
-                    return code.value == 259         # STILL_ACTIVE
-                return False
-            finally:
-                k32.CloseHandle(h)
-        except Exception:
-            return None
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    """True/False, or None when undeterminable (caller decides)."""
+    from . import proc
+    return proc.pid_alive(pid)
 
 
 def is_ready(port, timeout=2):

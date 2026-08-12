@@ -33,6 +33,7 @@ from .config import (load_settings, save_settings,
                      THINKING_CAPS, THINKING_LABELS)
 from .paths import find_actual_path
 from .sessions import _is_anthropic_model, _used_omni   # noqa: F401 (re-exported)
+from . import store
 
 
 def all_config_dirs():
@@ -47,7 +48,7 @@ def list_projects():
     [{'path','name','encoded','mtime','accounts':[names],'primary_cfgdir'}]"""
     entries = []
     for _acct_name, acct_dir in all_config_dirs():
-        pdir = os.path.join(acct_dir, 'projects')
+        pdir = store.projects_root(acct_dir)
         if not os.path.isdir(pdir):
             continue
         for name in os.listdir(pdir):
@@ -128,8 +129,8 @@ def state_payload():
     s = load_settings()
     recent = []
     for r in load_recent_sessions(5):
-        pf = os.path.join(r.get('cfgdir') or _c.config_dir, 'projects',
-                          r.get('encoded_name', ''))
+        enc = r.get('encoded_name', '')
+        pf = store.project_folder(r.get('cfgdir'), enc) if enc else ''
         jsonl = os.path.join(pf, f"{r['session_id']}.jsonl")
         recent.append({'project': os.path.basename(r['project_path']) or r['project_path'],
                        'path': r['project_path'], 'encoded': r.get('encoded_name', ''),
@@ -257,24 +258,14 @@ def launch_session(path, encoded, choice, opts):
     except RuntimeError as e:
         return False, str(e)
     title = f'claude — {os.path.basename(path) or path}'
-    # CREATE_NEW_CONSOLE directly: the old `cmd /c start …` chain, spawned
-    # from a windowless GUI process, produced a broken/transparent console
-    # window under Windows Terminal. argv-list form (no shell=True) so
-    # nothing user-controlled can break out; `title` via cmd builtin.
-    # `title` arg always contains spaces (the 'claude — ' prefix) so
-    # list2cmdline quotes it and any & in the project name stays literal.
-    if args is None:   # plain terminal: stays open by design
-        cmd = ['cmd', '/k', 'title', title]
-    else:              # session: window always closes when claude exits, any
-        # exit code — Ctrl+C and other normal ways of ending a session return
-        # non-zero on Windows, and a `|| pause` here left the window stuck
-        # open waiting on a keypress on every such exit, not just real crashes.
-        cmd = ['cmd', '/c', 'title', title, '&&'] + args
-    try:
-        subprocess.Popen(cmd, cwd=path, env=env,
-                         creationflags=subprocess.CREATE_NEW_CONSOLE)
-    except Exception as e:
-        return False, str(e)
+    # CREATE_NEW_CONSOLE directly (inside proc.spawn_terminal): the old
+    # `cmd /c start …` chain, spawned from a windowless GUI process, produced a
+    # broken/transparent console window under Windows Terminal.
+    from . import proc
+    _p, err = proc.spawn_terminal(args, cwd=path, env=env, title=title,
+                                  keep_open=args is None)
+    if err:
+        return False, err
     try:
         from . import workspace
         workspace.update_manifest(path, proj_folder, 'launch', choice=choice,
@@ -286,7 +277,7 @@ def launch_session(path, encoded, choice, opts):
 
 def rename_session(encoded, cfgdir, sid, name):
     from .sessions import save_name
-    folder = os.path.join(cfgdir, 'projects', encoded)
+    folder = store.project_folder(cfgdir, encoded)
     if not os.path.isdir(folder):
         return False
     save_name(folder, sid, name)
@@ -421,7 +412,7 @@ class _Handler(BaseHTTPRequestHandler):
             if enc and (os.sep in enc or '/' in enc or enc in ('.', '..')):
                 self._send(400, {'error': 'bad enc'})
                 return
-            proj_folder = os.path.join(_c.config_dir, 'projects', enc) if enc else None
+            proj_folder = store.project_folder(None, enc) if enc else None
             g = connections.build_hierarchy(path, proj_folder)
             try:
                 mem = connections.build_memory_hierarchy(path, proj_folder)

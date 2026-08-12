@@ -6,6 +6,7 @@ from .config import C_RESET, C_DIM, C_SRCH, C_SEL
 from .sessions import load_name, format_age
 from .stats import iter_all_sessions, save_disk_cache
 from . import render
+from . import store
 
 
 def build_search_index(entries, silent=True):
@@ -18,7 +19,7 @@ def build_search_index(entries, silent=True):
             partial = True
             break
         mtime, ppath, enc, sid, stats, cfgdir = item
-        folder = os.path.join(cfgdir, 'projects', enc)
+        folder = store.project_folder(cfgdir, enc)
         name = load_name(folder, sid) or stats.get('title', '')
         display = name or stats.get('preview', '') or sid[:8]
         haystack = ' '.join([

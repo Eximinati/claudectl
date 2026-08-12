@@ -38,10 +38,10 @@ and writing into `D:/repos/SV3/.claudectl/` would show up in that repo's own
 
 import json
 import os
-import subprocess
 import time
 
 from . import config as _c
+from . import proc
 
 #: a pathological root (a whole drive) must not hang a statusline
 MAX_DIRS = 4000
@@ -54,17 +54,9 @@ LIST_TTL = 300
 
 
 def _git(args, cwd, timeout=15):
-    """Run git, or None. `encoding` is not optional on Windows: `text=True`
-    alone decodes with the ANSI codepage (cp1252 here), so one non-ASCII path
-    or branch name raises inside subprocess and the caller concludes 'not a
-    repo'. That was a real second cause of the bug this module fixes."""
-    try:
-        r = subprocess.run(['git'] + args, cwd=cwd, capture_output=True,
-                           text=True, encoding='utf-8', errors='ignore',
-                           timeout=timeout)
-    except Exception:
-        return None
-    return r.stdout if r.returncode == 0 else None
+    """Kept as the name eight modules import; the implementation is
+    `proc.git`."""
+    return proc.git(args, cwd, timeout)
 
 
 def _gitdir(path):

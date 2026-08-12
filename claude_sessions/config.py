@@ -126,14 +126,10 @@ def _norm_model(m):
 
 def load_settings():
     """Read ~/.claude/claudectl.json, merged over defaults. Never raises."""
+    from . import jsonstore     # lazy: jsonstore imports this module
     s = dict(_DEFAULT_SETTINGS)
-    try:
-        with open(settings_file, 'r', encoding='utf-8-sig') as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            s.update({k: v for k, v in data.items() if k in _DEFAULT_SETTINGS})
-    except Exception:
-        pass
+    data = jsonstore.load(settings_file, expect=dict)
+    s.update({k: v for k, v in data.items() if k in _DEFAULT_SETTINGS})
     # normalize legacy model ids saved by older versions
     s['default_model'] = _norm_model(s.get('default_model', ''))
     pd = s.get('project_defaults')

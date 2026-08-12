@@ -111,8 +111,10 @@ def test_direct_launch_name_only_for_new(monkeypatch, tmp_path):
 def test_direct_launch_terminal(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     call = captured_launch(monkeypatch, sb, 'terminal', {})
-    assert call[0][0] == 'cmd /k'
-    assert call[1].get('shell') is True
+    # argv list, never a shell string: nothing in the environment or the cwd
+    # can be reinterpreted by cmd on the way through.
+    assert call[0][0] == ['cmd', '/k']
+    assert call[1].get('shell') is None
 
 
 def test_direct_launch_cwd_and_extra_paths(monkeypatch, tmp_path):

@@ -68,12 +68,12 @@ def load_memory(project_path, proj_folder=None):
     for d in _mem_dirs(project_path, proj_folder):
         p = os.path.join(d, GRAPH_NAME)
         if os.path.isfile(p):
-            try:
-                with open(p, encoding='utf-8') as f:
-                    data = json.load(f)
-                return _migrate(data) if isinstance(data, dict) else _empty()
-            except Exception:
-                return _empty()
+            # A corrupt graph is moved aside rather than treated as an empty
+            # one: `save_memory` writes straight back, so silently defaulting
+            # here is what would destroy it.
+            from . import jsonstore
+            data = jsonstore.load(p, default=None, expect=dict)
+            return _migrate(data) if data else _empty()
     return _empty()
 
 
@@ -124,34 +124,8 @@ def _scan_lock_path(project_path):
 
 
 def _pid_alive(pid):
-    try:
-        pid = int(pid)
-    except Exception:
-        return False
-    if pid <= 0:
-        return False
-    if os.name == 'nt':
-        # NEVER os.kill(pid, 0) on Windows — it TERMINATES the process.
-        try:
-            import ctypes
-            k32 = ctypes.windll.kernel32
-            h = k32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
-            if not h:
-                return False
-            try:
-                code = ctypes.c_ulong()
-                if k32.GetExitCodeProcess(h, ctypes.byref(code)):
-                    return code.value == 259         # STILL_ACTIVE
-                return False
-            finally:
-                k32.CloseHandle(h)
-        except Exception:
-            return None                              # unknown → age decides
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    from . import proc
+    return proc.pid_alive(pid)
 
 
 def _read_scan_lock(project_path):

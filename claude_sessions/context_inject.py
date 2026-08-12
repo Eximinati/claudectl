@@ -8,6 +8,7 @@ import os
 import subprocess
 
 from .paths import encode_component
+from . import store
 
 CTX_FILE = os.path.join('.claudectl', 'injected-context.md')
 
@@ -36,7 +37,7 @@ def find_sessions_across_accounts(project_path):
     encoded = encode_component(project_path)
     out = []
     for name, acct_dir in all_config_dirs():
-        folder = os.path.join(acct_dir, 'projects', encoded)
+        folder = store.project_folder(acct_dir, encoded)
         for mtime, sid, preview, _count in scan_sessions(folder):
             title = (load_name(folder, sid)
                      or get_session_title(os.path.join(folder, f"{sid}.jsonl")) or '')
@@ -123,7 +124,7 @@ def run(project_path, proj_folder, project_name):
     if target_dir is None:
         return False
     encoded = encode_component(project_path)
-    target_folder = os.path.join(target_dir, 'projects', encoded)
+    target_folder = store.project_folder(target_dir, encoded)
 
     ctx_path, title = _write_context_file(project_path, folder, sid, acct_name)
 

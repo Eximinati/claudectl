@@ -10,28 +10,22 @@ from .config import C_RESET, C_DIM, C_BOLD, C_ACCENT, C_OK
 from .config import open_in_editor
 from .sessions import load_name
 from . import render
+from . import transcripts as _t
 
 
 # ── extraction ───────────────────────────────────────────────
 
-def iter_transcript(jsonl_path):
+def iter_transcript(jsonl_path, *, limit=None, offset=0, max_bytes=None):
     """Conversation messages: [{'role','text','ts'}]. Text blocks only —
-    tool calls, tool results, thinking blocks and API errors are dropped."""
-    try:
-        with open(jsonl_path, 'r', encoding='utf-8', errors='ignore') as f:
-            lines = f.readlines()
-    except Exception:
-        return []
+    tool calls, tool results, thinking blocks and API errors are dropped.
 
+    limit/offset page over TRANSCRIPT LINES, not over the messages returned:
+    the filtering below is what decides which lines survive, so the caller
+    gets "at most limit lines' worth", which is what paging a 100 MB file
+    needs. Exact message counts come from `_parse_session`."""
     out = []
-    for line in lines:
-        ls = line.strip()
-        if not ls:
-            continue
-        try:
-            obj = json.loads(ls)
-        except Exception:
-            continue
+    for obj in _t.iter_json(jsonl_path, limit=limit, offset=offset,
+                            max_bytes=max_bytes):
         if obj.get('isApiErrorMessage'):
             continue
         msg  = obj.get('message') or {}

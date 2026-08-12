@@ -27,13 +27,10 @@ MAX_DIFF_CHARS = 60000
 # ── git ──────────────────────────────────────────────────────
 
 def _git(cwd, args, timeout=15):
-    try:
-        r = subprocess.run(['git', *args], cwd=cwd, capture_output=True,
-                           text=True, encoding='utf-8', errors='ignore',
-                           timeout=timeout)
-        return r.stdout if r.returncode == 0 else ''
-    except Exception:
-        return ''
+    """Arguments the other way round from `repos._git`, and '' rather than
+    None on failure — every caller here `.strip()`s the result directly."""
+    from . import proc
+    return proc.git(args, cwd, timeout) or ''
 
 
 def get_diff(project_path, staged=False, base=None):

@@ -36,34 +36,37 @@ def path_from_transcripts(folder, max_files=3, max_lines=40):
     `--server-share-P`, whose leading '--' makes the drive-letter split below
     yield an empty drive. Reading the recorded value is both exact and cheaper
     than the recursive directory walk it replaces."""
-    try:
-        names = sorted((n for n in os.listdir(folder) if n.endswith('.jsonl')),
-                       key=lambda n: os.path.getmtime(os.path.join(folder, n)),
-                       reverse=True)[:max_files]
-    except OSError:
-        return None
-    for n in names:
-        try:
-            with open(os.path.join(folder, n), encoding='utf-8', errors='ignore') as f:
-                for i, line in enumerate(f):
-                    if i >= max_lines:
-                        break
-                    try:
-                        obj = json.loads(line)
-                    except Exception:
-                        continue
-                    cwd = obj.get('cwd') if isinstance(obj, dict) else None
-                    if cwd and os.path.isdir(cwd):
-                        return cwd
-        except OSError:
-            continue
+    from . import transcripts
+    for n in transcripts.session_files(folder, limit=max_files):
+        for obj in transcripts.iter_json(os.path.join(folder, n), limit=max_lines):
+            cwd = obj.get('cwd')
+            if cwd and os.path.isdir(cwd):
+                return cwd
     return None
+
+
+#: folder -> (mtime_ns, real path). `/api/state`, `/api/search-index`, the usage
+#: endpoints and a `/api/dashboard` that polls every 10 s each call this once
+#: PER PROJECT, and every call opens up to three transcripts. The folder's mtime
+#: changes whenever a session is written, which is exactly when the answer could
+#: have changed, so this can never go stale. Keyed by folder rather than by
+#: (folder, mtime) so it stays bounded by the number of projects.
+_path_cache = {}
 
 
 def find_actual_path(encoded, max_depth=8, folder=None):
     if folder:
+        try:
+            mtime = os.stat(folder).st_mtime_ns
+        except OSError:
+            mtime = None
+        hit = _path_cache.get(folder)
+        if hit and mtime is not None and hit[0] == mtime:
+            return hit[1]
         got = path_from_transcripts(folder)
         if got:
+            if mtime is not None:
+                _path_cache[folder] = (mtime, got)
             return got
     if '--' not in encoded:
         return None

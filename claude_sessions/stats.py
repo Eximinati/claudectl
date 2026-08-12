@@ -10,6 +10,7 @@ from .sessions import (get_session_stats, scan_sessions, format_age, load_name,
                        _is_anthropic_model, _used_omni)
 from . import sessions as _sessions
 from . import render
+from . import store
 
 cache_file = os.path.join(config_dir, 'claudectl-stats-cache.json')
 
@@ -26,12 +27,8 @@ def _load_disk_cache():
     global _disk_cache
     if _disk_cache is not None:
         return _disk_cache
-    try:
-        with open(cache_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        _disk_cache = data if isinstance(data, dict) else {}
-    except Exception:
-        _disk_cache = {}
+    from . import jsonstore
+    _disk_cache = jsonstore.load(cache_file, expect=dict)
     return _disk_cache
 
 
@@ -149,7 +146,7 @@ def iter_all_sessions(entries, title='SCANNING SESSIONS', silent=False):
         for pi, (_, ppath, enc, cfgdir) in enumerate(entries, 1):
             if stopped:
                 break
-            folder = os.path.join(cfgdir, 'projects', enc)
+            folder = store.project_folder(cfgdir, enc)
             names = [f for f in (os.listdir(folder) if os.path.isdir(folder) else [])
                      if f.endswith('.jsonl')]
             for f in names:
@@ -385,7 +382,7 @@ def assemble_session_usage(proj_folder):
     from .sessions import project_session_folders
     from .config import all_config_dirs
 
-    acct_by_dir = {os.path.normcase(os.path.abspath(os.path.join(d, 'projects'))): n
+    acct_by_dir = {os.path.normcase(os.path.abspath(store.projects_root(d))): n
                    for n, d in all_config_dirs()}
 
     def _acct_of(folder):
@@ -598,7 +595,7 @@ def usage_dashboard(entries):
             nav = (nav + 1) % len(proj_rows)
         elif ev[0] == 'enter' and proj_rows:
             _, enc, p, _ = proj_rows[nav]
-            project_usage_screen(os.path.join(p['cfgdir'], 'projects', enc),
+            project_usage_screen(store.project_folder(p['cfgdir'], enc),
                                  os.path.basename(p['path']) or p['path'])
         elif ev[0] == 'char' and ev[1] == 'd':
             daily_usage_screen(entries)

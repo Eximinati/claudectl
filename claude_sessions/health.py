@@ -172,27 +172,17 @@ def frequent_bash_commands(proj_folder, min_count=3, top_k=10):
     counts = {}
     if not proj_folder or not os.path.isdir(proj_folder):
         return []
-    for nm in os.listdir(proj_folder):
-        if not nm.endswith('.jsonl'):
-            continue
-        try:
-            with open(os.path.join(proj_folder, nm), encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    if '"Bash"' not in line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except Exception:
-                        continue
-                    for block in (obj.get('message', {}).get('content') or []):
-                        if (isinstance(block, dict) and block.get('type') == 'tool_use'
-                                and block.get('name') == 'Bash'):
-                            cmd = str((block.get('input') or {}).get('command', '')).strip()
-                            word = cmd.split()[0].lower() if cmd.split() else ''
-                            if word and re.fullmatch(r'[a-z0-9_.-]+', word):
-                                counts[word] = counts.get(word, 0) + 1
-        except OSError:
-            continue
+    from . import transcripts
+    for nm in transcripts.session_files(proj_folder):
+        for obj in transcripts.iter_json(os.path.join(proj_folder, nm),
+                                         prefilter='"Bash"'):
+            for block in (obj.get('message', {}).get('content') or []):
+                if (isinstance(block, dict) and block.get('type') == 'tool_use'
+                        and block.get('name') == 'Bash'):
+                    cmd = str((block.get('input') or {}).get('command', '')).strip()
+                    word = cmd.split()[0].lower() if cmd.split() else ''
+                    if word and re.fullmatch(r'[a-z0-9_.-]+', word):
+                        counts[word] = counts.get(word, 0) + 1
     ranked = sorted(counts.items(), key=lambda kv: -kv[1])
     return [(w, c) for w, c in ranked if c >= min_count][:top_k]
 

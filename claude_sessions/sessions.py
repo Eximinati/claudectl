@@ -5,6 +5,8 @@ import re
 
 from .config import BAD_PREFIXES, BAD_CONTAINS, last_session_file, projects_dir, config_dir
 from . import config as _c
+from . import transcripts as _t
+from . import store as _store
 
 
 # ── session parsing ──────────────────────────────────────────
@@ -70,12 +72,7 @@ _EMPTY_STATS = {
 }
 
 
-def _iso_to_epoch(ts):
-    try:
-        from datetime import datetime
-        return datetime.fromisoformat(ts.replace('Z', '+00:00')).timestamp()
-    except Exception:
-        return None
+_iso_to_epoch = _t.iso_to_epoch
 
 
 def _parse_session(jsonl_path):
@@ -91,24 +88,10 @@ def _parse_session(jsonl_path):
     if cached and cached[0] == key:
         return cached[1]
 
-    try:
-        with open(jsonl_path, 'r', encoding='utf-8', errors='replace') as f:
-            lines = f.readlines()
-    except Exception:
-        return dict(_EMPTY_STATS)
-
     s = dict(_EMPTY_STATS)
     s['usage_by_model'] = {}
     s['models'] = []
-    for line in lines:
-        ls = line.strip()
-        if not ls:
-            continue
-        try:
-            obj = json.loads(ls)
-        except Exception:
-            continue
-
+    for obj in _t.iter_json(jsonl_path):
         if obj.get('type') == 'ai-title' and not s['title']:
             s['title'] = (obj.get('title', '') or obj.get('content', '')).strip()
 
@@ -174,48 +157,20 @@ def get_session_stats(jsonl_path):
 
 def get_session_rich_summary(jsonl_path, max_user_msgs=15):
     """Extract ai-title + significant user messages for AI context building."""
-    try:
-        with open(jsonl_path, 'r', encoding='utf-8', errors='replace') as f:
-            lines = f.readlines()
-    except Exception:
-        return '', []
-
     ai_title = ''
     user_msgs = []
 
-    for line in lines:
-        ls = line.strip()
-        if not ls:
-            continue
-        try:
-            obj = json.loads(ls)
-            # Grab ai-title if present
-            if obj.get('type') == 'ai-title' and not ai_title:
-                ai_title = obj.get('title', '') or obj.get('content', '')
-            # Collect user messages
-            role = obj.get('role') or obj.get('message', {}).get('role', '')
-            if role == 'user':
-                content = obj.get('content') or obj.get('message', {}).get('content', '')
-                texts = []
-                if isinstance(content, list):
-                    for block in content:
-                        if isinstance(block, dict) and block.get('type') == 'text':
-                            texts.append(block.get('text', '').strip())
-                elif isinstance(content, str):
-                    texts.append(content.strip())
-                for text in texts:
-                    if not text or len(text) < 5:
-                        continue
-                    if any(text.startswith(p) for p in BAD_PREFIXES):
-                        continue
-                    if any(b in text.lower() for b in BAD_CONTAINS):
-                        continue
+    for obj in _t.iter_json(jsonl_path):
+        if obj.get('type') == 'ai-title' and not ai_title:
+            ai_title = obj.get('title', '') or obj.get('content', '')
+        role = obj.get('role') or obj.get('message', {}).get('role', '')
+        if role == 'user':
+            for text in _extract_texts(obj):
+                if _good_text(text):
                     user_msgs.append(text[:200])
                     break
-            if len(user_msgs) >= max_user_msgs:
-                break
-        except Exception:
-            continue
+        if len(user_msgs) >= max_user_msgs:
+            break
 
     return ai_title, user_msgs
 
@@ -265,19 +220,7 @@ def session_changed_files(jsonl_path):
     NotebookEdit tool calls in the transcript. Returns [(path, count)] sorted
     by edit count desc."""
     counts = {}
-    try:
-        with open(jsonl_path, 'r', encoding='utf-8', errors='replace') as f:
-            lines = f.readlines()
-    except Exception:
-        return []
-    for line in lines:
-        ls = line.strip()
-        if not ls:
-            continue
-        try:
-            obj = json.loads(ls)
-        except Exception:
-            continue
+    for obj in _t.iter_json(jsonl_path, prefilter=('file_path', 'notebook_path')):
         content = (obj.get('message') or {}).get('content')
         if not isinstance(content, list):
             continue
@@ -415,7 +358,7 @@ def account_folders_for(encoded_name):
     from .config import all_config_dirs
     out = []
     for name, d in all_config_dirs():
-        folder = os.path.join(d, 'projects', encoded_name)
+        folder = _store.project_folder(d, encoded_name)
         if os.path.isdir(folder):
             out.append((name, folder))
     return out
@@ -449,7 +392,7 @@ def load_recent_sessions(n=5):
     from .config import all_config_dirs
     stores = [last_session_file]
     for _name, d in all_config_dirs():
-        p = os.path.join(d, 'projects', 'last-session.json')
+        p = os.path.join(_store.projects_root(d), 'last-session.json')
         if os.path.normcase(os.path.abspath(p)) != \
            os.path.normcase(os.path.abspath(last_session_file)):
             stores.append(p)
@@ -477,7 +420,7 @@ def load_recent_sessions(n=5):
         seen.add(sid)
         if not os.path.exists(p):
             continue
-        if not os.path.exists(os.path.join(cfgdir, 'projects', enc, f"{sid}.jsonl")):
+        if not os.path.exists(_store.session_file(cfgdir, enc, sid)):
             continue
         entry = dict(entry, cfgdir=cfgdir)
         valid.append(entry)

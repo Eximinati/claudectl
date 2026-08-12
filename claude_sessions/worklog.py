@@ -28,12 +28,8 @@ def worklog_path(project_path):
 
 
 def load_worklog(project_path):
-    try:
-        with open(worklog_path(project_path), encoding='utf-8') as f:
-            d = json.load(f)
-        return d if isinstance(d, list) else []
-    except Exception:
-        return []
+    from . import jsonstore
+    return jsonstore.load(worklog_path(project_path), expect=list)
 
 
 def save_worklog(project_path, entries):
@@ -56,18 +52,8 @@ _EDIT_TOOLS = {'Edit', 'Write', 'MultiEdit', 'NotebookEdit'}
 
 
 def _iter_json(transcript_path):
-    try:
-        with open(transcript_path, encoding='utf-8', errors='ignore') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    yield json.loads(line)
-                except Exception:
-                    continue
-    except Exception:
-        return
+    from . import transcripts
+    return transcripts.iter_json(transcript_path)
 
 
 def summarize_transcript(transcript_path):

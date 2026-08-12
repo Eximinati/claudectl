@@ -169,12 +169,10 @@ def install_from_git(repo_url, project_path, exec_model=''):
     import tempfile
     tmp = tempfile.mkdtemp(prefix='claudectl-skill-')
     try:
-        try:
-            r = subprocess.run(['git', 'clone', '--depth', '1', repo_url, tmp],
-                               capture_output=True, text=True,
-                               encoding='utf-8', errors='ignore', timeout=60)
-        except Exception as e:
-            return False, f'git not available: {e}'
+        from . import proc
+        r = proc.run(['git', 'clone', '--depth', '1', repo_url, tmp], timeout=60)
+        if r is None:
+            return False, 'git not available'
         if r.returncode != 0:
             return False, f'git clone failed: {(r.stderr or "").strip()[:200]}'
 

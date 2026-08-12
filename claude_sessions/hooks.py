@@ -376,12 +376,12 @@ def across_accounts(fn, *args, **kw):
 
 
 def _load(cfgdir=None):
-    try:
-        with open(settings_path_for(cfgdir), encoding='utf-8') as f:
-            d = json.load(f)
-            return d if isinstance(d, dict) else {}
-    except Exception:
-        return {}
+    """Claude Code's own settings.json. A corrupt one is MOVED ASIDE, not
+    treated as empty: every writer here read-modify-writes, so returning {}
+    for a file that exists but will not parse erases the user's hooks,
+    permissions and outputStyle on the next save."""
+    from . import jsonstore
+    return jsonstore.load(settings_path_for(cfgdir), expect=dict)
 
 
 def _save(d, cfgdir=None):

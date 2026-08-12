@@ -250,15 +250,8 @@ _ALIVE_TTL = 6 * 3600              # a recent success is a good ordering hint
 
 
 def _load_cache():
-    import os
-    p = dead_path()
-    if not os.path.isfile(p):
-        return {}
-    try:
-        with open(p, encoding='utf-8') as f:
-            return json.load(f) or {}
-    except Exception:
-        return {}
+    from . import jsonstore
+    return jsonstore.load(dead_path(), expect=dict)
 
 
 def load_dead():

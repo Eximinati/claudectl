@@ -37,7 +37,7 @@ jobs:
           if (-not $line) { $out | Select-Object -Last 5; throw 'could not read the collected count' }
           $n = [int]$line.Matches[0].Groups[1].Value
           Write-Host "collected $n tests"
-          if ($n -lt 1020) { throw "collected only $n tests — expected at least 1020" }
+          if ($n -lt 1055) { throw "collected only $n tests — expected at least 1055" }
       - name: Run tests
         run: python -m pytest tests/ -v
       - name: Verify package imports
