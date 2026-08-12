@@ -215,8 +215,36 @@ def test_hits_reinforced_on_recall(monkeypatch, tmp_path):
                         'valid': True, 'hits': 0}]
     memory.save_memory(actual, folder, mem)
     recall.retrieve(actual, folder, 'usage parser', budget_tokens=600)
+
+    # The graph itself is NOT rewritten on the per-prompt path: that cost two
+    # atomic writes per prompt and two sessions in one project overwrote each
+    # other's counts. The hit lands in an append-only sidecar...
+    assert os.path.isfile(recall.hits_log_path(actual, folder))
+    assert memory.load_memory(actual, folder)['entities'][0]['hits'] == 0
+
+    # ...and is folded in by the next build, which is rewriting the graph anyway.
     m2 = memory.load_memory(actual, folder)
-    assert m2['entities'][0]['hits'] == 1               # reinforced
+    assert recall.fold_hits(actual, folder, m2)
+    assert m2['entities'][0]['hits'] == 1
+    assert not os.path.isfile(recall.hits_log_path(actual, folder))
+
+
+def test_concurrent_recalls_do_not_lose_each_others_counts(monkeypatch, tmp_path):
+    """Two sessions in the same project, interleaved. The old read-modify-write
+    of the whole graph meant the last writer won and the other count vanished."""
+    from claude_sessions import recall
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    mem = memory._empty()
+    mem['entities'] = [{'name': 'Parser', 'type': 'component', 'summary': 'parses usage',
+                        'repo': 'app', 'module': 'x', 'source_files': ['app/x.py'],
+                        'valid': True, 'hits': 0}]
+    memory.save_memory(actual, folder, mem)
+    for _ in range(5):
+        recall.retrieve(actual, folder, 'usage parser', budget_tokens=600)
+    m2 = memory.load_memory(actual, folder)
+    recall.fold_hits(actual, folder, m2)
+    assert m2['entities'][0]['hits'] == 5
 
 
 def test_migrate_v2_adds_valid(monkeypatch, tmp_path):

@@ -66,11 +66,28 @@ def _age(seconds):
     return f'{int(seconds // 86400)}d'
 
 
+#: project_path -> (mtime_ns, graph). One statusline process usually renders
+#: once, but the GUI and the TUI both call render() in a loop, and a mature
+#: graph.json is hundreds of KB to re-parse for two numbers.
+_graph_cache = {}
+
+
 def _load(project_path):
     """The graph for this cwd. `load_memory` resolves the folder itself, so the
     statusline never has to reproduce the encoding rules."""
     from . import memory
-    return memory.load_memory(project_path)
+    p = os.path.join(project_path or '', memory.MEM_SUBDIR, memory.GRAPH_NAME)
+    try:
+        mtime = os.stat(p).st_mtime_ns
+    except OSError:
+        mtime = None
+    hit = _graph_cache.get(project_path)
+    if hit and mtime is not None and hit[0] == mtime:
+        return hit[1]
+    mem = memory.load_memory(project_path)
+    if mtime is not None:
+        _graph_cache[project_path] = (mtime, mem)
+    return mem
 
 
 def _iso_age(stamp):

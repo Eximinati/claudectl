@@ -19,37 +19,66 @@ def iter_transcript(jsonl_path, *, limit=None, offset=0, max_bytes=None):
     """Conversation messages: [{'role','text','ts'}]. Text blocks only —
     tool calls, tool results, thinking blocks and API errors are dropped.
 
-    limit/offset page over TRANSCRIPT LINES, not over the messages returned:
-    the filtering below is what decides which lines survive, so the caller
-    gets "at most limit lines' worth", which is what paging a 100 MB file
-    needs. Exact message counts come from `_parse_session`."""
+    limit/offset page over TRANSCRIPT LINES, not over the messages returned —
+    most lines are tool traffic this drops, so a page of lines yields fewer
+    messages than its size. `page()` is the paging-aware wrapper; use it rather
+    than trying to reconstruct the next offset from len(messages)."""
     out = []
     for obj in _t.iter_json(jsonl_path, limit=limit, offset=offset,
                             max_bytes=max_bytes):
-        if obj.get('isApiErrorMessage'):
-            continue
-        msg  = obj.get('message') or {}
-        role = obj.get('role') or msg.get('role', '')
-        if role not in ('user', 'assistant'):
-            continue
-        content = obj.get('content') or msg.get('content', '')
-        texts = []
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get('type') == 'text':
-                    t = block.get('text', '').strip()
-                    if t:
-                        texts.append(t)
-        elif isinstance(content, str) and content.strip():
-            texts.append(content.strip())
-        text = '\n'.join(texts)
-        if not text:
-            continue
-        # light noise filter — keep real conversation, drop harness chatter
-        if text.startswith('<') or text.startswith('Caveat:'):
-            continue
-        out.append({'role': role, 'text': text, 'ts': obj.get('timestamp', '')})
+        m = _message(obj)
+        if m:
+            out.append(m)
     return out
+
+
+def _message(obj):
+    """One transcript line as {'role','text','ts'}, or None when it is not a
+    conversation message at all — tool calls, tool results, thinking blocks and
+    API errors are the bulk of the file and all drop out here."""
+    if obj.get('isApiErrorMessage'):
+        return None
+    msg  = obj.get('message') or {}
+    role = obj.get('role') or msg.get('role', '')
+    if role not in ('user', 'assistant'):
+        return None
+    content = obj.get('content') or msg.get('content', '')
+    texts = []
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get('type') == 'text':
+                t = block.get('text', '').strip()
+                if t:
+                    texts.append(t)
+    elif isinstance(content, str) and content.strip():
+        texts.append(content.strip())
+    text = '\n'.join(texts)
+    if not text:
+        return None
+    # light noise filter — keep real conversation, drop harness chatter
+    if text.startswith('<') or text.startswith('Caveat:'):
+        return None
+    return {'role': role, 'text': text, 'ts': obj.get('timestamp', '')}
+
+
+def page(jsonl_path, offset=0, limit=400):
+    """One window of a transcript, plus where the next one starts.
+
+    A session here reaches 2,787 messages and the file 100 MB; the whole thing
+    used to be serialised into a single response. `next_offset` counts LINES
+    consumed, so the caller never has to guess how many the filtering dropped.
+    """
+    lines = 0
+    out = []
+    for obj in _t.iter_json(jsonl_path, offset=offset):
+        lines += 1
+        m = _message(obj)
+        if m:
+            out.append(m)
+            if len(out) >= limit:
+                break
+    return {'messages': out, 'offset': offset,
+            'next_offset': offset + lines, 'more': len(out) >= limit}
 
 
 # ── metadata ─────────────────────────────────────────────────

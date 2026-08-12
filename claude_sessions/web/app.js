@@ -1468,11 +1468,26 @@ async function viewS(i){const s=SESS[i];
   const [t,m]=await Promise.all([
     api('/api/transcript?'+qs({enc:CUR.encoded,cfgdir:s.cfgdir||CUR.primary_cfgdir,sid:s.sid})),
     api('/api/session/meta?'+qs({enc:CUR.encoded,cfgdir:s.cfgdir||CUR.primary_cfgdir,sid:s.sid}))]);
+  TSC={sid:s.sid,cfgdir:s.cfgdir||CUR.primary_cfgdir,next:t.next_offset,more:t.more};
   $('#dBody').innerHTML=
     `<div class="card"><h3>Session info</h3><div style="font:12px Consolas,monospace;white-space:pre-wrap">${esc((m.lines||[]).join('\n'))}</div></div>`
-    +(t.messages||[]).map(x=>`<div class="msg ${x.role==='user'?'user':''}">
+    +`<div id="dMsgs">${msgsHtml(t.messages)}</div>`+moreBtn();
+}
+/* A transcript here reaches 2,787 messages over 100 MB — the drawer pages. */
+let TSC=null;
+function msgsHtml(ms){return (ms||[]).map(x=>`<div class="msg ${x.role==='user'?'user':''}">
       <div class="who">${x.role==='user'?'User':'Assistant'}</div>
-      <div class="body">${esc(x.text)}</div></div>`).join('');
+      <div class="body">${esc(x.text)}</div></div>`).join('');}
+function moreBtn(){return TSC&&TSC.more
+  ?'<div id="dMore" style="text-align:center;padding:12px"><button class="btn" onclick="moreTranscript()">Load more</button></div>':'';}
+async function moreTranscript(){
+  if(!TSC||!TSC.more)return;
+  const b=$('#dMore');if(b)b.innerHTML='<span class="spin"></span>';
+  const t=await api('/api/transcript?'+qs({enc:CUR.encoded,cfgdir:TSC.cfgdir,
+    sid:TSC.sid,offset:TSC.next}));
+  TSC.next=t.next_offset;TSC.more=t.more;
+  const host=$('#dMsgs');if(host)host.insertAdjacentHTML('beforeend',msgsHtml(t.messages));
+  const m=$('#dMore');if(m)m.outerHTML=moreBtn();
 }
 async function filesS(i){const s=SESS[i];
   const d=await api('/api/session/changed-files?'+qs({enc:CUR.encoded,

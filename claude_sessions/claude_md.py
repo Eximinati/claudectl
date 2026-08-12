@@ -17,6 +17,12 @@ from .sessions import get_session_info, get_session_rich_summary, read_extra_pat
 from .ui import text_input, _cls, wait_event, poll_event
 
 
+#: wall-clock ceiling for the streaming `claude -p` analysis. Generous — the
+#: call legitimately runs for minutes — but finite, because ESC used to be the
+#: only exit and no unattended caller can press it.
+_AI_ANALYZE_TIMEOUT = 900
+
+
 def write_memory_block(project_path, digest):
     """Insert/replace the CLAUDECTL:MEMORY sentinel block in <project>/CLAUDE.md,
     leaving all other content (user prose, AUTOGEN, SESSIONS, AI marker) intact.
@@ -770,6 +776,7 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
     ai_content = ''
     start_t = time.time()
 
+
     try:
         # Prompt goes via stdin, NOT argv: a large project context (e.g. a
         # folder of many repos) overruns the Windows command-line limit
@@ -888,6 +895,15 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
                 ])
                 spin_i += 1
                 time.sleep(0.1)
+                # Wall clock. ESC was the only way out, so a wedged `claude`
+                # hung an unattended caller — a GUI job thread, or the headless
+                # bg worker — forever.
+                if time.time() - start_t > _AI_ANALYZE_TIMEOUT:
+                    from . import proc as _proc
+                    _proc.kill_tree(proc)
+                    cancelled = True
+                    done = True
+                    break
                 # Check background-job cancel
                 from .gui_api import _JOBCTX, JobCancelled
                 _j = getattr(_JOBCTX, 'job', None)

@@ -414,10 +414,16 @@ def _folder(cfgdir, enc):
 
 # ── sessions & transcript ────────────────────────────────────
 
+#: a transcript here routinely passes 100 MB; the drawer pages instead of
+#: serialising every message of a 2,787-message session into one response
+_TRANSCRIPT_PAGE = 400
+
+
 def api_transcript(q, body):
-    from .transcript import iter_transcript
-    jsonl = os.path.join(_folder(q.get('cfgdir'), q['enc']), f"{q['sid']}.jsonl")
-    return {'messages': iter_transcript(jsonl)}
+    from .transcript import page
+    jsonl = _store.session_file(q.get('cfgdir'), q['enc'], q['sid'])
+    return page(jsonl, max(0, int(q.get('offset') or 0)),
+                min(_TRANSCRIPT_PAGE, max(1, int(q.get('limit') or _TRANSCRIPT_PAGE))))
 
 
 def api_session_meta(q, body):

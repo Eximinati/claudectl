@@ -43,6 +43,10 @@ agents_library_dir = os.path.join(_USERPROFILE, '.claude', 'claudectl-agents')
 # <project>/.claude/skills/ where Claude Code auto-discovers them on demand.
 skills_library_dir = os.path.join(_USERPROFILE, '.claude', 'claudectl-skills')
 
+#: where load_settings parks keys it does not recognise so save_settings can
+#: put them back. Not a setting itself — never written under this name.
+_UNKNOWN_KEYS = '_unknown'
+
 _DEFAULT_SETTINGS = {
     'editor': '',              # path to preferred text editor ('' = auto-detect)
     'claude_exe': '',          # path to claude.exe ('' = auto-detect)
@@ -130,6 +134,13 @@ def load_settings():
     s = dict(_DEFAULT_SETTINGS)
     data = jsonstore.load(settings_file, expect=dict)
     s.update({k: v for k, v in data.items() if k in _DEFAULT_SETTINGS})
+    # Keys this version does not know are carried, not dropped. save_settings
+    # writes back whatever load_settings returned, so filtering them out here
+    # meant an older claudectl silently ERASED a newer one's settings — and a
+    # downgrade, or two machines syncing this file, is enough to trigger it.
+    unknown = {k: v for k, v in data.items() if k not in _DEFAULT_SETTINGS}
+    if unknown:
+        s[_UNKNOWN_KEYS] = unknown
     # normalize legacy model ids saved by older versions
     s['default_model'] = _norm_model(s.get('default_model', ''))
     pd = s.get('project_defaults')
@@ -172,7 +183,9 @@ def write_json_atomic(path, obj, indent=2):
 
 def save_settings(s):
     """Write settings dict. Returns True on success."""
-    return write_json_atomic(settings_file, s)
+    out = {k: v for k, v in s.items() if k != _UNKNOWN_KEYS}
+    out.update(s.get(_UNKNOWN_KEYS) or {})
+    return write_json_atomic(settings_file, out)
 
 
 # ── active config dir ────────────────────────────────────────

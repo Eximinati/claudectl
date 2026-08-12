@@ -99,7 +99,10 @@ def test_worklog_hook_install_roundtrip(monkeypatch, tmp_path):
     assert hooks.worklog_hook_installed()
     # both events registered
     d = json.load(open(tmp_path / 'settings.json', encoding='utf-8'))
-    assert 'SessionStart' in d['hooks'] and 'Stop' in d['hooks']
+    # SessionEnd, not Stop: Stop fires every turn and re-streams the whole
+    # transcript for a capture that only needs to happen once.
+    assert 'SessionStart' in d['hooks'] and 'SessionEnd' in d['hooks']
+    assert 'Stop' not in d['hooks']
     # idempotent
     hooks.install_worklog_hook()
     assert hooks.worklog_hook_installed()

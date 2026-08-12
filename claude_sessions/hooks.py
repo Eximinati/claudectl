@@ -292,8 +292,11 @@ def _worklog_hook_command():
     return f'"{sys.executable}" "{script}"'
 
 
-# one script serves both events; per-project opt-in is checked inside the script
-_WORKLOG_EVENTS = ('SessionStart', 'Stop')
+# one script serves both events; per-project opt-in is checked inside the script.
+# SessionEnd, NOT Stop: Stop fires on EVERY turn and the capture re-streams the
+# whole growing transcript each time. The capture is heuristic and only needs to
+# run once, when the session is actually over.
+_WORKLOG_EVENTS = ('SessionStart', 'SessionEnd')
 
 
 def install_worklog_hook(cfgdir=None):

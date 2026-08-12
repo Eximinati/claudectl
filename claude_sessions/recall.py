@@ -197,6 +197,57 @@ def render_context(scored, mem, budget_tokens):
     return text, tokens_estimate(text)
 
 
+HITS_LOG = 'hits.log'
+
+
+def hits_log_path(project_path, proj_folder):
+    dirs = memory._mem_dirs(project_path, proj_folder)
+    return os.path.join(dirs[0], HITS_LOG) if dirs else ''
+
+
+def _log_hits(project_path, proj_folder, names):
+    p = hits_log_path(project_path, proj_folder)
+    if not p or not names:
+        return
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        # One append per prompt, opened 'a': concurrent sessions in the same
+        # project interleave lines instead of losing each other's counts.
+        with open(p, 'a', encoding='utf-8') as f:
+            f.write('\n'.join(n for n in names if n) + '\n')
+    except Exception:
+        pass
+
+
+def fold_hits(project_path, proj_folder, mem):
+    """Apply the sidecar's counts to *mem* and clear it. Called by the memory
+    build, which is already rewriting the graph — so the reinforcement costs
+    nothing extra, instead of two atomic writes per prompt."""
+    p = hits_log_path(project_path, proj_folder)
+    if not p or not os.path.isfile(p):
+        return False
+    counts = {}
+    try:
+        with open(p, encoding='utf-8', errors='replace') as f:
+            for line in f:
+                name = line.strip()
+                if name:
+                    counts[name] = counts.get(name, 0) + 1
+    except OSError:
+        return False
+    for e in mem.get('entities', []):
+        n = counts.get(e.get('name'))
+        if n:
+            e['hits'] = e.get('hits', 0) + n
+            if e.get('type') == 'lesson':
+                e['last_used'] = mem.get('session_counter', 0)
+    try:
+        os.remove(p)
+    except OSError:
+        pass
+    return bool(counts)
+
+
 def retrieve(project_path, proj_folder, query, budget_tokens=600):
     """Main entry: {'text', 'tokens', 'items', 'empty'}."""
     mem = memory.load_memory(project_path, proj_folder)
@@ -220,22 +271,16 @@ def retrieve(project_path, proj_folder, query, budget_tokens=600):
             best[k] = (s, e)
     ranked = sorted(best.values(), key=lambda x: (-x[0], x[1].get('name', '')))
     text, toks = render_context(ranked, mem, budget_tokens)
-    # reinforcement: bump hits on injected entities (kept during consolidation)
-    # and last_used on injected lessons (decay signal) — best-effort
-    injected = {e.get('name') for _s, e in ranked}
-    touched = False
+    # Reinforcement: which entities got injected, appended to a sidecar and
+    # folded into the graph on the next build.
+    #
+    # This runs on EVERY UserPromptSubmit. Bumping the counters in the graph
+    # here meant re-serialising it and calling memory.save_memory — which
+    # performs TWO atomic writes — on every prompt, and two sessions in the
+    # same project simply overwrote each other's counts. An append is
+    # single-writer-safe and costs one line.
     if text:
-        for e in mem.get('entities', []):
-            if e.get('name') in injected:
-                e['hits'] = e.get('hits', 0) + 1
-                if e.get('type') == 'lesson':
-                    e['last_used'] = mem.get('session_counter', 0)
-                touched = True
-    if touched:
-        try:
-            memory.save_memory(project_path, proj_folder, mem)
-        except Exception:
-            pass
+        _log_hits(project_path, proj_folder, [e.get('name') for _s, e in ranked])
     return {'text': text, 'tokens': toks,
             'items': [e.get('name') for _s, e in ranked], 'empty': not text}
 

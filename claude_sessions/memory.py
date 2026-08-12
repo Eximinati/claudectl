@@ -595,6 +595,14 @@ def refresh_memory(project_path, proj_folder, project_name, auto_cap=None):
                 'pending_units': skipped_units,
                 'repo_summaries': _rollup_summaries(units, summaries, unit_rank),
                 'generated_at': _iso()})
+    # Reinforcement counts recorded by the per-prompt recall hook. Folded in
+    # HERE, before consolidation reads `hits` to decide what to evict, and at
+    # no extra cost — this function is already rewriting the graph.
+    try:
+        from .recall import fold_hits
+        fold_hits(project_path, proj_folder, mem)
+    except Exception:
+        _c.log.exception('memory: folding recall hits failed')
     _consolidate(mem)
     save_memory(project_path, proj_folder, mem)
     sync_to_claudemd(project_path, proj_folder, mem)
