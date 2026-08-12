@@ -57,6 +57,14 @@ function setLoading(on){
    attribute-value call site (data-v="${esc(v)}", title="${esc(v)}") was open */
 const _ESC_MAP={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
 function esc(s){return s==null?'':String(s).replace(/[&<>"']/g,c=>_ESC_MAP[c]);}
+/* A value going into a JS STRING LITERAL inside an HTML attribute needs its
+   backslashes doubled as well as its HTML escaped: the browser unescapes the
+   attribute, then JS reads `\U` and `\.` as escape sequences, so a Windows
+   path like C:\Users\mab\.claude arrives as C:Usersmab.claude. Two call sites
+   had each open-coded the same .replace, and the third one written forgot it —
+   which is what "invalid cfgdir" was. Prefer passing an INDEX into a global
+   over a path; use this when the value itself has to travel. */
+function jsq(s){return esc(String(s==null?'':s).replace(/\\/g,'\\\\'));}
 function C(){return {path:CUR.path,enc:CUR.encoded,cfgdir:CUR.primary_cfgdir};}
 /* stable per-account color: default = the theme's green, others take a FIXED
    (hue, lightness) ramp — not a generated hue wheel. Each slot's lightness is
@@ -1168,7 +1176,7 @@ function acctCard(a){
     <div class="arow"><span class="al">weekly</span><span class="bar shimmer"></span><span class="ap"></span></div>`;
   let note='';
   if(bad)note=`<div class="st err">${esc(a.status_text||'not logged in')}
-    <span class="hlink" onclick="acctReconnect('${esc(a.account)}','${esc((a.dir||'').replace(/\\/g,'\\\\'))}')">Reconnect ›</span></div>`;
+    <span class="hlink" onclick="acctReconnect('${jsq(a.account)}','${jsq(a.dir||'')}')">Reconnect ›</span></div>`;
   else if(a.status==='rate_limited')note=`<div class="st warn">rate-limited${a.retry_in?' · retry in '+a.retry_in+'s':''}</div>`;
   else if(a.status==='error')note=`<div class="st warn">${esc(a.status_text||'usage unavailable')}</div>`;
   else if(a.stale_secs!=null&&a.stale_secs>600)note=`<div class="st dim">as of ${Math.round(a.stale_secs/60)}m ago</div>`;
@@ -1646,7 +1654,7 @@ async function drawClaudeMd(){
         <span style="width:18px">${f.exists?ic('check'):'—'}</span>
         <span style="flex:1">${esc(f.label)}</span>
         <span style="color:var(--dim2);font-size:11px">${esc(f.path)}</span>
-        ${f.exists?`<button class="btn sm" onclick="post('/api/open-editor',{file:'${esc(f.path).replace(/\\/g,'\\\\')}'})">open</button>`:''}
+        ${f.exists?`<button class="btn sm" onclick="post('/api/open-editor',{file:'${jsq(f.path)}'})">open</button>`:''}
       </div>`).join('')}</div>
     <div class="card"><h3>System prompt</h3><div id="spBox"></div></div>`);
   const sp=await api('/api/system-prompt?'+qs(c));
@@ -2234,7 +2242,7 @@ function ccRow(k,s,accts){
     <div class="cclbl">${state}<div><b>${esc(ccName(k))}</b>
       <code>${esc(k)}</code>
       <div class="cchelp">${esc(s.help)}</div></div></div>`
-    +accts.map(a=>`<div class="fld">${ccInput(k,s,a)}</div>`).join('')
+    +accts.map((a,i)=>`<div class="fld">${ccInput(k,s,a,i)}</div>`).join('')
     +`<div class="ccall"><button class="btn sm" title="Apply the first account's value to all"
         onclick="ccAll('${k}')">${ic('group')}</button></div></div>`;
 }
@@ -2244,9 +2252,14 @@ function ccName(k){
   const s=k.replace(/([a-z0-9])([A-Z])/g,'$1 $2').toLowerCase();
   return s.charAt(0).toUpperCase()+s.slice(1);
 }
-function ccInput(k,s,a){
+/* The account is passed by INDEX into CCACCTS, never as a path. A Windows
+   config dir is full of backslashes, and interpolating one into a JS string
+   literal inside an HTML attribute makes the browser read `\U` and `\.` as
+   escapes: `C:\Users\mab\.claude` arrives as `C:Usersmab.claude`, which then
+   fails the account allowlist as "invalid cfgdir". */
+function ccInput(k,s,a,ai){
   const v=a.values[k],id=ccId(k,a.dir);
-  const set=`onchange="ccSet('${k}',this,'${esc(a.dir)}')"`;
+  const set=`onchange="ccSet('${k}',this,${ai})"`;
   if(s.kind==='bool')
     return `<select id="${id}" ${set}><option value=""${v===undefined?' selected':''}>—</option>
       <option value="true"${v===true?' selected':''}>on</option>
@@ -2259,8 +2272,9 @@ function ccInput(k,s,a){
   return `<input id="${id}" value="${esc(String(shown))}" placeholder="${esc(ph)}" ${set}>`;
 }
 function ccId(k,dir){return 'cc_'+k+'_'+btoa(dir).replace(/[^a-zA-Z0-9]/g,'');}
-async function ccSet(key,el,dir){
-  const r=await post('/api/cc-settings',{key,value:el.value,cfgdir:dir});
+async function ccSet(key,el,ai){
+  const a=CCACCTS[ai];if(!a)return;
+  const r=await post('/api/cc-settings',{key,value:el.value,cfgdir:a.dir});
   toast(r.ok?(r.message||'Saved'):(r.error||'Failed'),r.ok?'ok':'err');
   drawPage('client');          // redraw so the set/differs marker is honest
 }
@@ -2268,7 +2282,7 @@ async function ccAll(key){
   const first=$('#'+ccId(key,(CCACCTS[0]||{}).dir||''));
   if(!first)return;
   const r=await post('/api/cc-settings',{key,value:first.value,all_accounts:true});
-  toast(r.ok?'Applied to every account':'Failed',r.ok?'ok':'err');
+  toast(r.ok?'Applied to every account':(r.error||'Failed'),r.ok?'ok':'err');
   drawPage('client');
 }
 let CCACCTS=[];
@@ -3572,20 +3586,18 @@ async function slRefresh(){
      </span></div>`
      +(a.installed&&bl.length?`<div class="kv"><span></span>
         <span style="color:var(--warn);font-size:12px">${esc(bl[0].why)}
-        ${bl[0].code==='classic-tui'
-          ?`<button class="btn sm" onclick="slFullscreen(${i})">Switch to fullscreen</button>`:''}
+        ${bl[0].code==='cwd-dependent-command'
+          ?`<button class="btn sm" onclick="slFix(${i})">Repair</button>`:''}
         </span></div>`:'');}).join('');
   SL_ACCTS=accts;
 }
 let SL_ACCTS=[];
 /* one click for the thing the warning just described, rather than sending the
-   user off to find the key themselves */
-async function slFullscreen(i){
+   user off to work out the remedy themselves */
+async function slFix(i){
   const a=SL_ACCTS[i];if(!a)return;
-  const r=await post('/api/cc-settings',
-    {key:'tui',value:'fullscreen',cfgdir:a.cfgdir});
-  toast(r.ok?'Fullscreen renderer enabled — restart that session':(r.error||'Failed'),
-    r.ok?'ok':'err');
+  const r=await post('/api/statusline',{action:'install',cfgdir:a.cfgdir});
+  toast(r.ok?'Repaired — restart that session':(r.message||'Failed'),r.ok?'ok':'err');
   slRefresh();
 }
 async function slOne(i){

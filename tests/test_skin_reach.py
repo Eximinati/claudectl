@@ -252,3 +252,7 @@ def test_an_in_card_empty_state_is_not_pushed_down_a_screen():
     """`.empty` carries margin-top:7vh for a whole page with nothing in it.
     Inside a card that leaves a one-line message floating 70px down."""
     assert '.card .empty{margin-top:0' in _CSS
+
+
+# ── values travelling into inline handlers ───────────────────
+

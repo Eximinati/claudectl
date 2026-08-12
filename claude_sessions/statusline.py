@@ -341,11 +341,38 @@ def plain(line):
     return _r.strip_ansi(line)
 
 
+#: the form that only worked inside the source checkout — see statusline_cli
+_LEGACY = '-m claude_sessions'
+
+
 def _command():
-    """`"<python>" -m claude_sessions statusline`, absolute and quoted so it
-    works whatever shell Claude Code invokes it through — the same reasoning as
-    hooks._py_hook."""
-    return f'"{sys.executable}" -m claude_sessions statusline'
+    """`"<python>" "<statusline_cli.py>"`, both absolute and quoted so it works
+    whatever shell Claude Code invokes it through, and from any directory.
+
+    NOT `-m claude_sessions`: `sys.path[0]` for `-m` is the CURRENT DIRECTORY,
+    so that form found the package only when the session's cwd was the
+    claudectl checkout. Everywhere else it exited 1 and Claude Code drew an
+    empty line without saying why. Same reasoning as hooks._py_hook, which got
+    this right for the hook scripts.
+    """
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'statusline_cli.py')
+    return f'"{_interpreter()}" "{script}"'
+
+
+def _interpreter():
+    """pythonw.exe where it exists, python.exe otherwise.
+
+    This runs on EVERY conversation turn. The console interpreter flashes a
+    window each time on Windows, which is unusable; the windowless one writes
+    to the captured pipe exactly the same way.
+    """
+    exe = sys.executable
+    if os.name != 'nt':
+        return exe
+    w = os.path.join(os.path.dirname(exe),
+                     os.path.basename(exe).replace('python.exe', 'pythonw.exe'))
+    return w if w != exe and os.path.isfile(w) else exe
 
 
 def is_installed(cfgdir=None):
@@ -367,14 +394,18 @@ def blockers(cfgdir=None):
     from . import hooks
     s = hooks._load(cfgdir)
     out = []
-    # Observed on this machine, across three accounts: the two rendering in
-    # fullscreen show the statusline, the one on the classic renderer does not.
-    # Claude Code documents the `tui` setting and documents statusLine, but not
-    # that the second depends on the first.
-    if s.get('tui') not in ('fullscreen',):
-        out.append(('classic-tui',
-                    'this account renders in classic mode, where the statusline '
-                    'is not drawn — set tui to fullscreen, or run /tui in a session'))
+    cmd = str((s.get('statusLine') or {}).get('command', ''))
+    # The one that actually bit: `-m claude_sessions` resolves the package off
+    # the CURRENT DIRECTORY, so it printed a statusline in the claudectl
+    # checkout and nothing anywhere else. Claude Code swallows the failure, so
+    # the only symptom was a blank line.
+    if _LEGACY in cmd:
+        out.append(('cwd-dependent-command',
+                    'the installed command uses `-m claude_sessions`, which only '
+                    'resolves when the session runs inside the claudectl '
+                    'checkout — reinstall to point it at an absolute path'))
+    # Claude Code's own warning: "Status line is configured but disableAllHooks
+    # is true".
     if s.get('disableAllHooks'):
         out.append(('hooks-disabled',
                     'disableAllHooks is on, which turns the statusline off with '

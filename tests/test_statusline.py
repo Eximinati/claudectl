@@ -362,48 +362,79 @@ def _acct(tmp_path, monkeypatch, settings):
     return str(tmp_path)
 
 
-def test_the_classic_renderer_is_reported_as_a_blocker(tmp_path, monkeypatch):
-    """The bug this exists for: three accounts, all three carrying a correct
-    statusLine, and the one on the classic renderer showed nothing. Every
-    surface said "installed", which was true and useless — Claude Code draws
-    no statusline in classic mode and says nothing about it."""
-    d = _acct(tmp_path, monkeypatch, {'statusLine': {'command': 'claude_sessions'}})
+def test_a_cwd_dependent_command_is_reported_as_a_blocker(tmp_path, monkeypatch):
+    """The bug this exists for. `-m claude_sessions` resolves the package off
+    sys.path[0], which for -m is the CURRENT DIRECTORY — so the statusline
+    printed in the claudectl checkout and nowhere else. Claude Code swallows
+    the command's failure, so the only symptom was a blank line, and it looked
+    like an account problem for exactly as long as the accounts were tested in
+    different directories."""
+    d = _acct(tmp_path, monkeypatch, {'statusLine': {
+        'command': '"py.exe" -m claude_sessions statusline'}})
     codes = [c for c, _why in sl.blockers(d)]
-    assert 'classic-tui' in codes
-    why = dict(sl.blockers(d))['classic-tui']
-    assert 'fullscreen' in why, 'the message has to name the fix'
+    assert 'cwd-dependent-command' in codes
+    assert 'reinstall' in dict(sl.blockers(d))['cwd-dependent-command']
 
 
-def test_fullscreen_clears_the_blocker(tmp_path, monkeypatch):
+def test_the_installed_command_does_not_depend_on_the_working_directory():
+    assert sl._LEGACY not in sl._command()
+    assert 'statusline_cli.py' in sl._command()
+
+
+def test_the_current_command_reports_no_blocker(tmp_path, monkeypatch):
     d = _acct(tmp_path, monkeypatch,
-              {'tui': 'fullscreen', 'statusLine': {'command': 'claude_sessions'}})
+              {'statusLine': {'type': 'command', 'command': sl._command()}})
     assert sl.blockers(d) == []
 
 
-def test_the_documented_default_value_still_blocks(tmp_path, monkeypatch):
-    """`tui` takes 'fullscreen' or 'default'; only the first draws it."""
-    d = _acct(tmp_path, monkeypatch,
-              {'tui': 'default', 'statusLine': {'command': 'claude_sessions'}})
-    assert [c for c, _w in sl.blockers(d)] == ['classic-tui']
+def test_the_entry_script_runs_from_any_directory(tmp_path):
+    """Not a shape check: the script is RUN, from a directory that is not the
+    checkout, exactly as a session in someone else's project would."""
+    import json as _json
+    import subprocess as _sp
+    payload = {'model': {'display_name': 'Opus 5'}, 'cwd': str(tmp_path),
+               'workspace': {'current_dir': str(tmp_path)},
+               'context_window': {'used_percentage': 42},
+               'cost': {'total_cost_usd': 1.0}}
+    script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          'claude_sessions', 'statusline_cli.py')
+    r = _sp.run([sys.executable, script], input=_json.dumps(payload),
+                capture_output=True, text=True, encoding='utf-8',
+                errors='replace', cwd=str(tmp_path), timeout=120)
+    assert r.returncode == 0, r.stderr
+    assert 'Opus 5' in r.stdout, (r.stdout, r.stderr)
+
+
+def test_running_it_as_a_module_from_elsewhere_is_what_used_to_fail(tmp_path):
+    """The evidence for the fix, kept as a test: the old form still cannot
+    resolve the package from another directory."""
+    import subprocess as _sp
+    r = _sp.run([sys.executable, '-m', 'claude_sessions', 'statusline'],
+                input='{}', capture_output=True, text=True, encoding='utf-8',
+                errors='replace', cwd=str(tmp_path), timeout=120)
+    if r.returncode == 0:
+        import pytest
+        pytest.skip('claudectl is installed here, so -m resolves anyway')
+    assert 'No module named' in (r.stderr or '')
 
 
 def test_disabling_every_hook_is_reported_too(tmp_path, monkeypatch):
     d = _acct(tmp_path, monkeypatch,
-              {'tui': 'fullscreen', 'disableAllHooks': True,
-               'statusLine': {'command': 'claude_sessions'}})
+              {'disableAllHooks': True,
+               'statusLine': {'command': sl._command()}})
     assert [c for c, _w in sl.blockers(d)] == ['hooks-disabled']
 
 
 def test_by_account_carries_the_blockers_next_to_installed(tmp_path, monkeypatch):
     from claude_sessions import hooks
     a, b = tmp_path / 'a', tmp_path / 'b'
-    for p, extra in ((a, {}), (b, {'tui': 'fullscreen'})):
+    for p, cmd in ((a, '"py.exe" -m claude_sessions statusline'),
+                   (b, sl._command())):
         p.mkdir()
         (p / 'settings.json').write_text(
-            json.dumps(dict(extra, statusLine={'command': 'claude_sessions'})),
-            encoding='utf-8')
+            json.dumps({'statusLine': {'command': cmd}}), encoding='utf-8')
     monkeypatch.setattr(hooks, 'account_dirs',
-                        lambda: [('classic', str(a)), ('full', str(b))])
+                        lambda: [('stale', str(a)), ('fixed', str(b))])
     rows = {n: (done, [c for c, _w in bl]) for n, _d, done, bl in sl.by_account()}
-    assert rows['classic'] == (True, ['classic-tui'])
-    assert rows['full'] == (True, [])
+    assert rows['stale'] == (True, ['cwd-dependent-command'])
+    assert rows['fixed'] == (True, [])
