@@ -111,5 +111,4 @@ subscription and no API key of its own.
 
 ## Can I install it from PyPI?
 
-Not yet — the package is not published. Clone the repo and run `pip install -e .`, or run
-it straight from the checkout. See [Install](install.md).
+Yes: `pipx install claudectl` (or `pip install claudectl`). See [Install](install.md).

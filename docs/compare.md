@@ -59,7 +59,6 @@ Stated plainly, because a comparison page that only lists strengths is not usefu
 
 - **It is not a Claude Code replacement.** It configures and launches Claude Code; every
   actual coding turn is Claude Code doing the work.
-- **It is not published on PyPI yet.** Install is clone-and-run or `pip install -e .`.
 - **It is Windows-first.** macOS and Linux are supported and tested in CI, but Windows gets
   the widest version matrix and by far the most real-world use.
 - **It does not host or proxy a model of its own.** It uses your existing Claude Code

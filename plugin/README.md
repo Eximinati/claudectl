@@ -16,12 +16,10 @@ The in-session surface of [claudectl](https://github.com/babarmuhammad/claudectl
 | `/claudectl:review` | Review the current diff against this project's own learned conventions |
 | 8 skills | changelog, code-explainer, commit-message, pr-description, refactor-planner, security-review, test-writer, token-economy |
 
-The three commands shell out to the `claudectl` CLI, so install that too. It is
-not on PyPI yet, so install it from the repo:
+The three commands shell out to the `claudectl` CLI, so install that too:
 
 ```
-git clone https://github.com/babarmuhammad/claudectl.git
-cd claudectl && pip install -e .
+pipx install claudectl     # or: pip install claudectl
 ```
 
 The skills work without it.

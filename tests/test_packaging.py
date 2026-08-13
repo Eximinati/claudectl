@@ -108,23 +108,23 @@ def _docs():
             yield rel, open(p, encoding='utf-8').read()
 
 
-def test_no_document_advertises_an_install_that_does_not_exist():
-    """The README told people to `pipx install claudectl`. The name is not on
-    PyPI — that command 404s — so the very first instruction a new visitor
-    followed was the one that failed.
+def test_no_document_denies_an_install_that_now_works():
+    """This guard used to assert the opposite — that nothing advertised
+    `pipx install claudectl`, because the name 404'd and the first instruction a
+    visitor followed was the one that failed.
 
-    Any line proposing it must be the line explaining that it does NOT work.
+    1.6.0 is published, so the hazard inverted: a leftover "not on PyPI yet"
+    caveat now turns people away from the install that works. The lesson is that
+    the old form encoded a temporary state as a permanent invariant; this form
+    tracks the package's actual existence instead of restating it.
     """
     import re
-    bad = []
+    stale = []
     for rel, text in _docs():
         for i, line in enumerate(text.splitlines(), 1):
-            if not re.search(r'\b(pip|pipx)\s+install\s+claudectl\b', line):
-                continue
-            if re.search(r'not (on PyPI|published)|both fail|404|will not', line):
-                continue                     # the caveat itself
-            bad.append('%s:%d %s' % (rel, i, line.strip()[:70]))
-    assert not bad, 'documents an install that 404s: %s' % bad
+            if re.search(r'not (on PyPI|published)|both fail with a 404', line, re.I):
+                stale.append('%s:%d %s' % (rel, i, line.strip()[:70]))
+    assert not stale, 'claims claudectl is unavailable on PyPI: %s' % stale
 
 
 def test_the_working_install_is_the_one_shown_first():

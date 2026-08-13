@@ -38,8 +38,13 @@ prefer, they do the same things.
 
 ## Quickstart
 
-> **Note** — claudectl is not on PyPI yet, so `pip install claudectl` will not
-> work. Clone and run; there is nothing to build and no dependencies to install.
+```bash
+pipx install claudectl     # or: pip install claudectl
+claudectl
+```
+
+There is nothing to build and no dependencies to install. To run it from a
+checkout instead:
 
 ```bash
 git clone https://github.com/babarmuhammad/claudectl.git
@@ -412,13 +417,16 @@ double-click `Open Repo cmd.bat` instead of using a terminal.
 
 #### Installing it as a command
 
-**claudectl is not published on PyPI yet** — `pip install claudectl` and
-`pipx install claudectl` both fail with a 404. To get a `claudectl` command on
-your PATH today, install this checkout:
+```
+pipx install claudectl     # or: pip install claudectl
+claudectl
+```
+
+To put the command on your PATH from a checkout instead — for development, or
+to run an unreleased change:
 
 ```
 pip install -e .        # or: pipx install .
-claudectl
 ```
 
 That gives you `claudectl`, `claudectl --gui`, `claudectl review`,
