@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img alt="claudectl dashboard" src="docs/img/gui-dashboard.png" width="900">
+  <img alt="claudectl dashboard" src="https://raw.githubusercontent.com/babarmuhammad/claudectl/main/docs/img/gui-dashboard.png" width="900">
 </p>
 
 ---
@@ -75,18 +75,18 @@ without leaving the session:
 
 <table>
 <tr>
-<td width="50%"><img alt="Session browser" src="docs/img/gui-sessions.png"><br>
+<td width="50%"><img alt="Session browser" src="https://raw.githubusercontent.com/babarmuhammad/claudectl/main/docs/img/gui-sessions.png"><br>
 <sub><b>Every session, every project.</b> Search, tag, fork, resume, archive,
 export — across multiple Claude accounts at once.</sub></td>
-<td width="50%"><img alt="Project memory" src="docs/img/gui-memory.png"><br>
+<td width="50%"><img alt="Project memory" src="https://raw.githubusercontent.com/babarmuhammad/claudectl/main/docs/img/gui-memory.png"><br>
 <sub><b>Memory Claude built about your code.</b> Entities, relations and
 lessons, with the token cost of every block shown before you spend it.</sub></td>
 </tr>
 <tr>
-<td><img alt="Usage" src="docs/img/gui-usage.png"><br>
+<td><img alt="Usage" src="https://raw.githubusercontent.com/babarmuhammad/claudectl/main/docs/img/gui-usage.png"><br>
 <sub><b>Where the tokens went.</b> Per day, per project, per account, per
 model — read from your own transcripts, not an API.</sub></td>
-<td><img alt="Claude Code's own state" src="docs/img/gui-claude-code.png"><br>
+<td><img alt="Claude Code's own state" src="https://raw.githubusercontent.com/babarmuhammad/claudectl/main/docs/img/gui-claude-code.png"><br>
 <sub><b>Claude Code itself, made visible.</b> Which skills and plugins you
 actually use, what is on disk, and a typed editor for every account's
 settings.</sub></td>
@@ -96,12 +96,12 @@ settings.</sub></td>
 The terminal UI is the same tool, keyboard-first:
 
 <p align="center">
-  <img alt="claudectl TUI — project picker" src="docs/img/tui-main.png" width="49%">
-  <img alt="claudectl TUI — sessions" src="docs/img/tui-sessions.png" width="49%">
+  <img alt="claudectl TUI — project picker" src="https://raw.githubusercontent.com/babarmuhammad/claudectl/main/docs/img/tui-main.png" width="49%">
+  <img alt="claudectl TUI — sessions" src="https://raw.githubusercontent.com/babarmuhammad/claudectl/main/docs/img/tui-sessions.png" width="49%">
 </p>
 
 <p align="center">
-  <img alt="Architecture graph" src="docs/graph-real.gif" width="820">
+  <img alt="Architecture graph" src="https://raw.githubusercontent.com/babarmuhammad/claudectl/main/docs/graph-real.gif" width="820">
   <br><sub><b>The architecture graph</b> — every module and its dependencies,
   expandable down to single files (Python · C/C++ · C# · JS/TS).</sub>
 </p>
@@ -109,8 +109,8 @@ The terminal UI is the same tool, keyboard-first:
 <details>
 <summary><b>29 palettes, 7 skins, 4 themed worlds</b> — click to see two of them</summary>
 <br>
-<img alt="Graph world" src="docs/img/gui-skin-graph.png" width="49%">
-<img alt="CRT skin" src="docs/img/gui-skin-crt.png" width="49%">
+<img alt="Graph world" src="https://raw.githubusercontent.com/babarmuhammad/claudectl/main/docs/img/gui-skin-graph.png" width="49%">
+<img alt="CRT skin" src="https://raw.githubusercontent.com/babarmuhammad/claudectl/main/docs/img/gui-skin-crt.png" width="49%">
 <br><sub>A skin changes the shape of the app, not just its colours — corner
 treatment, type scale, density, chassis and background scene.</sub>
 </details>
