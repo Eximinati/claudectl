@@ -23,6 +23,7 @@ reason.
 
 import json
 import os
+import pytest
 import subprocess
 import sys
 
@@ -49,6 +50,9 @@ def _stdout_utf8(r):
     return r.stdout.decode('utf-8')          # raises if the child mangled it
 
 
+@pytest.mark.skipif(os.name != 'nt',
+                    reason='the hazard is cp1252 being picked for a pipe; a '
+                           'POSIX default of UTF-8 simply does not raise')
 def test_a_bare_non_ascii_print_really_does_die_on_a_pipe():
     """The hazard, demonstrated. Without this the policy test below is a rule
     with no evidence behind it."""

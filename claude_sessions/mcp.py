@@ -24,7 +24,11 @@ def get_mcp_status():
                 capture_output=True, text=True,
                 encoding='utf-8', errors='ignore', timeout=10,
                 stdin=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                # getattr, not a bare reference: the constant does not exist on
+                # POSIX, and the bare form raised AttributeError inside the
+                # try/except that returns [] — so every MCP server silently
+                # vanished from the list on macOS and Linux.
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
             )
         lines = (r.stdout + r.stderr).splitlines()
         servers = []

@@ -101,6 +101,16 @@ def test_a_saved_style_round_trips(tmp_path):
 
 # ── checkpoints ───────────────────────────────────────────────
 
+def _px(name):
+    """An absolute path shaped like the host platform's own.
+
+    These fixtures used a literal `D:\\x\\...`, but checkpoints derives the
+    display name with os.path.basename, and '\\' is an ordinary filename
+    character on POSIX — so the whole string came back as the basename there.
+    """
+    return os.path.join('D:\\x' if os.name == 'nt' else '/x', name)
+
+
 def _ckpt(tmp_path, paths, versions=2):
     """A file-history store built the way the real one is named."""
     cfg = tmp_path / 'cfg'
@@ -120,7 +130,7 @@ def _ckpt(tmp_path, paths, versions=2):
 
 
 def test_snapshots_are_matched_to_the_files_the_session_edited(tmp_path):
-    cfg, jsonl = _ckpt(tmp_path, [r'D:\x\a.py', r'D:\x\b.py'])
+    cfg, jsonl = _ckpt(tmp_path, [_px('a.py'), _px('b.py')])
     h = checkpoints.history('sid1', jsonl, cfg)
     assert h['recognised'] is True and h['orphans'] == 0
     assert sorted(f['name'] for f in h['files']) == ['a.py', 'b.py']
@@ -131,7 +141,7 @@ def test_an_unrecognised_store_says_so_rather_than_guessing(tmp_path):
     """The load-bearing safety property. The naming scheme is undocumented; if
     it moves, the honest answer is "I can't read this", not an arbitrary
     pairing of snapshots to filenames."""
-    cfg, jsonl = _ckpt(tmp_path, [r'D:\x\a.py'])
+    cfg, jsonl = _ckpt(tmp_path, [_px('a.py')])
     sdir = tmp_path / 'cfg' / 'file-history' / 'sid1'
     for f in sdir.iterdir():                     # rename to a scheme we can't map
         f.rename(sdir / ('ffffffffffffffff@v' + f.name.rsplit('v', 1)[1]))
@@ -141,12 +151,12 @@ def test_an_unrecognised_store_says_so_rather_than_guessing(tmp_path):
 
 
 def test_unmatched_snapshots_are_counted_not_invented(tmp_path):
-    cfg, jsonl = _ckpt(tmp_path, [r'D:\x\a.py', r'D:\x\b.py'])
+    cfg, jsonl = _ckpt(tmp_path, [_px('a.py'), _px('b.py')])
     # a transcript that only remembers one of the two files
     with open(jsonl, 'w', encoding='utf-8') as fh:
         fh.write(json.dumps({'message': {'content': [
             {'type': 'tool_use', 'name': 'Edit',
-             'input': {'file_path': r'D:\x\a.py'}}]}}) + '\n')
+             'input': {'file_path': _px('a.py')}}]}}) + '\n')
     h = checkpoints.history('sid1', jsonl, cfg)
     assert h['recognised'] is True
     assert len(h['files']) == 1
@@ -159,8 +169,8 @@ def test_a_session_with_no_store_is_empty_not_an_error(tmp_path):
 
 
 def test_versions_diff_against_each_other(tmp_path):
-    cfg, jsonl = _ckpt(tmp_path, [r'D:\x\a.py'])
-    d = checkpoints.diff_versions('sid1', r'D:\x\a.py', 1, 2, cfg)
+    cfg, jsonl = _ckpt(tmp_path, [_px('a.py')])
+    d = checkpoints.diff_versions('sid1', _px('a.py'), 1, 2, cfg)
     assert '-v1' in d and '+v2' in d
 
 
@@ -177,12 +187,12 @@ def test_nothing_here_writes(tmp_path):
 def test_only_edit_tools_contribute_paths(tmp_path):
     """A Read of a file leaves no snapshot; counting it would produce phantom
     rows that never resolve and inflate the orphan count."""
-    cfg, jsonl = _ckpt(tmp_path, [r'D:\x\a.py'])
+    cfg, jsonl = _ckpt(tmp_path, [_px('a.py')])
     with open(jsonl, 'a', encoding='utf-8') as fh:
         fh.write(json.dumps({'message': {'content': [
             {'type': 'tool_use', 'name': 'Read',
-             'input': {'file_path': r'D:\x\never-edited.py'}}]}}) + '\n')
-    assert checkpoints._edited_paths(jsonl) == [r'D:\x\a.py']
+             'input': {'file_path': _px('never-edited.py')}}]}}) + '\n')
+    assert checkpoints._edited_paths(jsonl) == [_px('a.py')]
 
 
 # ── statusline preview / OTEL ─────────────────────────────────

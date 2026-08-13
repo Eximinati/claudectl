@@ -215,3 +215,48 @@ def test_kill_tree_never_signals_our_own_process_group(monkeypatch):
                         lambda *a: killed.append('GROUP'), raising=False)
     proc.kill_tree(P())
     assert killed == ['direct'], 'killpg was used on a non-leader child'
+
+
+def test_no_module_references_a_windows_only_constant_outside_a_windows_branch():
+    """`subprocess.CREATE_NO_WINDOW` does not exist on POSIX, so a bare
+    reference raises AttributeError at the CALL, not at import.
+
+    mcp.get_mcp_status did exactly that inside a `try/except Exception: return
+    []`, so every MCP server silently vanished from the list on macOS and Linux
+    — an empty list, no error, nothing to notice for a whole release.
+
+    Two forms are safe and both are in use: `getattr(subprocess, NAME, 0)`, and
+    a plain reference inside an `if os.name == 'nt'` / `if WINDOWS` block (the
+    editor spawn in config.py). Only an unguarded bare reference is a fault.
+    """
+    win_only = {'CREATE_NO_WINDOW', 'CREATE_NEW_CONSOLE', 'CREATE_NEW_PROCESS_GROUP',
+                'STARTUPINFO', 'STARTF_USESHOWWINDOW', 'DETACHED_PROCESS'}
+
+    def guarded_lines(tree):
+        """Line numbers inside a branch that only runs on Windows."""
+        out = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.If):
+                continue
+            t = ast.dump(node.test)
+            if "'nt'" in t or "id='WINDOWS'" in t or "attr='WINDOWS'" in t:
+                for stmt in node.body:
+                    for sub in ast.walk(stmt):
+                        if hasattr(sub, 'lineno'):
+                            out.add(sub.lineno)
+        return out
+
+    bad = []
+    for name in sorted(os.listdir(SRC)):
+        if not name.endswith('.py'):
+            continue
+        tree = ast.parse(io.open(os.path.join(SRC, name), encoding='utf-8').read())
+        safe = guarded_lines(tree)
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Attribute) and node.attr in win_only
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == 'subprocess'
+                    and node.lineno not in safe):
+                bad.append('%s:%d subprocess.%s' % (name, node.lineno, node.attr))
+    assert not bad, ('use getattr(subprocess, NAME, 0) or an os.name check — '
+                     'these raise on POSIX: %s' % bad)

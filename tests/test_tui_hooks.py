@@ -1,5 +1,6 @@
 import json
 import os
+import pytest
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -309,6 +310,10 @@ def test_installed_state_survives_a_real_install(monkeypatch, tmp_path):
         assert tpl[key]['installed'], f'{key} still offers Install after installing'
 
 
+@pytest.mark.skipif(os.name != 'nt',
+                    reason="the two spellings are python.exe vs pythonw.exe; "
+                           "there is no such pair on POSIX, so the fixture "
+                           "cannot differ")
 def test_a_hook_is_recognised_whichever_python_installed_it():
     """`_py_hook` bakes in `sys.executable`: `pythonw.exe` from the GUI,
     `python.exe` from a console. The user's real settings.json ended up with

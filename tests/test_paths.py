@@ -1,5 +1,6 @@
 import json
 import os
+import pytest
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,6 +34,9 @@ def test_find_actual_path_missing_drive():
         find_actual_path('Q--whatever'), str)
 
 
+@pytest.mark.skipif(os.name != 'nt',
+                    reason='simulates a Windows drive root; find_actual_path '
+                           'takes the POSIX / branch there instead')
 def test_find_actual_path_resolves(tmp_path, monkeypatch):
     # Build a fake structure under an existing drive root is not possible
     # in a sandboxed test; instead test the matcher logic via a real temp dir
@@ -44,6 +48,7 @@ def test_find_actual_path_resolves(tmp_path, monkeypatch):
 
     real_exists = os.path.exists
     real_listdir = os.listdir
+    real_isdir = os.path.isdir
 
     def fake_exists(p):
         if p == 'Z:\\':
@@ -58,9 +63,13 @@ def test_find_actual_path_resolves(tmp_path, monkeypatch):
         return real_listdir(p)
 
     def fake_isdir(p):
+        # os.fspath + real_isdir, not Path.is_dir(): 3.14 reimplemented
+        # pathlib.Path.is_dir() on top of os.path.isdir(self), so this very
+        # fake was re-entered with a Path and `.startswith` raised.
+        p = os.fspath(p)
         if p.startswith('Z:\\'):
-            return (tmp_path / p[3:]).is_dir()
-        return os.path.isdir(p)
+            return real_isdir(os.path.join(str(tmp_path), p[3:]))
+        return real_isdir(p)
 
     monkeypatch.setattr(paths_mod.os.path, 'exists', fake_exists)
     monkeypatch.setattr(paths_mod.os, 'listdir', fake_listdir)
@@ -71,18 +80,25 @@ def test_find_actual_path_resolves(tmp_path, monkeypatch):
     assert result.endswith('sub+dir')
 
 
+@pytest.mark.skipif(os.name != 'nt',
+                    reason='simulates a Windows drive root; find_actual_path '
+                           'takes the POSIX / branch there instead')
 def test_find_actual_path_case_insensitive(tmp_path, monkeypatch):
     (tmp_path / 'MyApp').mkdir()
 
     import claude_sessions.paths as paths_mod
     real_exists, real_listdir = os.path.exists, os.listdir
+    real_isdir = os.path.isdir
 
     monkeypatch.setattr(paths_mod.os.path, 'exists',
                         lambda p: True if p == 'Z:\\' else real_exists(p))
     monkeypatch.setattr(paths_mod.os, 'listdir',
                         lambda p: real_listdir(str(tmp_path)) if p == 'Z:\\' else real_listdir(p))
-    monkeypatch.setattr(paths_mod.os.path, 'isdir',
-                        lambda p: (tmp_path / p[3:]).is_dir() if p.startswith('Z:\\') else os.path.isdir(p))
+    monkeypatch.setattr(
+        paths_mod.os.path, 'isdir',
+        lambda p: (real_isdir(os.path.join(str(tmp_path), os.fspath(p)[3:]))
+                   if os.fspath(p).startswith('Z:\\')
+                   else real_isdir(os.fspath(p))))
 
     assert find_actual_path('Z--myapp') is not None
 

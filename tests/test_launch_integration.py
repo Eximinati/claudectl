@@ -112,8 +112,12 @@ def test_direct_launch_terminal(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     call = captured_launch(monkeypatch, sb, 'terminal', {})
     # argv list, never a shell string: nothing in the environment or the cwd
-    # can be reinterpreted by cmd on the way through.
-    assert call[0][0] == ['cmd', '/k']
+    # can be reinterpreted by cmd on the way through. The two spawn tables in
+    # proc.py are both real behaviour, so assert the host's rather than skip.
+    if os.name == 'nt':
+        assert call[0][0] == ['cmd', '/k']
+    else:
+        assert call[0][0][0].endswith(('sh', 'bash', 'zsh')), call[0][0]
     assert call[1].get('shell') is None
 
 

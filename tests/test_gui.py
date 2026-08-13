@@ -4,6 +4,7 @@ ephemeral port, plus launch parity with the TUI's build_launch_command."""
 import http.client
 import json
 import os
+import pytest
 import subprocess
 import sys
 import threading
@@ -121,6 +122,10 @@ def test_http_guard_rejects_missing_header(monkeypatch, tmp_path):
         srv.shutdown()
 
 
+@pytest.mark.skipif(os.name != 'nt',
+                    reason='asserts the Windows new-console spawn shape '
+                           '(cmd /c title ... &&); POSIX uses a different '
+                           'terminal table')
 def test_http_launch_spawns_new_console(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     actual, enc, sid = _seed(sb, monkeypatch)
@@ -150,6 +155,10 @@ def test_http_launch_spawns_new_console(monkeypatch, tmp_path):
     assert kw['creationflags'] == subprocess.CREATE_NEW_CONSOLE
 
 
+@pytest.mark.skipif(os.name != 'nt',
+                    reason='asserts the Windows new-console spawn shape '
+                           '(cmd /c title ... &&); POSIX uses a different '
+                           'terminal table')
 def test_launch_parity_with_tui_builder(monkeypatch, tmp_path):
     """The argv the GUI hands to the new console must be exactly what the
     TUI's build_launch_command produces for the same inputs."""

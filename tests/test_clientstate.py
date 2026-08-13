@@ -34,6 +34,9 @@ def _client_json(d, payload):
     (d / '.claude.json').write_text(json.dumps(payload), encoding='utf-8')
 
 
+@pytest.mark.skipif(os.name != 'nt',
+                    reason='the backslash/forward-slash mismatch this guards '
+                           'only exists on Windows; POSIX paths already match')
 def test_a_project_is_found_by_its_real_path(acct):
     """The keys use forward slashes even on Windows, so a plain os.path
     comparison misses every project."""
