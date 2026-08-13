@@ -63,6 +63,18 @@ jobs:
       # NameErrors and two loop-variable closures.
       - run: python -m ruff check .
 
+  docs:
+    # Builds the site on every push/PR so a broken docs change fails here rather
+    # than in the deploy workflow. pages.yml stays purely about deploying.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-docs.txt
+      - run: mkdocs build --strict
+
   package:
     runs-on: windows-latest
     steps:

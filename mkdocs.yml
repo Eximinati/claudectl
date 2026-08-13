@@ -1,0 +1,79 @@
+site_name: claudectl
+site_description: >-
+  The workspace layer for Claude Code — persistent project memory, an interactive
+  architecture graph, MCP server management, and per-project launch control, in a fast
+  terminal UI or a native desktop GUI. Zero runtime dependencies.
+site_url: https://babarmuhammad.github.io/claudectl/
+site_author: Babar Muhammad Anas
+repo_url: https://github.com/babarmuhammad/claudectl
+repo_name: babarmuhammad/claudectl
+edit_uri: edit/main/docs/
+copyright: MIT licensed — Copyright &copy; 2026 Babar Muhammad Anas
+
+docs_dir: docs
+
+theme:
+  name: material
+  custom_dir: overrides
+  # docs/img holds only tool-generated screenshots (test_demo_fixtures guards
+  # that); brand assets live in docs/assets.
+  favicon: assets/favicon.ico
+  # No Google Fonts fetch — the GUI itself ships zero CDN requests, and the site
+  # holds the same line.
+  font: false
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    scheme: slate
+    primary: black
+    accent: cyan
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - navigation.sections
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+    - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets:
+      # README.md and CHANGELOG.md live at the repo root, one level above docs_dir.
+      # check_paths makes a moved/renamed source a build failure instead of a
+      # silently empty page.
+      base_path: ['.']
+      check_paths: true
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Install: install.md
+  - Usage: usage.md
+  - Features: features.md
+  - Token economy: token-economy.md
+  - Reference: reference.md
+  - API reference: api.md
+  - Troubleshooting: troubleshooting.md
+  - FAQ: faq.md
+  - Compare: compare.md
+  - Changelog: changelog.md
+  - Credits: credits.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/babarmuhammad/claudectl
+      name: claudectl on GitHub

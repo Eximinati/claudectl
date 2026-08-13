@@ -13,14 +13,19 @@ authors = [{ name = "Babar Muhammad Anas" }]
 keywords = ["claude", "claude-code", "tui", "session-manager", "windows"]
 classifiers = [
     "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Topic :: Software Development",
 ]
 
 [project.urls]
 Homepage = "https://github.com/babarmuhammad/claudectl"
+Documentation = "https://babarmuhammad.github.io/claudectl/"
 Issues = "https://github.com/babarmuhammad/claudectl/issues"
+Changelog = "https://github.com/babarmuhammad/claudectl/blob/main/CHANGELOG.md"
 
 [project.scripts]
 # cli:run, not main:run — main's import chain pulls urllib/ssl/http.client via

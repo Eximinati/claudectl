@@ -1,0 +1,56 @@
+name: docs
+
+# Requires a one-time repo setting: Settings -> Pages -> Source = GitHub Actions.
+# Without it the deploy job fails no matter what this file says.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'overrides/**'
+      - 'mkdocs.yml'
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'requirements-docs.txt'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-docs.txt
+      # The API reference is generated from the live route tables; a stale one
+      # would be published as if it were current.
+      - run: python tools/gen_api_docs.py --check
+      # --strict turns a broken link or a nav entry pointing at a missing file
+      # into a failure instead of a quietly wrong site.
+      - run: mkdocs build --strict
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

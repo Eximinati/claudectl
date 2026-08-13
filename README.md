@@ -152,6 +152,7 @@ Without claudectl, a big project either starves the agent (no context) or floods
 ---
 
 ## Features
+<!-- --8<-- [start:features] -->
 
 ### Session management
 - **Session browser** — every Claude Code project and session, sorted by recency
@@ -171,7 +172,7 @@ Without claudectl, a big project either starves the agent (no context) or floods
 - **Tool documentation** — analyze any server's tools and write the docs into the global `~/.claude/CLAUDE.md`
 
 ### Agents (subagents)
-- **Agent library** — a category-organized store at `~/.claude/claudectl-agents/<category>/` (not auto-loaded by Claude, so sessions stay lean). Roll your own or bulk-install the [awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents) catalog (154 agents across 10 categories) — see [Installing the agent library](#installing-the-agent-library).
+- **Agent library** — a category-organized store at `~/.claude/claudectl-agents/<category>/` (not auto-loaded by Claude, so sessions stay lean). Roll your own or bulk-install the [awesome-claude-code-subagents](https://github.com/VoltAgent/awesome-claude-code-subagents) catalog (154 agents across 10 categories) — see [Installing the agent library](https://babarmuhammad.github.io/claudectl/install/#installing-the-agent-library).
 - **Per-project selection** (`g` in the sessions menu) — pick agents from a category checklist (optional, default none). The chosen agents are **copied into `<project>/.claude/agents/`** where Claude auto-discovers them, so they apply to every launch of that project and the selection auto-restores next time. claudectl only manages the files it placed (tracked in `.claudectl-managed.json`) — your own project agents are never touched.
 - **Scaffold** — create an agent into a chosen or new category: pick tools (multi-select) and model, edit the body
 - **AI-generated** — Claude analyzes the project and authors a focused subagent (role, when-to-use, tool subset, system prompt); you review before it's written
@@ -385,7 +386,9 @@ Everything above, as a native desktop app — full feature parity with the TUI, 
 
 ---
 
+<!-- --8<-- [end:features] -->
 ## Install
+<!-- --8<-- [start:install] -->
 
 ### Requirements
 
@@ -544,7 +547,9 @@ These land in the library (not `~/.claude/agents/`), so they don't bloat every C
 
 ---
 
+<!-- --8<-- [end:install] -->
 ## Usage
+<!-- --8<-- [start:usage] -->
 
 ### Main screen
 
@@ -561,7 +566,7 @@ On launch, claudectl shows all projects Claude Code has ever opened, sorted by m
 
 **⚙ Usage stats** — per-project table of sessions, messages, tokens (in / out / cache) and estimated API-equivalent cost, parsed from local transcripts. ENTER drills into per-session rows. Costs are estimates at published API rates — useful as a value/consumption gauge if you're on a subscription plan. First scan shows progress and can be stopped with ESC (partial results); later opens are instant thanks to a persistent cache.
 
-**⚙ Global CLAUDE.md / MCP Analysis** — lists all connected MCP servers; select one to run Claude with a prompt that calls the MCP's `tools/list` endpoint and formats the result as markdown, written into `~/.claude/CLAUDE.md` inside a per-server sentinel block (cleanly re-updatable). You can also open the global CLAUDE.md directly in your editor from this menu. See [Global CLAUDE.md](#global-claudemd).
+**⚙ Global CLAUDE.md / MCP Analysis** — lists all connected MCP servers; select one to run Claude with a prompt that calls the MCP's `tools/list` endpoint and formats the result as markdown, written into `~/.claude/CLAUDE.md` inside a per-server sentinel block (cleanly re-updatable). You can also open the global CLAUDE.md directly in your editor from this menu. See [Global CLAUDE.md](https://babarmuhammad.github.io/claudectl/reference/#global-claudemd).
 
 ### Key bindings
 
@@ -660,7 +665,9 @@ installed status line and the background memory worker use.
 
 ---
 
+<!-- --8<-- [end:usage] -->
 ## Reference
+<!-- --8<-- [start:reference] -->
 
 ### Per-project files
 
@@ -843,26 +850,32 @@ amount of splitting on `--` can turn back into a drive letter.
 
 ---
 
+<!-- --8<-- [end:reference] -->
 ## Troubleshooting
+<!-- --8<-- [start:troubleshooting] -->
 
 | Symptom | Fix |
 |---------|-----|
 | "claude.exe not found" screen on startup | Install [Claude Code](https://docs.anthropic.com/claude-code), or set the path in **⚙ Settings** |
 | Generated files don't open in an editor | Set your editor path in **⚙ Settings** (auto-detects Notepad++, VS Code, falls back to Notepad) |
 | Window closes instantly with an error | Check `%TEMP%\claudectl_crash.log` — the crash handler writes the traceback there |
-| Projects missing from the list | The project folder was moved/deleted, or the path can't be decoded — see [Session encoding](#session-encoding) |
+| Projects missing from the list | The project folder was moved/deleted, or the path can't be decoded — see [Session encoding](https://babarmuhammad.github.io/claudectl/reference/#session-encoding) |
 | Wrong account / want a second account | Set **Config dir** in **⚙ Settings** to that account's `CLAUDE_CONFIG_DIR` (e.g. `~/.claude-work`). Drives both session browsing and the env handed to `claude` at launch. Blank = default `~/.claude`. Restart claudectl to apply. One config dir active at a time. |
 | Settings location | `~/.claude/claudectl.json` — safe to edit by hand or delete to reset (always read from `~/.claude`, independent of Config dir) |
 | Usage stats look stale | Delete `~/.claude/claudectl-stats-cache.json` — it rebuilds on the next scan |
 
+<!-- --8<-- [end:troubleshooting] -->
 ## Token-saving & workflow features
+<!-- --8<-- [start:tokensaving] -->
 
 - **Economy model routing** — claudectl's own internal Claude calls (memory extraction, lessons, CLAUDE.md / agent / hook / skill generation) default to **Haiku** to cut cost, while your actual coding sessions keep whatever model you choose. Change it in **⚙ Settings → Economy model** (`extract_model`).
 - **Skills manager** — browse, install, scaffold, and AI-generate Claude Code **skills** (`.claude/skills/<name>/SKILL.md`) that load on demand instead of bloating `CLAUDE.md`. Ships with cited starter templates (see Credits). TUI: **⚙ Skills**; GUI: the **Skills** tab.
 - **Code review** — `claudectl review [--staged] [--branch <base>]` reviews your working diff against your `CLAUDE.md` rules + learned memory lessons and reports **confidence-scored** findings (only ≥80% shown). Also on the project **Review** tab (GUI) and the `⇧R` key in the session menu.
 - **Recent-work memory** — opt-in per project (Memory tab / `⇧W` in the hub). Records a token-free one-line summary + files touched at the end of each session and injects a compact digest on the next `SessionStart`, so Claude knows what the last few sessions did.
 
+<!-- --8<-- [end:tokensaving] -->
 ## Credits & Inspiration
+<!-- --8<-- [start:credits] -->
 
 claudectl is built on ideas from the wider Claude Code ecosystem. With thanks:
 
@@ -880,3 +893,4 @@ Bundled starter skills under `claude_sessions/skills_templates/` are original wr
 [obra/superpowers](https://github.com/obra/superpowers),
 [khalilbenaz/claude-skills-collection](https://github.com/khalilbenaz/claude-skills-collection).
 They follow [Conventional Commits](https://www.conventionalcommits.org/) and [Keep a Changelog](https://keepachangelog.com/) where relevant.
+<!-- --8<-- [end:credits] -->

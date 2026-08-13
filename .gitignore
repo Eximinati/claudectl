@@ -41,3 +41,5 @@ claude-session-Fable-Claude-Script.md
 # we have no right to redistribute, and tools/shot_gui.py writes its captures
 # here by default.
 references/
+# mkdocs build output
+/site/

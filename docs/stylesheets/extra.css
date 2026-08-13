@@ -1,0 +1,54 @@
+/* Brand palette lifted from claude_sessions/web/app.css so the site reads as the
+   same product as the app. Hex values only — the app's runtime theming does not
+   apply here. */
+:root {
+  --ctl-bg: #0d1117;
+  --ctl-panel: #161e2e;
+  --ctl-line: #232f47;
+  --ctl-txt: #dbe4f3;
+  --ctl-dim: #7d8aa5;
+  --ctl-cyan: #7dcfff;
+  --ctl-violet: #8a5cf6;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: var(--ctl-bg);
+  --md-accent-fg-color: var(--ctl-cyan);
+  --md-default-bg-color: var(--ctl-bg);
+  --md-typeset-a-color: var(--ctl-cyan);
+  --md-code-bg-color: #0a0e16;
+  --md-footer-bg-color: #0a0e16;
+}
+
+.md-header,
+.md-tabs {
+  border-bottom: 1px solid var(--ctl-line);
+}
+
+.md-typeset h1 {
+  background: linear-gradient(135deg, var(--ctl-cyan), var(--ctl-violet));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-weight: 700;
+}
+
+.md-typeset img {
+  border: 1px solid var(--ctl-line);
+  border-radius: 8px;
+}
+
+.md-typeset table:not([class]) th {
+  background: var(--ctl-panel);
+}
+
+/* Two-up screenshot pairs on the landing page. */
+.md-typeset .grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: 1rem;
+}
+
+.md-typeset .grid img {
+  width: 100%;
+}
