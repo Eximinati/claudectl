@@ -34,6 +34,23 @@ _AMBIENT = ('CLAUDE_CONFIG_DIR',)
 for _var in _AMBIENT:
     os.environ.pop(_var, None)
 
+#: claudectl's own real files, redirected into a throwaway directory for the
+#: WHOLE session rather than per test. A monkeypatch is undone at teardown, and
+#: several of these are written by background threads (the failover proxy, the
+#: memory worker) that outlive the test that started them — which is exactly how
+#: the real `claudectl.json` kept being rewritten after the per-test guard below
+#: had already been lifted. Pinning the module attributes at import means a late
+#: thread has nowhere real to write.
+_TMP_STATE = tempfile.mkdtemp(prefix='claudectl-tests-')
+
+from claude_sessions import config as _config      # noqa: E402
+from claude_sessions import hooks as _hooks        # noqa: E402
+from claude_sessions import stats as _stats        # noqa: E402
+
+_config.settings_file = os.path.join(_TMP_STATE, 'claudectl.json')
+_hooks.settings_path = os.path.join(_TMP_STATE, 'settings.json')
+_stats.cache_file = os.path.join(_TMP_STATE, 'stats-cache.json')
+
 
 @pytest.fixture(autouse=True)
 def _no_ambient_claude_env(monkeypatch):
