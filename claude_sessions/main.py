@@ -247,6 +247,7 @@ def run():
         ('⚙  Agents', '__agents__'),
         ('⚙  Skills', '__skills__'),
         ('⚙  Hooks', '__hooks__'),
+        ('⚙  Updates (Claude Code + plugins)', '__updates__'),
         ('⚙  Global CLAUDE.md  /  MCP Analysis', '__global_claude_md__'),
         ('⚙  Accounts (switch / run 2 at once)', '__accounts__'),
         ('⚙  Settings', '__settings__'),
@@ -323,6 +324,11 @@ def run():
         elif sel == '__hooks__':
             from .hooks import hooks_menu
             hooks_menu()
+            continue
+
+        elif sel == '__updates__':
+            from .versions import updates_menu
+            updates_menu()
             continue
 
         elif sel == '__global_claude_md__':

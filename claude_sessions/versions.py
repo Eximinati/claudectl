@@ -1,0 +1,389 @@
+"""What version of Claude Code is installed, what has been released, and
+updating it — or a plugin — to the latest or to a pinned version.
+
+Four things worth knowing before changing this:
+
+- **There is no official version-list endpoint.** The docs advertise
+  `downloads.claude.ai/claude-code-releases/{latest,stable}/manifest.json`;
+  both answer 404 today. The npm registry metadata for
+  `@anthropic-ai/claude-code` is the only machine-readable list, and it carries
+  the same `stable`/`latest` dist-tags Claude Code's own updater follows — so it
+  is the source here, and a network failure is reported as a fact rather than
+  guessed around.
+
+- **A specific version can be pinned for Claude Code, not for a plugin.**
+  `claude install <stable|latest|X.Y.Z>` takes a target; `claude plugin update`
+  takes none, because the marketplace entry decides what "latest" is. The UI
+  says so instead of offering a box that cannot work.
+
+- **`claude plugin list --json` returns a bare ARRAY on 2.1.241**, not the
+  `{"plugins":[…]}` object the docs describe — the same docs-versus-disk split
+  already recorded for agent teams. Both shapes are accepted, disk first.
+
+- **Reads never touch the network unless asked.** `released()` serves an hourly
+  disk cache, so opening the screen costs nothing; `refresh=True` is what the
+  user's explicit "check now" does.
+"""
+
+import json
+import os
+import re
+import time
+import urllib.error
+import urllib.request
+
+from . import config as _c
+from . import jsonstore
+from . import plugins
+from . import proc
+
+__all__ = ['installed_version', 'install_mode', 'local_versions', 'released',
+           'status', 'update_claude', 'plugin_rows', 'update_plugin',
+           'update_marketplaces', 'updates_menu']
+
+#: npm metadata for the published package. The `abbreviated` accept header keeps
+#: this ~100KB instead of ~15MB: the full document carries every version's
+#: complete manifest, and all we read is the version keys and the dist-tags.
+NPM_URL = 'https://registry.npmjs.org/@anthropic-ai/claude-code'
+NPM_ACCEPT = 'application/vnd.npm.install-v1+json'
+CACHE_TTL = 3600
+_TIMEOUT = 20
+
+
+def _cache_path():
+    return os.path.join(_c.config_dir, 'claudectl-versions.json')
+
+
+def _ver_key(v):
+    return tuple(int(p) for p in re.findall(r'\d+', v)[:4] or [0])
+
+
+def installed_version():
+    """'2.1.241', or '' when claude.exe is missing or does not answer."""
+    exe = _c.get_claude_exe()
+    if not exe:
+        return ''
+    r = proc.run([exe, '--version'], timeout=60)
+    m = re.search(r'\d+\.\d+\.\d+[\w.+-]*', (getattr(r, 'stdout', '') or ''))
+    return m.group(0) if m else ''
+
+
+def install_mode():
+    """'native' | 'npm' | 'other' | '' — which installer owns the binary.
+
+    It decides what an update even means: the native build updates itself and
+    accepts a version target, while an npm install has to be updated through
+    npm and ignores `claude install`.
+    """
+    exe = _c.get_claude_exe()
+    if not exe:
+        return ''
+    low = os.path.normcase(exe)
+    if os.path.isdir(os.path.expanduser('~/.local/share/claude/versions')) \
+            and os.path.normcase(os.path.expanduser('~/.local/bin')) in low:
+        return 'native'
+    if 'npm' in low or 'node_modules' in low:
+        return 'npm'
+    return 'other'
+
+
+def local_versions():
+    """Native builds already on disk, newest first — what a rollback can reach
+    without a download."""
+    d = os.path.expanduser('~/.local/share/claude/versions')
+    try:
+        vs = [e for e in os.listdir(d) if re.match(r'^\d+\.\d+\.\d+', e)]
+    except OSError:
+        return []
+    return sorted(vs, key=_ver_key, reverse=True)
+
+
+def released(refresh=False):
+    """{'latest','stable','versions'(newest first),'fetched','error'}.
+
+    Served from an hourly disk cache; `refresh=True` forces the fetch. A failed
+    fetch keeps the cached list and reports the error next to it, because a
+    stale answer with a note beats an empty screen.
+    """
+    cached = jsonstore.load(_cache_path(), {})
+    fresh = (isinstance(cached, dict) and cached.get('versions')
+             and time.time() - float(cached.get('fetched') or 0) < CACHE_TTL)
+    if fresh and not refresh:
+        return dict(cached, error='')
+    try:
+        req = urllib.request.Request(NPM_URL, headers={'Accept': NPM_ACCEPT})
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+            doc = json.loads(resp.read().decode('utf-8', 'ignore'))
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        keep = dict(cached) if isinstance(cached, dict) else {}
+        keep.setdefault('versions', [])
+        return dict(keep, error=str(e)[:200])
+    tags = doc.get('dist-tags') or {}
+    vs = sorted((doc.get('versions') or {}), key=_ver_key, reverse=True)
+    out = {'latest': str(tags.get('latest') or ''),
+           'stable': str(tags.get('stable') or ''),
+           'versions': vs[:60], 'fetched': time.time()}
+    jsonstore.save(_cache_path(), out)
+    return dict(out, error='')
+
+
+def _channel():
+    from . import hooks
+    return str((hooks._load().get('autoUpdatesChannel') or '')) or 'latest'
+
+
+def status(refresh=False):
+    """The whole answer to "am I current?" in one dict — the payload both the
+    TUI screen and the GUI page render."""
+    cur = installed_version()
+    rel = released(refresh=refresh)
+    vs = rel.get('versions') or []
+    behind = vs.index(cur) if cur in vs else -1
+    target = rel.get(_channel()) or rel.get('latest') or ''
+    return {'installed': cur, 'mode': install_mode(), 'channel': _channel(),
+            'latest': rel.get('latest', ''), 'stable': rel.get('stable', ''),
+            'behind': behind, 'current': bool(cur and target and cur == target),
+            'target': target, 'versions': vs, 'local': local_versions(),
+            'error': rel.get('error', ''),
+            'fetched': rel.get('fetched', 0)}
+
+
+def update_claude(target=''):
+    """(ok, message). No target updates to the configured channel's latest; a
+    target pins that exact version (or the literal 'stable'/'latest').
+
+    An npm install is reported rather than attempted: `claude install` writes
+    the native build, which would leave two Claude Codes on the machine and the
+    npm one still first on PATH.
+    """
+    mode = install_mode()
+    if mode == 'npm':
+        return False, ('installed through npm — update it with '
+                       '`npm install -g @anthropic-ai/claude-code@%s`'
+                       % (target or 'latest'))
+    target = (target or '').strip()
+    if target and not re.match(r'^(stable|latest|\d+\.\d+\.\d+[\w.+-]*)$', target):
+        return False, 'not a version: %s' % target[:40]
+    args = ['install', target] if target else ['update']
+    # a download plus a binary swap; the 120s default is not enough
+    return plugins._claude_cli(args, timeout=900)
+
+
+# ── plugins ──────────────────────────────────────
+
+def plugin_rows():
+    """[{key,name,marketplace,version,available,outdated,scope,ref}] —
+    every installed plugin joined to what its marketplace currently offers.
+
+    Read entirely off disk, deliberately, and that is the whole finding here:
+
+    - `claude plugin list --available --json` returns ONLY the official
+      catalogue. Both of this machine's user marketplaces were absent from it,
+      so a CLI-driven comparison silently reports "not checked" for exactly the
+      plugins a user added themselves.
+    - `git -C <clone> rev-parse HEAD` fails on those clones with *detected
+      dubious ownership* (they are owned by BUILTIN\\Administrators), so the sha
+      is read out of `.git` directly — the same thing the statusline already
+      does for the branch, and for the same reason.
+
+    `outdated` is None when the marketplace says nothing comparable, because
+    "no answer" and "up to date" are different answers.
+    """
+    entries = _marketplace_entries()
+    rows = []
+    for p in plugins.installed():
+        e = entries.get(p['key']) or {}
+        avail, ref = _entry_version(e)
+        cur = p['version'] or p['sha']
+        rows.append({
+            'key': p['key'], 'name': p['name'], 'marketplace': p['marketplace'],
+            'version': p['version'], 'sha': p['sha'], 'scope': p.get('scope', ''),
+            'available': avail, 'ref': ref,
+            'outdated': (None if not (avail and cur)
+                         else not _same_version(cur, avail, p['sha'])),
+        })
+    return rows
+
+
+def _marketplace_entries(cfg_dir=None):
+    """{'<plugin>@<marketplace>': manifest entry} from every registered
+    marketplace's own `.claude-plugin/marketplace.json`."""
+    out = {}
+    for mkt in plugins.known_marketplaces(cfg_dir):
+        root = mkt.get('path') or ''
+        doc = plugins._read_json(
+            os.path.join(root, '.claude-plugin', 'marketplace.json'), {})
+        for e in (doc.get('plugins') or []) if isinstance(doc, dict) else []:
+            if not isinstance(e, dict) or not e.get('name'):
+                continue
+            e = dict(e, _root=root)
+            out['%s@%s' % (e['name'], mkt['name'])] = e
+    return out
+
+
+def _entry_version(entry):
+    """(available, ref) for one marketplace entry.
+
+    An entry either declares a `version`, or names a git source: a `sha` for a
+    pinned subdirectory plugin, or `source: './'` for a plugin that IS its
+    marketplace repo — in which case the clone's own HEAD is the version on
+    offer, because that is what an update would install.
+    """
+    if not entry:
+        return '', ''
+    src = entry.get('source')
+    src = src if isinstance(src, dict) else {'source': src}
+    ver = str(entry.get('version') or '')
+    ref = str(src.get('ref') or '')
+    if ver:
+        return ver, ref
+    sha = str(src.get('sha') or '')
+    if sha:
+        return sha[:12], ref
+    if str(src.get('source') or '').strip() in ('./', '.', ''):
+        return _clone_head(entry.get('_root') or ''), ref
+    return '', ref
+
+
+def _clone_head(root):
+    """The marketplace clone's HEAD sha, 12 chars, read out of `.git` without
+    running git — see plugin_rows for why running it is not an option."""
+    try:
+        head = open(os.path.join(root, '.git', 'HEAD'), encoding='utf-8').read().strip()
+    except OSError:
+        return ''
+    if not head.startswith('ref:'):
+        return head[:12]
+    ref = head[4:].strip()
+    try:
+        with open(os.path.join(root, '.git', *ref.split('/')), encoding='utf-8') as f:
+            return f.read().strip()[:12]
+    except OSError:
+        pass
+    try:
+        with open(os.path.join(root, '.git', 'packed-refs'), encoding='utf-8') as f:
+            for line in f:
+                sha, _, name = line.strip().partition(' ')
+                if name == ref:
+                    return sha[:12]
+    except OSError:
+        pass
+    return ''
+
+
+def _same_version(cur, avail, sha=''):
+    """Installed and offered describe the same thing. Two shapes meet here: a
+    semver (`4.8.4` vs `v4.8.4`) and a git sha, which the installed side stores
+    truncated to 12 characters while a manifest carries all 40."""
+    cur, avail = cur.strip(), avail.strip()
+    if cur == avail or cur.lstrip('v') == avail.lstrip('v'):
+        return True
+    for a, b in ((cur, avail), (avail, cur), (sha, avail), (avail, sha)):
+        if a and b and len(a) >= 7 and b.startswith(a):
+            return True
+    return False
+
+
+def update_plugin(key):
+    """`claude plugin update <key> -y`. There is no version target: the
+    marketplace entry decides what latest is, and -y is required off a TTY."""
+    key = (key or '').strip()
+    if not key:
+        return False, 'No plugin given'
+    return plugins._claude_cli(['plugin', 'update', key, '-y'], timeout=600)
+
+
+def update_marketplaces(name=''):
+    """Refresh marketplace metadata — what makes an `available` version move."""
+    args = ['plugin', 'marketplace', 'update'] + ([name] if name else [])
+    return plugins._claude_cli(args, timeout=600)
+
+
+# ── the screen ───────────────────────────────────────────────
+
+def _row(st):
+    if not st['installed']:
+        return 'claude.exe not found'
+    if st['error']:
+        return '%s   (could not reach the registry: %s)' % (st['installed'], st['error'])
+    if st['current']:
+        return '%s   up to date on the %s channel' % (st['installed'], st['channel'])
+    behind = ('%d release%s behind' % (st['behind'], '' if st['behind'] == 1 else 's')
+              if st['behind'] > 0 else 'update available')
+    return '%s → %s   (%s)' % (st['installed'], st['target'] or '?', behind)
+
+
+def updates_menu():
+    """Versions of Claude Code and of every installed plugin, and updating
+    either. A plugin can only be moved to whatever its marketplace offers, so
+    the version prompt is offered for Claude Code alone."""
+    from .ui import menu, flash, text_input, confirm
+    from . import config as cfg
+
+    refresh = False
+    while True:
+        st = status(refresh=refresh)
+        refresh = False
+        rows = plugin_rows()
+        W = 62
+        items = [(_c.C_NAME + 'Claude Code  ' + _c.C_RESET + _row(st), None)]
+        if st['mode'] and st['mode'] != 'native':
+            items.append((f"{_c.C_DIM}  installed via {st['mode']}{_c.C_RESET}", None))
+        items += [(f"{'─' * W}", None), ('↻  Check for new releases now', '__check__')]
+        if st['installed'] and not st['current'] and st['target']:
+            items.append((f"⬆  Update to {st['target']} (latest on {st['channel']})", '__latest__'))
+        items.append(('#  Install a specific version…', '__pin__'))
+        for v in [v for v in st['local'] if v != st['installed']][:4]:
+            items.append((f"{_c.C_DIM}↩  Roll back to {v} (already on disk){_c.C_RESET}",
+                          '__pin__:' + v))
+        items.append((f"{'─' * W}", None))
+        for r in rows:
+            if r['outdated']:
+                tag = f"{_c.C_WARN}{r['available']} available{_c.C_RESET}"
+            elif r['outdated'] is False:
+                tag = f"{_c.C_DIM}current{_c.C_RESET}"
+            else:
+                tag = f"{_c.C_DIM}marketplace says nothing{_c.C_RESET}"
+            items.append((f"{r['name']}  {_c.C_DIM}{r['marketplace']}"
+                          f"  {r['version'] or '?'}{_c.C_RESET}  {tag}",
+                          'plug:' + r['key']))
+        if not rows:
+            items.append((f"{_c.C_DIM}(no plugins installed){_c.C_RESET}", None))
+        items += [(f"{'─' * W}", None),
+                  ('↻  Refresh every marketplace', '__mkt__')]
+
+        sel = menu(items, 'UPDATES  /  ' + os.path.basename(cfg.config_dir))
+        if not sel:
+            return
+        if sel == '__check__':
+            refresh = True
+        elif sel == '__mkt__':
+            flash('Refreshing marketplaces…', secs=0.4)
+            ok, msg = update_marketplaces()
+            flash(msg or ('Refreshed' if ok else 'Failed'), ok=ok, secs=2.5)
+        elif sel == '__latest__':
+            _run_claude_update('')
+        elif sel == '__pin__':
+            v = text_input('Version (exact, or stable / latest)', st['latest'] or '')
+            if v:
+                _run_claude_update(v.strip())
+        elif sel.startswith('__pin__:'):
+            _run_claude_update(sel.split(':', 1)[1])
+        elif sel.startswith('plug:'):
+            key = sel.split(':', 1)[1]
+            if confirm(f'Update {key} to what its marketplace offers?'):
+                flash(f'Updating {key}…', secs=0.4)
+                ok, msg = update_plugin(key)
+                flash(msg or ('Updated — restart Claude Code to apply'
+                              if ok else 'Failed'), ok=ok, secs=3)
+
+
+def _run_claude_update(target):
+    """Claude Code replaces its own binary here, so the message is worth
+    reading: a failure is usually a locked file (a session still running) and
+    says so."""
+    from .ui import flash
+    flash('Updating Claude Code%s… this can take a minute'
+          % (f' to {target}' if target else ''), secs=0.6)
+    ok, msg = update_claude(target)
+    flash(msg or ('Updated' if ok else 'Update failed'), ok=ok, secs=4)

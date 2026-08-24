@@ -258,6 +258,17 @@ ROUTES = {
                      'version': '1.0', 'missing': False,
                      'provides': {'skill': ['a', 'b'], 'hook': ['h']}}]},
     '/api/plugins/provenance': {'provenance': {'skill': {'a': 'demo@official'}}},
+    # one plugin behind its marketplace and a Claude Code two releases behind:
+    # the update buttons only exist in that state, so the stub has to be in it
+    '/api/versions': {
+        'claude': {'installed': '2.1.239', 'mode': 'native', 'channel': 'latest',
+                   'latest': '2.1.241', 'stable': '2.1.231', 'behind': 2,
+                   'current': False, 'target': '2.1.241',
+                   'versions': ['2.1.241', '2.1.240', '2.1.239'],
+                   'local': ['2.1.239', '2.1.232'], 'error': '', 'fetched': 0},
+        'plugins': [{'key': 'demo@official', 'name': 'demo', 'marketplace': 'official',
+                     'version': '1.0', 'sha': '', 'scope': 'user',
+                     'available': '1.1', 'ref': '', 'outdated': True}]},
     # a PARENT of repos, one carrying a submodule — the shape the flat board
     # could not render at all, so the stub has to be the hard case
     '/api/worktrees': {'repo': True, 'multi': True, 'root': 'D:/repos', 'repos': [
@@ -638,6 +649,23 @@ def main():
             pg.evaluate(f"go('{p}')")
             pg.wait_for_timeout(500)
             check(f'page {p}', len(errs) == before, errs[before:])
+
+        # "no JS error" passes on a card that rendered nothing, and the update
+        # buttons only exist when something is actually behind — so assert the
+        # state, not just the absence of an exception.
+        pg.evaluate("go('plugins')")
+        pg.wait_for_timeout(600)
+        ver = pg.evaluate(
+            "(()=>{const c=document.querySelector('#verCard');return c?{"
+            "card:1,behind:/2 releases behind/.test(c.textContent),"
+            "latest:/Update to latest/.test(c.textContent),"
+            "rollback:/2\\.1\\.232/.test(c.textContent)}:{card:0};})()")
+        check('claude code version card', ver.get('card') and ver.get('behind')
+              and ver.get('latest') and ver.get('rollback'), ver)
+        pupd = pg.evaluate(
+            "[...document.querySelectorAll('#pluginCard button')]"
+            ".filter(b=>b.textContent.trim()==='Update').length")
+        check('an outdated plugin offers an update', pupd == 1, pupd)
 
         print('\n— project tabs —')
         # Two dispatchers: go() drives the global pages, `TAB=<id>;go('project')`

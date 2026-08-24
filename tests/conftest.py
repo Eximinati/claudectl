@@ -23,6 +23,7 @@ test still wins, because fixtures run before the test body.
 """
 import glob
 import os
+import urllib.parse
 import tempfile
 
 import pytest
@@ -171,3 +172,26 @@ def _stats_cache_is_never_the_real_one(monkeypatch, tmp_path_factory):
                         str(tmp_path_factory.mktemp('stats') / 'stats-cache.json'))
     stats._disk_cache = None
     stats._cache_dirty = False
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """No test reaches a REMOTE host; loopback is left alone.
+
+    `versions.released()` fetches the npm registry, and the endpoint-floor test
+    calls every route with junk parameters — so without this the suite would
+    make a real request per run, be slow offline and go red on a plane. It
+    cannot be a blanket block: half the GUI tests drive their own server over
+    `urlopen` against 127.0.0.1. A test that wants a remote fetch patches
+    `urlopen` itself, which wins because fixtures run first.
+    """
+    import urllib.request
+    real = urllib.request.urlopen
+
+    def guarded(url, *a, **kw):
+        full = getattr(url, 'full_url', url)
+        host = urllib.parse.urlsplit(str(full)).hostname or ''
+        if host in ('127.0.0.1', 'localhost', '::1', '0.0.0.0'):
+            return real(url, *a, **kw)
+        raise OSError('the test suite does not reach the network: %s' % str(full)[:80])
+    monkeypatch.setattr(urllib.request, 'urlopen', guarded)

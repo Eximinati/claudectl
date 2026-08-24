@@ -2065,6 +2065,33 @@ def api_job_start(q, body):
                                    or 'Re-plan failed or produced no output')
             return {'plan': revised}
         jid = start_job('Re-planning with feedback', _replan)
+    elif kind == 'claude_update':
+        from . import versions
+        target = str(body.get('target', '') or '')
+        def _cu():
+            ok, msg = versions.update_claude(target)
+            if not ok:
+                raise RuntimeError(msg or 'update failed')
+            return {'message': msg, 'installed': versions.installed_version()}
+        jid = start_job('Updating Claude Code' + (f' to {target}' if target else ''), _cu)
+    elif kind == 'plugin_update':
+        from . import versions
+        key = str(body.get('key', '') or '')
+        def _pu():
+            ok, msg = versions.update_plugin(key)
+            if not ok:
+                raise RuntimeError(msg or 'update failed')
+            return {'message': msg}
+        jid = start_job(f'Updating {key}', _pu)
+    elif kind == 'marketplace_refresh':
+        from . import versions
+        mkt = str(body.get('name', '') or '')
+        def _mr():
+            ok, msg = versions.update_marketplaces(mkt)
+            if not ok:
+                raise RuntimeError(msg or 'refresh failed')
+            return {'message': msg}
+        jid = start_job('Refreshing marketplaces', _mr)
     elif kind == 'skill_git_install':
         from . import skills
         from .config import load_settings
@@ -2301,6 +2328,15 @@ def api_plugins(q, body):
     return plugins.summary()
 
 
+def api_versions(q, body):
+    """The installed Claude Code version against what has been released, plus
+    every plugin against what its marketplace offers."""
+    from . import versions
+    refresh = str((q or {}).get('refresh', '')) in ('1', 'true', 'yes')
+    return {'claude': versions.status(refresh=refresh),
+            'plugins': versions.plugin_rows()}
+
+
 def api_provenance(q, body):
     """{kind: {name: plugin_key}} — which rows in the skill/agent/hook managers
     came from a bundle rather than from the user. The flat lists those managers
@@ -2514,6 +2550,7 @@ GET_ROUTES = {
     '/api/dashboard': api_dashboard,
     '/api/plugins': api_plugins,
     '/api/plugins/provenance': api_provenance,
+    '/api/versions': api_versions,
     '/api/worktrees': api_worktrees,
     '/api/output-styles': api_output_styles,
     '/api/statusline': api_statusline,

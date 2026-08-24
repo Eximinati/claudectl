@@ -1,0 +1,386 @@
+"""Versions: what is installed, what has been released, and updating either.
+
+Two findings are pinned here because they are what the feature turned on:
+
+- `claude plugin list --available --json` returns ONLY the official catalogue,
+  so the marketplace side is read off each marketplace's own manifest instead;
+- `git -C <clone> rev-parse HEAD` fails on those clones with *dubious
+  ownership*, so a sha comes out of `.git` by hand.
+"""
+
+import io
+import json
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from harness import Sandbox, DOWN, ENTER, ESC, run_flow
+
+from claude_sessions import config as config_mod
+from claude_sessions import plugins, proc
+from claude_sessions import versions as v
+
+
+class _R:
+    def __init__(self, out='', rc=0):
+        self.stdout, self.stderr, self.returncode = out, '', rc
+
+
+def _exe(monkeypatch, path='C:/Users/x/.local/bin/claude.exe'):
+    monkeypatch.setattr(config_mod, 'get_claude_exe', lambda: path)
+
+
+def _npm(monkeypatch, versions=('2.1.239', '2.1.240', '2.1.241'),
+         latest='2.1.241', stable='2.1.231', calls=None):
+    doc = json.dumps({'dist-tags': {'latest': latest, 'stable': stable},
+                      'versions': {x: {} for x in versions}}).encode()
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake(req, timeout=0):
+        if calls is not None:
+            calls.append(getattr(req, 'full_url', req))
+        return _Resp(doc)
+
+    monkeypatch.setattr(v.urllib.request, 'urlopen', fake)
+
+
+# ── the installed version ────────────────────────────────────
+
+def test_the_installed_version_is_parsed_out_of_the_banner(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    _exe(monkeypatch)
+    monkeypatch.setattr(proc, 'run', lambda *a, **k: _R('2.1.241 (Claude Code)\n'))
+    assert v.installed_version() == '2.1.241'
+
+
+def test_no_claude_no_version_and_no_crash(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(config_mod, 'get_claude_exe', lambda: None)
+    assert v.installed_version() == ''
+    assert v.install_mode() == ''
+
+
+def test_a_dead_claude_is_not_a_version(monkeypatch, tmp_path):
+    """proc.run returns None on any failure — that must read as "unknown",
+    never as a crash on the screen that is supposed to report it."""
+    Sandbox(monkeypatch, tmp_path)
+    _exe(monkeypatch)
+    monkeypatch.setattr(proc, 'run', lambda *a, **k: None)
+    assert v.installed_version() == ''
+
+
+# ── the release list ─────────────────────────────────────────
+
+def test_released_is_cached_for_an_hour_and_refreshes_on_demand(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    calls = []
+    _npm(monkeypatch, calls=calls)
+
+    first = v.released()
+    assert first['latest'] == '2.1.241' and first['stable'] == '2.1.231'
+    assert first['versions'][0] == '2.1.241'          # newest first
+    assert len(calls) == 1
+
+    v.released()                                     # served from disk
+    assert len(calls) == 1
+    v.released(refresh=True)                          # the user asked
+    assert len(calls) == 2
+
+
+def test_a_dead_network_keeps_the_cached_list_and_says_why(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    _npm(monkeypatch)
+    v.released()
+
+    def boom(*a, **k):
+        raise OSError('no route to host')
+    monkeypatch.setattr(v.urllib.request, 'urlopen', boom)
+
+    out = v.released(refresh=True)
+    assert out['versions'][0] == '2.1.241'           # the stale answer survives
+    assert 'no route' in out['error']
+
+
+# ── status ───────────────────────────────────────────────────
+
+def test_status_counts_how_many_releases_behind(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    _exe(monkeypatch)
+    _npm(monkeypatch)
+    monkeypatch.setattr(proc, 'run', lambda *a, **k: _R('2.1.239 (Claude Code)'))
+    st = v.status()
+    assert st['installed'] == '2.1.239'
+    assert st['behind'] == 2 and st['current'] is False
+    assert st['target'] == '2.1.241'
+
+
+def test_status_follows_the_configured_channel(monkeypatch, tmp_path):
+    """`autoUpdatesChannel: stable` is what Claude Code's own updater follows,
+    so "current" has to mean current on THAT channel — a stable install is not
+    out of date because a newer latest exists."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    from claude_sessions import hooks
+    (sb.cfg / 'settings.json').write_text(
+        json.dumps({'autoUpdatesChannel': 'stable'}), encoding='utf-8')
+    monkeypatch.setattr(hooks, 'settings_path', str(sb.cfg / 'settings.json'))
+    _exe(monkeypatch)
+    _npm(monkeypatch, versions=('2.1.231', '2.1.241'))
+    monkeypatch.setattr(proc, 'run', lambda *a, **k: _R('2.1.231 (Claude Code)'))
+    st = v.status()
+    assert st['channel'] == 'stable'
+    assert st['target'] == '2.1.231' and st['current'] is True
+
+
+# ── updating claude code ─────────────────────────────────────
+
+def test_no_target_updates_and_a_target_installs(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    _exe(monkeypatch)
+    seen = []
+    monkeypatch.setattr(plugins, '_claude_cli',
+                        lambda args, timeout=120: (seen.append(args) or (True, 'ok')))
+    v.update_claude('')
+    v.update_claude('2.1.240')
+    assert seen == [['update'], ['install', '2.1.240']]
+
+
+def test_stable_and_latest_are_valid_targets(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    _exe(monkeypatch)
+    seen = []
+    monkeypatch.setattr(plugins, '_claude_cli',
+                        lambda args, timeout=120: (seen.append(args) or (True, 'ok')))
+    assert v.update_claude('stable')[0]
+    assert seen[-1] == ['install', 'stable']
+
+
+def test_junk_is_never_passed_to_the_installer(monkeypatch, tmp_path):
+    """The target reaches a subprocess, so it is validated here rather than
+    trusted — `2.1.240; rm -rf` is not a version."""
+    Sandbox(monkeypatch, tmp_path)
+    _exe(monkeypatch)
+    called = []
+    monkeypatch.setattr(plugins, '_claude_cli',
+                        lambda args, timeout=120: (called.append(args) or (True, '')))
+    ok, msg = v.update_claude('2.1.240 && del *')
+    assert ok is False and 'not a version' in msg
+    assert called == []
+
+
+def test_an_npm_install_is_reported_not_overwritten(monkeypatch, tmp_path):
+    """`claude install` writes the NATIVE build. Running it over an npm install
+    leaves two Claude Codes on the machine with the npm one still first on
+    PATH, so claudectl hands back the npm command instead."""
+    Sandbox(monkeypatch, tmp_path)
+    _exe(monkeypatch, 'C:/Users/x/AppData/Roaming/npm/claude.cmd')
+    called = []
+    monkeypatch.setattr(plugins, '_claude_cli',
+                        lambda args, timeout=120: (called.append(args) or (True, '')))
+    ok, msg = v.update_claude('')
+    assert ok is False and 'npm install -g' in msg
+    assert called == []
+
+
+# ── plugins ──────────────────────────────────────────────────
+
+def _mkt(sb, name, entries, sha='', installed=None):
+    """One marketplace on disk: its manifest, optionally a .git HEAD, and the
+    installed-plugins record that claudectl reads."""
+    root = sb.cfg / 'plugins'
+    mroot = root / 'marketplaces' / name
+    (mroot / '.claude-plugin').mkdir(parents=True, exist_ok=True)
+    (mroot / '.claude-plugin' / 'marketplace.json').write_text(
+        json.dumps({'name': name, 'plugins': entries}), encoding='utf-8')
+    if sha:
+        (mroot / '.git' / 'refs' / 'heads').mkdir(parents=True, exist_ok=True)
+        (mroot / '.git' / 'HEAD').write_text('ref: refs/heads/main\n', encoding='utf-8')
+        (mroot / '.git' / 'refs' / 'heads' / 'main').write_text(sha + '\n', encoding='utf-8')
+    known = {}
+    kp = root / 'known_marketplaces.json'
+    if kp.is_file():
+        known = json.loads(kp.read_text(encoding='utf-8'))
+    known[name] = {'source': {'source': 'github', 'repo': 'o/' + name},
+                   'installLocation': str(mroot), 'lastUpdated': ''}
+    kp.write_text(json.dumps(known), encoding='utf-8')
+    if installed is not None:
+        (root / 'installed_plugins.json').write_text(
+            json.dumps({'version': 2, 'plugins': installed}), encoding='utf-8')
+    return mroot
+
+
+def test_a_marketplace_that_declares_a_version_is_compared_by_version(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    _mkt(sb, 'mkt', [{'name': 'demo', 'version': '2.0.0'}],
+         installed={'demo@mkt': [{'scope': 'user', 'version': '1.0.0',
+                                  'installPath': str(tmp_path)}]})
+    row = v.plugin_rows()[0]
+    assert row['available'] == '2.0.0'
+    assert row['outdated'] is True
+
+
+def test_v_prefixes_do_not_make_a_plugin_look_outdated(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    _mkt(sb, 'mkt', [{'name': 'demo', 'version': 'v1.0.0'}],
+         installed={'demo@mkt': [{'scope': 'user', 'version': '1.0.0',
+                                  'installPath': str(tmp_path)}]})
+    assert v.plugin_rows()[0]['outdated'] is False
+
+
+def test_a_plugin_that_is_its_own_marketplace_compares_against_the_clone_head(
+        monkeypatch, tmp_path):
+    """`source: './'` means the plugin IS the marketplace repo, so what an
+    update would install is that clone's HEAD — read out of `.git` because git
+    itself refuses these directories."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    sha = 'abcdef0123456789abcdef0123456789abcdef01'
+    _mkt(sb, 'mkt', [{'name': 'demo', 'source': './'}], sha=sha,
+         installed={'demo@mkt': [{'scope': 'user', 'version': sha[:12],
+                                  'gitCommitSha': sha, 'installPath': str(tmp_path)}]})
+    row = v.plugin_rows()[0]
+    assert row['available'] == sha[:12]
+    assert row['outdated'] is False
+
+
+def test_a_moved_clone_head_marks_the_plugin_outdated(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    old = '1111111111111111111111111111111111111111'
+    new = '2222222222222222222222222222222222222222'
+    _mkt(sb, 'mkt', [{'name': 'demo', 'source': './'}], sha=new,
+         installed={'demo@mkt': [{'scope': 'user', 'version': old[:12],
+                                  'gitCommitSha': old, 'installPath': str(tmp_path)}]})
+    assert v.plugin_rows()[0]['outdated'] is True
+
+
+def test_a_packed_ref_is_still_a_head(monkeypatch, tmp_path):
+    """A freshly cloned repo keeps its refs in packed-refs, with no loose file
+    for the branch at all."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    sha = '3333333333333333333333333333333333333333'
+    mroot = _mkt(sb, 'mkt', [{'name': 'demo', 'source': './'}],
+                 installed={'demo@mkt': [{'scope': 'user', 'version': sha[:12],
+                                          'gitCommitSha': sha,
+                                          'installPath': str(tmp_path)}]})
+    (mroot / '.git').mkdir(parents=True, exist_ok=True)
+    (mroot / '.git' / 'HEAD').write_text('ref: refs/heads/main\n', encoding='utf-8')
+    (mroot / '.git' / 'packed-refs').write_text(
+        '# pack-refs with: peeled\n%s refs/heads/main\n' % sha, encoding='utf-8')
+    assert v.plugin_rows()[0]['available'] == sha[:12]
+
+
+def test_a_silent_marketplace_is_not_reported_as_up_to_date(monkeypatch, tmp_path):
+    """"Not checked" and "current" are different answers, and conflating them is
+    how a stale plugin hides."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    _mkt(sb, 'mkt', [{'name': 'other'}],
+         installed={'demo@mkt': [{'scope': 'user', 'version': '1.0.0',
+                                  'installPath': str(tmp_path)}]})
+    row = v.plugin_rows()[0]
+    assert row['available'] == '' and row['outdated'] is None
+
+
+def test_the_official_catalogue_pins_by_sha(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    sha = '30287f5e3f122a646d1ac5ca3ab96e130c52a3ad'
+    _mkt(sb, 'off', [{'name': 'demo', 'source': {
+        'source': 'git-subdir', 'url': 'https://x/y.git', 'ref': 'v1.5.5', 'sha': sha}}],
+        installed={'demo@off': [{'scope': 'user', 'version': sha[:12],
+                                 'gitCommitSha': sha, 'installPath': str(tmp_path)}]})
+    row = v.plugin_rows()[0]
+    assert row['ref'] == 'v1.5.5'
+    assert row['outdated'] is False
+
+
+def test_updating_a_plugin_accepts_no_tty(monkeypatch, tmp_path):
+    """-y is not optional: without a TTY the CLI refuses rather than prompting,
+    and a job that waits on a prompt nobody can answer just times out."""
+    Sandbox(monkeypatch, tmp_path)
+    seen = []
+    monkeypatch.setattr(plugins, '_claude_cli',
+                        lambda args, timeout=120: (seen.append(args) or (True, 'ok')))
+    v.update_plugin('demo@mkt')
+    assert seen == [['plugin', 'update', 'demo@mkt', '-y']]
+    assert v.update_plugin('')[0] is False
+
+
+def test_refreshing_marketplaces_can_name_one_or_all(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    seen = []
+    monkeypatch.setattr(plugins, '_claude_cli',
+                        lambda args, timeout=120: (seen.append(args) or (True, '')))
+    v.update_marketplaces()
+    v.update_marketplaces('mkt')
+    assert seen == [['plugin', 'marketplace', 'update'],
+                    ['plugin', 'marketplace', 'update', 'mkt']]
+
+
+def test_the_cache_is_written_inside_the_account_dir(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    _npm(monkeypatch)
+    v.released()
+    assert (sb.cfg / 'claudectl-versions.json').is_file()
+    assert time.time() - json.loads(
+        (sb.cfg / 'claudectl-versions.json').read_text(encoding='utf-8')
+    )['fetched'] < 60
+
+
+# ── the screen ───────────────────────────────────────────────
+
+_ST = {'installed': '2.1.239', 'mode': 'native', 'channel': 'latest',
+       'latest': '2.1.241', 'stable': '2.1.231', 'behind': 2, 'current': False,
+       'target': '2.1.241', 'versions': ['2.1.241', '2.1.240', '2.1.239'],
+       'local': ['2.1.239', '2.1.232'], 'error': '', 'fetched': 0}
+_ROWS = [{'key': 'demo@mkt', 'name': 'demo', 'marketplace': 'mkt',
+          'version': '1.0.0', 'sha': '', 'scope': 'user', 'available': '1.1.0',
+          'ref': '', 'outdated': True}]
+
+
+def _screen(monkeypatch, tmp_path, keys, upd=None, plug=None):
+    Sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(v, 'status', lambda refresh=False: dict(_ST))
+    monkeypatch.setattr(v, 'plugin_rows', lambda: [dict(r) for r in _ROWS])
+    monkeypatch.setattr(v, 'update_claude', upd or (lambda t='': (True, 'ok')))
+    monkeypatch.setattr(v, 'update_plugin', plug or (lambda k: (True, 'ok')))
+    return run_flow(monkeypatch, keys, v.updates_menu)
+
+
+def test_the_screen_states_both_versions_and_what_is_behind(monkeypatch, tmp_path):
+    _r, cap, _ = _screen(monkeypatch, tmp_path, [*ESC])
+    out = cap.text
+    assert 'Claude Code' in out
+    assert '2.1.239' in out and '2.1.241' in out
+    assert '2 releases behind' in out
+    assert 'demo' in out and '1.1.0 available' in out
+
+
+def test_the_update_row_updates(monkeypatch, tmp_path):
+    """First selectable row is the check, second is the update — the update row
+    only exists when an update does, which is why the fixture is behind."""
+    seen = []
+    _screen(monkeypatch, tmp_path, [*DOWN, *ENTER, *ESC],
+            upd=lambda t='': (seen.append(t) or (True, 'updated')))
+    assert seen == ['']
+
+
+def test_an_already_downloaded_version_is_offered_for_rollback(monkeypatch, tmp_path):
+    """A native install keeps its old builds, so a rollback needs no download —
+    the screen offers them by name."""
+    _r, cap, _ = _screen(monkeypatch, tmp_path, [*ESC])
+    assert 'Roll back to 2.1.232' in cap.text
+    assert 'Roll back to 2.1.239' not in cap.text   # that is the installed one
+
+
+def test_a_plugin_row_updates_that_plugin(monkeypatch, tmp_path):
+    seen = []
+    # check, update, install-specific, roll back 2.1.232, then the plugin row
+    keys = [*DOWN, *DOWN, *DOWN, *DOWN, *ENTER, b'y', *ESC]
+    _screen(monkeypatch, tmp_path, keys,
+            plug=lambda k: (seen.append(k) or (True, 'updated')))
+    assert seen == ['demo@mkt']

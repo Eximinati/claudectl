@@ -2912,7 +2912,9 @@ async function agDel(path){
    Without it those lists are unreadable after two marketplace installs, and the
    obvious action on something unrecognised (delete it) can break a plugin. */
 async function pgPlugins(nav){
-  const d=await api('/api/plugins');
+  const [d,V]=await Promise.all([api('/api/plugins'),
+                                api('/api/versions').catch(()=>({}))]);
+  VER=V||{};
   const mkts=(d.marketplaces||[]).map(m=>`
     <div class="hrow">
       <b style="min-width:200px">${esc(m.name)}</b>
@@ -2920,27 +2922,90 @@ async function pgPlugins(nav){
       <span style="flex:1;color:var(--dim);font-size:12px">${esc(m.repo||m.path)}</span>
       <button class="btn sm danger" onclick='mktRemove(${JSON.stringify(m.name)})'>${ic('del')}</button>
     </div>`).join('');
+  const vrows={};((V||{}).plugins||[]).forEach(r=>{vrows[r.key]=r;});
   const plugs=(d.plugins||[]).map(p=>{
     const gives=Object.entries(p.provides||{})
       .map(([k,v])=>`<span class="tag">${esc(k)} ${v.length}</span>`).join(' ');
+    const vr=vrows[p.key]||{};
     return `<div class="hrow">
       <b style="min-width:200px">${esc(p.name)}</b>
       <span class="tag">${esc(p.marketplace)}</span>
       <span class="num" style="color:var(--dim2)">${esc(p.version)}</span>
+      ${vr.outdated?`<span class="tag warn" title="the marketplace offers ${esc(vr.available||'')}">${esc(vr.available||'update')} available</span>`
+        :(vr.outdated===false?'<span class="tag ok">current</span>':'')}
       ${p.missing?'<span class="tag warn">files missing</span>':''}
       <span style="flex:1">${gives||'<span style="color:var(--dim2);font-size:12px">ships nothing claudectl reads</span>'}</span>
+      ${vr.outdated?`<button class="btn sm pri" onclick='pluginUpdate(${JSON.stringify(p.key)})'>Update</button>`:''}
       <button class="btn sm danger" onclick='pluginRemove(${JSON.stringify(p.key)})'>${ic('del')}</button>
     </div>`;}).join('');
   paint(nav,`
-    <div class="card"><h3>${ic('folder')} Installed plugins</h3>
+    ${verCard(V)}
+    <div class="card" id="pluginCard"><h3>${ic('folder')} Installed plugins</h3>
       <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">A plugin bundles skills, subagents, commands, hooks and MCP servers together. The tags say what each one actually placed on disk — the same information the Skills, Agents and Hooks pages now use to mark which of their rows came from a bundle rather than from you.</p>
       ${plugs||'<div style="color:var(--dim)">No plugins installed.</div>'}</div>
     <div class="card"><h3>Marketplaces <span class="sp"></span>
+      <button class="btn sm" onclick="mktRefresh()">${ic('refresh')} Refresh</button>
       <button class="btn sm pri" onclick="mktAdd()">${ic('add')} Add marketplace</button></h3>
       <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">A repo, a URL or a local path. Adding, installing and removing are delegated to the <code>claude</code> CLI: these files belong to Claude Code, the format has already changed once, and writing them directly would corrupt the state of the tool claudectl exists to support.</p>
       ${mkts||'<div style="color:var(--dim)">No marketplaces registered.</div>'}</div>
     <div class="card"><h3>Where they live</h3>
       <div class="kv"><span>plugins dir</span><code>${esc(d.dir||'')}</code></div></div>`);
+}
+/* Claude Code's own version. The card is on the Plugins page rather than on a
+   page of its own because "what is installed and is it current" is one
+   question asked of the whole toolchain, and a plugin update and a Claude Code
+   update are the same kind of action with the same kind of risk. */
+let VER=null;
+function verCard(V){
+  const c=(V||{}).claude||{};
+  if(!c.installed&&!c.error)return '';
+  const cur=c.current, beh=c.behind;
+  const state=c.error?`<span class="tag warn">could not check (${esc(c.error)})</span>`
+    :cur?'<span class="tag ok">current</span>'
+    :(beh>0?`<span class="tag warn">${beh} release${beh===1?'':'s'} behind</span>`
+           :'<span class="tag warn">update available</span>');
+  const locals=(c.local||[]).filter(v=>v!==c.installed).slice(0,4)
+    .map(v=>`<button class="btn sm" title="already downloaded — rolls back without a fetch"
+      onclick='claudeUpdate(${JSON.stringify(v)})'>${esc(v)}</button>`).join(' ');
+  return `<div class="card" id="verCard"><h3>${ic('bolt')} Claude Code ${state}
+      <span class="sp"></span>
+      <button class="btn sm" onclick="verCheck()">${ic('refresh')} Check now</button>
+      ${cur?'':'<button class="btn sm pri" onclick="claudeUpdate(\'\')">Update to latest</button>'}
+    </h3>
+    <div class="kv"><span>installed</span><code>${esc(c.installed||'unknown')}</code></div>
+    <div class="kv"><span>latest / stable</span><code>${esc(c.latest||'?')} / ${esc(c.stable||'?')}</code></div>
+    <div class="kv"><span>channel</span><code>${esc(c.channel||'latest')}</code>
+      <span style="color:var(--dim2);font-size:12px">autoUpdatesChannel — what an unpinned update follows</span></div>
+    <div class="kv"><span>install mode</span><code>${esc(c.mode||'?')}</code>
+      ${c.mode==='npm'?'<span style="color:var(--dim2);font-size:12px">npm owns this binary — claudectl will not install the native build over it</span>':''}</div>
+    <div class="hrow" style="margin-top:8px">
+      <button class="btn sm" onclick="verPick()">Install a specific version…</button>
+      ${locals?`<span style="color:var(--dim2);font-size:12px">on disk:</span> ${locals}`:''}
+    </div></div>`;
+}
+async function verCheck(){
+  const V=await api('/api/versions?refresh=1');VER=V;
+  toast(((V.claude||{}).error)||'Checked',(V.claude||{}).error?'err':'ok');
+  drawPage('plugins');
+}
+async function verPick(){
+  const c=(VER||{}).claude||{};
+  const v=await ask('Install a specific Claude Code version',
+    [{k:'v',label:'Version',ph:c.latest||'2.1.241'}],
+    'An exact version, or the word stable or latest. Newer releases first: '
+    +((c.versions||[]).slice(0,8).join(', ')||'list unavailable'));
+  if(!v||!v[0])return;
+  claudeUpdate(v[0].trim());
+}
+function claudeUpdate(target){
+  inlineJob('#verCard','claude_update',{target:target||''},
+            {onDone:()=>drawPage('plugins')});
+}
+function pluginUpdate(key){
+  inlineJob('#pluginCard','plugin_update',{key},{onDone:()=>drawPage('plugins')});
+}
+function mktRefresh(){
+  inlineJob('#pluginCard','marketplace_refresh',{},{onDone:()=>drawPage('plugins')});
 }
 async function mktAdd(){
   const v=await ask('Add marketplace',[{k:'src',label:'Repo, URL or path',ph:'owner/repo'}],
