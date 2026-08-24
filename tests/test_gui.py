@@ -2,6 +2,7 @@
 ephemeral port, plus launch parity with the TUI's build_launch_command."""
 
 import http.client
+import re
 import json
 import os
 import pytest
@@ -223,6 +224,59 @@ def test_settings_failover_accepts_newline_text_and_caps_length(monkeypatch, tmp
     finally:
         srv.shutdown()
     assert config_mod.load_settings()['failover_models'] == ['m%d' % i for i in range(8)]
+
+
+def test_nav_collapsed_roundtrips_and_survives_the_next_save(monkeypatch, tmp_path):
+    """A GUI preference that is not declared in _DEFAULT_SETTINGS is written
+    once and then deleted by the very next /api/settings POST — the bug that
+    made the chosen theme 'go back to classic' on restart. This asserts the
+    whole path: POST it, read it back, POST something ELSE, read it again."""
+    Sandbox(monkeypatch, tmp_path)
+    srv, base = _serve(monkeypatch)
+    try:
+        code, d = _req(base + '/api/settings',
+                       body={'nav_collapsed': ['Library', 'System']})
+        assert code == 200 and d['ok']
+        assert config_mod.load_settings()['nav_collapsed'] == ['Library', 'System']
+        # an unrelated save must not wipe it
+        _req(base + '/api/settings', body={'theme': 'default'})
+    finally:
+        srv.shutdown()
+    assert config_mod.load_settings()['nav_collapsed'] == ['Library', 'System']
+    from claude_sessions.gui import state_payload
+    assert state_payload()['nav_collapsed'] == ['Library', 'System']
+
+
+def test_every_nav_group_is_collapsible_and_the_flat_list_is_derived():
+    """Two regressions in one: NAV must stay a FLAT list because
+    tools/smoke_gui.py and tools/shot_gui.py both evaluate `NAV.map(n => n[0])`
+    for the page list, and every group must carry a name because the name is
+    what the collapsed set is keyed by — an unnamed group could be collapsed
+    and never reopened."""
+    import re
+    from claude_sessions.gui_html import PAGE
+    assert 'const NAV=NAV_GROUPS.flatMap(' in PAGE, 'NAV must be derived, not a second list'
+    block = PAGE[PAGE.index('const NAV_GROUPS=['):PAGE.index('const NAV=NAV_GROUPS')]
+    groups = re.findall(r"\n\s*\['([^']*)'\s*,\s*\[", block)
+    assert groups, 'no nav groups found'
+    assert all(g.strip() for g in groups), f'unnamed nav group: {groups}'
+    assert 'onclick="toggleNavGroup(' in PAGE
+
+
+def test_the_sidebar_gives_the_project_list_a_floor_and_the_name_a_width():
+    """Both halves of the 'too many accounts and nothing is visible' report.
+    The account chips are what squeezed the project name to one character, and
+    the twelve-row nav is what squeezed the list itself."""
+    from claude_sessions.gui_html import PAGE
+    css = PAGE[PAGE.index('<style>'):PAGE.index('</style>')]
+    # the name keeps a floor rather than min-width:0, so chips shrink first
+    assert re.search(r'\.proj \.nm \.pn\{[^}]*min-width:5\.5em', css), \
+        'the project name lost its width floor'
+    assert re.search(r'\.proj \.nm \.tag\{[^}]*flex:0 1 auto', css), \
+        'account chips must be shrinkable, not flex:none'
+    # .nav must be able to shrink below its content, or .plist gets starved
+    assert re.search(r'\n\.nav\{[^}]*min-height:0', css)
+    assert re.search(r'\.plist\{[^}]*min-height:190px', css)
 
 
 def test_state_payload_exposes_failover(monkeypatch, tmp_path):

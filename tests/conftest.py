@@ -21,7 +21,9 @@ a module-level pop is the only thing that runs early enough to reach it.
 The autouse fixture then covers the per-test case; `monkeypatch.setenv` inside a
 test still wins, because fixtures run before the test body.
 """
+import glob
 import os
+import tempfile
 
 import pytest
 
@@ -65,3 +67,90 @@ def _no_real_editor(monkeypatch, request):
 def pytest_configure(config):
     config.addinivalue_line(
         'markers', 'real_editor: allow this test to spawn a real editor process')
+
+
+# ── nothing the USER owns may be written by a test ───────────
+# This is not hypothetical: a run of this suite replaced the real
+# `~/.claude/settings.json` statusLine with the literal `'x'` a test uses as a
+# stand-in, so Claude Code drew no statusline until it was repaired by hand.
+# Enumerating the tests that could reach a real path is the approach that
+# failed (the same lesson as `_no_real_editor` above), so both halves below
+# guard the CHOKE POINT instead.
+
+def _real_user_files():
+    """Files a test must never modify: every account's settings.json, Claude
+    Code's own `.claude.json`, and claudectl's real `claudectl.json`."""
+    home = os.path.expanduser('~')
+    out = [os.path.join(home, '.claude.json')]
+    for d in glob.glob(os.path.join(home, '.claude*')):
+        if os.path.isdir(d):
+            out.append(os.path.join(d, 'settings.json'))
+    try:
+        from claude_sessions import config
+        out.append(config.settings_file)
+    except Exception:
+        pass
+    return [os.path.abspath(p) for p in out]
+
+
+def _snapshot(paths):
+    snap = {}
+    for p in paths:
+        try:
+            with open(p, 'rb') as f:
+                snap[p] = f.read()
+        except OSError:
+            snap[p] = None
+    return snap
+
+
+@pytest.fixture(autouse=True)
+def _no_writes_outside_the_sandbox(monkeypatch, tmp_path_factory):
+    """Layer 1 — every settings writer routes through `config.write_atomic`
+    (`test_no_settings_writer_bypasses_the_atomic_helper` enforces that), so one
+    wrapper rejects a write to any path outside the run's temp area. The whole
+    TEMP tree is allowed, not just this test's tmp_path: a test may legitimately
+    use `tempfile.mkdtemp()`, and nothing there belongs to the user.
+
+    Layer 2 — the real files are snapshotted and RESTORED if a write slipped
+    past layer 1 (a plain `open(path,'w')`, a subprocess), so a leak fails the
+    test that caused it instead of surviving the run.
+    """
+    from claude_sessions import config
+    real_write = config.write_atomic
+    allowed = os.path.normcase(os.path.realpath(tempfile.gettempdir()))
+    basetemp = os.path.normcase(os.path.realpath(str(tmp_path_factory.getbasetemp())))
+
+    def guarded(path, text):
+        p = os.path.normcase(os.path.realpath(os.path.abspath(path)))
+        if not (p.startswith(allowed) or p.startswith(basetemp)):
+            raise AssertionError(
+                'test tried to write a real file outside the pytest temp area: %s' % path)
+        return real_write(path, text)
+
+    monkeypatch.setattr(config, 'write_atomic', guarded)
+
+    paths = _real_user_files()
+    before = _snapshot(paths)
+    yield
+    after = _snapshot(paths)
+    damaged = [p for p in paths if after.get(p) != before.get(p)]
+    for p in damaged:
+        if before.get(p) is not None:
+            with open(p, 'wb') as f:
+                f.write(before[p])
+        elif after.get(p) is not None:
+            os.unlink(p)
+    assert not damaged, 'test modified real user files (restored): %s' % damaged
+
+
+@pytest.fixture(autouse=True)
+def _stats_cache_is_never_the_real_one(monkeypatch, tmp_path_factory):
+    """`stats.cache_file` is an import-time path inside the real account dir.
+    A test that does not build a Sandbox inherited it, so three dashboard tests
+    were reading the user's own session cache and writing it back pruned."""
+    from claude_sessions import stats
+    monkeypatch.setattr(stats, 'cache_file',
+                        str(tmp_path_factory.mktemp('stats') / 'stats-cache.json'))
+    stats._disk_cache = None
+    stats._cache_dirty = False

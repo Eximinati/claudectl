@@ -89,14 +89,50 @@ def _git_repos(project_path, proj_folder):
     return repos
 
 
-def session_diff(project_path, proj_folder):
-    """'Since last session': git commits + changed-file stat per repo since the
-    last session-log stamp. Handles sub-project repos (commits may live in
-    subdirs, not the project root). Pure local."""
+#: (key) -> (expires_at, result). Opening the Tools tab ran `git log` AND
+#: `git status` in every repo of the project — twenty subprocesses on a
+#: ten-repo workspace, every single click, for an answer that cannot
+#: meaningfully change between two clicks a few seconds apart.
+#:
+#: A TTL rather than a filesystem signature, deliberately: `dirty` comes from
+#: `git status`, and editing a file touches NOTHING under .git, so no signature
+#: can see it — the same limitation repos.state already documents. The cache
+#: lives in the process, so it is empty on every launch and a stale answer can
+#: never outlive the app.
+_DIFF_TTL = 90.0
+_diff_cache = {}
+
+
+def session_diff_rows(project_path, proj_folder, refresh=False):
+    """Structured 'since last session': one row per repo that moved.
+
+    {'repos': [{'label','path','commits':[...],'dirty':N}], 'since': str|None,
+     'note': str}  — `note` is set INSTEAD of repos when there is nothing to
+    show, so a caller never has to tell an empty list from a failure.
+
+    This is the source; session_diff() below is a formatter over it. The GUI
+    renders per repo and needs the counts, and re-deriving them by parsing the
+    '▸ ' prefix off a formatted line is exactly the sort of round trip that
+    breaks the first time the format changes.
+
+    Cached for _DIFF_TTL seconds; pass refresh=True for the explicit reload.
+    """
+    import time
+    key = (os.path.abspath(project_path), proj_folder or '')
+    if not refresh:
+        hit = _diff_cache.get(key)
+        if hit and hit[0] > time.time():
+            return hit[1]
+
+    def _done(result):
+        _diff_cache[key] = (time.time() + _DIFF_TTL, result)
+        return result
+
     since = _last_session_stamp(project_path)
     repos = _git_repos(project_path, proj_folder)
     if not repos:
-        return ['(no git repo here or in sub-projects — nothing to diff)']
+        return _done({'repos': [], 'since': since,
+                      'note': '(no git repo here or in sub-projects — nothing to diff)'})
 
     from .repos import _git as _repo_git
 
@@ -104,7 +140,7 @@ def session_diff(project_path, proj_folder):
         return (_repo_git(args, cwd, timeout=8) or '').strip()
 
     root = os.path.abspath(project_path)
-    lines = []
+    out = []
     for repo in repos:
         label = os.path.basename(repo.rstrip(os.sep)) or repo
         log_args = ['log', '--oneline', f'--since={since}'] if since else ['log', '--oneline', '-10']
@@ -112,14 +148,29 @@ def session_diff(project_path, proj_folder):
         dirty = _git(repo, ['status', '--porcelain'])
         if not commits and not dirty:
             continue                                 # quiet repo — skip
-        header = f"▸ {label}" if len(repos) > 1 or repo != root else "commits:"
-        lines.append(header)
-        if commits:
-            for c in commits.splitlines()[:10]:
-                lines.append('  ' + c)
-        if dirty:
-            lines.append(f"  ({len(dirty.splitlines())} uncommitted file(s))")
+        out.append({
+            'label': label if (len(repos) > 1 or repo != root) else '',
+            'path': repo,
+            'commits': commits.splitlines()[:10] if commits else [],
+            'dirty': len(dirty.splitlines()) if dirty else 0,
+        })
+    if not out:
+        return _done({'repos': [], 'since': since,
+                      'note': f"(no changes since {since or 'the last session'})"})
+    return _done({'repos': out, 'since': since, 'note': ''})
+
+
+def session_diff(project_path, proj_folder):
+    """'Since last session' as flat lines, for the TUI and the memory hub.
+    A formatter over session_diff_rows — one place decides what 'moved' means."""
+    data = session_diff_rows(project_path, proj_folder)
+    if data['note']:
+        return [data['note']]
+    lines = []
+    for r in data['repos']:
+        lines.append(f"▸ {r['label']}" if r['label'] else 'commits:')
+        lines += ['  ' + c for c in r['commits']]
+        if r['dirty']:
+            lines.append(f"  ({r['dirty']} uncommitted file(s))")
         lines.append('')
-    if not lines:
-        return [f"(no changes since {since or 'the last session'})"]
     return lines

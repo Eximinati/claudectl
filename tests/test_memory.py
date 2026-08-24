@@ -343,3 +343,64 @@ def test_ask_uses_answer(monkeypatch, tmp_path):
     memory.save_memory(actual, folder, m)
     monkeypatch.setattr(memory, '_answer', lambda ctx, q, cwd: 'ANSWER:' + q)
     assert memory.ask_memory(actual, folder, 'what parses tokens') == 'ANSWER:what parses tokens'
+
+
+# ── structured output (--json-schema) ─────────────────────────
+# The old path recovered JSON from prose by stripping code fences and slicing
+# between the first '{' and the last '}'. Claude Code can enforce the shape
+# instead and hand back a validated object in `structured_output`.
+
+def test_claude_json_asks_claude_code_to_enforce_the_schema(monkeypatch, tmp_path):
+    import json as _json
+    seen = {}
+
+    def fake(prompt, cwd, **kw):
+        seen.update(kw)
+        return _json.dumps({'type': 'result', 'total_cost_usd': 0.0123,
+                            'result': 'ignored prose',
+                            'structured_output': {'summary': 'from schema'}})
+    monkeypatch.setattr(memory, '_claude_stdin', fake)
+    out = memory._claude_json('p', str(tmp_path), {'type': 'object'})
+    argv = list(seen['extra_args'])
+    assert argv[:2] == ['--output-format', 'json']
+    assert argv[2] == '--json-schema' and _json.loads(argv[3]) == {'type': 'object'}
+    # structured_output wins over the prose result, which is the whole point
+    assert out == {'summary': 'from schema'}
+    # and the envelope's real cost is recorded rather than estimated
+    assert memory.last_call_cost == 0.0123
+
+
+def test_claude_json_falls_back_when_there_is_no_structured_output(monkeypatch, tmp_path):
+    """Claude Code before v2.1.205 silently ignored a schema it thought invalid
+    and returned unstructured text. That must land on the OLD behaviour, not on
+    nothing — otherwise upgrading claudectl breaks an older CLI."""
+    import json as _json
+    monkeypatch.setattr(memory, '_claude_stdin', lambda *a, **k: _json.dumps(
+        {'type': 'result', 'result': 'Here you go:\n```json\n{"summary":"prose"}\n```'}))
+    assert memory._claude_json('p', str(tmp_path), {}) == {'summary': 'prose'}
+    # not even an envelope: raw prose straight out of an old CLI
+    monkeypatch.setattr(memory, '_claude_stdin',
+                        lambda *a, **k: 'sure!\n{"summary":"raw"}\n')
+    assert memory._claude_json('p', str(tmp_path), {}) == {'summary': 'raw'}
+    assert memory.last_call_cost is None
+
+
+def test_the_fallback_parser_recovers_a_list_not_only_an_object():
+    """Slicing '{'..'}' across a two-element array yields '{...}, {...}', which
+    is not JSON — so a list-shaped answer used to come back as None."""
+    two = '[{"a":1},{"b":2}]'
+    assert memory._parse_json(two) == [{'a': 1}, {'b': 2}]
+    assert memory._parse_json('here:\n```json\n' + two + '\n```') == [{'a': 1}, {'b': 2}]
+    assert memory._parse_json('{"a":1}') == {'a': 1}
+    assert memory._parse_json('no json here') is None
+
+
+def test_a_spend_cap_reaches_the_headless_call(monkeypatch, tmp_path):
+    import json as _json
+    sb = Sandbox(monkeypatch, tmp_path)
+    from claude_sessions import config
+    s = config.load_settings()
+    assert memory._budget_args() == []          # 0 = off, the default
+    s['headless_budget_usd'] = 2.5
+    config.save_settings(s)
+    assert memory._budget_args() == ['--max-budget-usd', '2.5']

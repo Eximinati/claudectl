@@ -88,10 +88,23 @@ def test_every_world_has_the_parts_a_token_cannot_express():
 
 def test_world_hover_is_scoped_and_costs_one_class():
     """Per-world hover rides the existing delegated listener — a class toggle,
-    not a new handler per card."""
+    not a new handler per card.
+
+    The count is of PERSISTENT pointermove listeners. A drag handle attaches one
+    on pointerdown and removes it on pointerup, which is not the thing this
+    guards against (a listener per card, alive for the life of the page) — so
+    listeners added inside a handler are excluded, and the removal is asserted
+    instead. Counting every occurrence would have made the next drag handle
+    "fail" the world-hover rule it has nothing to do with.
+    """
     assert "_mark(el)" in PAGE
     assert "el.classList.add('hv')" in PAGE
-    assert PAGE.count("addEventListener('pointermove'") == 1
+    persistent = len(re.findall(r"(?<!document\.)addEventListener\('pointermove'", PAGE))
+    assert persistent == 1, 'a second always-on pointermove listener appeared'
+    # every transient one must be torn down, or a drag keeps moving after mouseup
+    assert (PAGE.count("document.addEventListener('pointermove'")
+            == PAGE.count("document.removeEventListener('pointermove'")), \
+        'a transient pointermove listener is never removed'
     for skin in ('anime', 'cyber', 'deck', 'graph'):
         assert f'html.skin-{skin} .spot.hv' in _CSS, skin
 

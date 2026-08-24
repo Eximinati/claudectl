@@ -188,9 +188,10 @@ def _claude_cli(args, timeout=120):
     if not exe:
         return False, 'claude.exe not found'
     try:
+        from .proc import no_window_flags
         r = subprocess.run([exe] + args, capture_output=True, text=True,
                            encoding='utf-8', errors='ignore',
-                           timeout=timeout)
+                           timeout=timeout, creationflags=no_window_flags)
     except Exception as e:
         return False, f'{e}'
     out = ((r.stdout or '') + (r.stderr or '')).strip()

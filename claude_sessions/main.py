@@ -108,6 +108,18 @@ def run():
         print(msg)
         sys.exit(0 if ok else 1)
 
+    # ── one-time settings migrations ──────────────────────────────
+    # HERE, below every scriptable dispatch above: `claudectl statusline` runs
+    # on every conversation turn and must never pay for a settings write, and
+    # __main__.py deliberately routes it before this module is even imported.
+    try:
+        from .config import migrate_settings
+        _s, _changed = migrate_settings(load_settings())
+        if _changed:
+            save_settings(_s)
+    except Exception:
+        pass          # a migration must never be the reason claudectl won't start
+
     # ── interface pick: --gui / --tui flags beat the ui_mode setting ──
     if '--gui' in sys.argv[1:] or (
             '--tui' not in sys.argv[1:]
@@ -613,7 +625,10 @@ def build_launch_command(path, encoded_name, choice, opts):
     # environment, so this is the natural place for it — and it is the step from
     # a personal tool to one a team can point at a shared backend.
     from .config import otel_env
-    env.update(otel_env())
+    # one read, two consumers: otel_env() would otherwise load it again, and the
+    # fallback/autocompact flags below need the same dict
+    settings = load_settings()
+    env.update(otel_env(settings))
     extra = read_extra_paths(proj_folder)
     if extra:
         env['PATH'] = ';'.join(extra) + ';' + env.get('PATH', '')
@@ -649,8 +664,24 @@ def build_launch_command(path, encoded_name, choice, opts):
         from .omniroute import prepare_launch
         env.update(prepare_launch(omniroute_model))
         args += ['--model', omniroute_model]
-    if opts['perm']:
-        args += ['--permission-mode', opts['perm']]
+    # `auto` is dropped where the classifier cannot run — with OmniRoute in
+    # play the model is whatever the free-tier catalog served, and the
+    # classifier is a SEPARATE request that would go to the same base URL. The
+    # model check reads the OmniRoute model when there is one, because that is
+    # the model the session will actually be on.
+    from .config import effective_perm
+    perm = effective_perm(opts['perm'], omniroute_model or opts['model'],
+                          omniroute_model)
+    if perm:
+        args += ['--permission-mode', perm]
+    # Model fallback chain for an overloaded primary. Unrelated to failover.py,
+    # which retries a DIFFERENT free-tier model through claudectl's own proxy;
+    # this is Claude Code's own retry against the Anthropic API.
+    fbs = [m for m in (settings.get('launch_fallback_models') or []) if m]
+    if fbs:
+        args += ['--fallback-model', ','.join(fbs)]
+    if settings.get('launch_autocompact'):
+        args += ['--autocompact', settings['launch_autocompact']]
     if opts.get('agent'):
         args += ['--agent', opts['agent']]
     # Selected library agents are NOT passed inline (--agents JSON overruns the

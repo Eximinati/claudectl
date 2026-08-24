@@ -236,10 +236,15 @@ TEMPLATES = {
     },
     'log-permission-denials': {
         # feeds the permission-fatigue work: what actually gets denied, rather
-        # than what someone guessed would be
+        # than what someone guessed would be. --denied writes the STRUCTURED
+        # sidecar (.claudectl/denied.jsonl); without the flag this same script
+        # is the plain bash log, where a denial was indistinguishable from a
+        # success and every non-Bash denial was dropped on the floor.
         'event': 'PermissionDenied',
-        'entry': {'hooks': [{'type': 'command', 'command': _py_hook('logbash_hook.py')}]},
-        'desc': 'Record every denied permission so the deny-rule generator learns from real ones',
+        'entry': {'hooks': [{'type': 'command',
+                             'command': _py_hook('logbash_hook.py') + ' --denied'}]},
+        'desc': 'Record every denied permission (tool, target, reason) so the '
+                'allowlist and auto-mode proposals learn from real ones',
     },
     'notify-on-subagent-finish': {
         'event': 'SubagentStop',
@@ -663,9 +668,18 @@ def _ai_hook():
         "tool_name, tool_input). Keep it a one-liner.\n\n"
         f"REQUEST:\n{desc}"
     )
-    data = memory._parse_json(memory._claude_stdin(
-        prompt, os.getcwd(), crumbs=('CLAUDECTL', 'HOOK'),
-        label='Generating hook with Claude...'))
+    # the enum comes from EVENTS rather than being retyped — the prompt above
+    # already lists a SUBSET, and the two drifting apart is how a hook for a
+    # newer event (DirectoryAdded, Setup) gets rejected as invalid
+    schema = {'type': 'object',
+              'properties': {'event': {'type': 'string', 'enum': sorted(EVENTS)},
+                             'matcher': {'type': 'string'},
+                             'command': {'type': 'string'},
+                             'desc': {'type': 'string'}},
+              'required': ['event', 'command']}
+    data = memory._claude_json(
+        prompt, os.getcwd(), schema, crumbs=('CLAUDECTL', 'HOOK'),
+        label='Generating hook with Claude...')
     if not isinstance(data, dict):
         flash("Claude returned no valid hook", ok=False, secs=1.8)
         return

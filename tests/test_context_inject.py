@@ -99,3 +99,67 @@ def test_write_context_file_contains_transcript(monkeypatch, tmp_path):
     assert 'Refactor auth' in text
     assert 'account: default' in text
     assert 'hello world message' in text   # from make_jsonl's default preview text
+
+
+def test_injected_session_launches_in_the_default_permission_mode(monkeypatch, tmp_path):
+    """A new-chat-with-context launch must carry the same starting mode as one
+    started through the launch picker — it passed --model but never
+    --permission-mode, so it silently started in Claude Code's own default."""
+    import subprocess
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual = str(tmp_path / 'work' / 'alpha')
+    os.makedirs(actual, exist_ok=True)
+    enc = encode_component(actual)
+    folder = os.path.join(str(sb.projects), enc)
+    os.makedirs(folder, exist_ok=True)
+    make_jsonl(os.path.join(folder, 'aaaa0000-0000-0000-0000-000000000000.jsonl'),
+               title='Fix the bug')
+    config_mod.save_settings({'default_permission': 'auto',
+                              'default_model': 'claude-sonnet-5'})
+
+    calls = []
+    monkeypatch.setattr(subprocess, 'call', lambda *a, **k: calls.append((a, k)) or 0)
+    launched, _cap, _ = run_flow(monkeypatch, [*ENTER], ci.run, actual, folder, 'alpha')
+    assert launched is True
+    args = calls[0][0][0]
+    assert '--permission-mode' in args
+    assert args[args.index('--permission-mode') + 1] == 'auto'
+
+
+def test_a_project_default_wins_over_the_account_default(monkeypatch, tmp_path):
+    import subprocess
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual = str(tmp_path / 'work' / 'alpha')
+    os.makedirs(actual, exist_ok=True)
+    enc = encode_component(actual)
+    folder = os.path.join(str(sb.projects), enc)
+    os.makedirs(folder, exist_ok=True)
+    make_jsonl(os.path.join(folder, 'aaaa0000-0000-0000-0000-000000000000.jsonl'),
+               title='Fix the bug')
+    config_mod.save_settings({'default_permission': 'auto',
+                              'project_defaults': {enc: {'permission': 'plan'}}})
+
+    calls = []
+    monkeypatch.setattr(subprocess, 'call', lambda *a, **k: calls.append((a, k)) or 0)
+    run_flow(monkeypatch, [*ENTER], ci.run, actual, folder, 'alpha')
+    args = calls[0][0][0]
+    assert args[args.index('--permission-mode') + 1] == 'plan'
+
+
+def test_auto_is_not_claimed_for_a_model_that_cannot_run_it(monkeypatch, tmp_path):
+    import subprocess
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual = str(tmp_path / 'work' / 'alpha')
+    os.makedirs(actual, exist_ok=True)
+    enc = encode_component(actual)
+    folder = os.path.join(str(sb.projects), enc)
+    os.makedirs(folder, exist_ok=True)
+    make_jsonl(os.path.join(folder, 'aaaa0000-0000-0000-0000-000000000000.jsonl'),
+               title='Fix the bug')
+    config_mod.save_settings({'default_permission': 'auto',
+                              'default_model': 'claude-haiku-4-5'})
+
+    calls = []
+    monkeypatch.setattr(subprocess, 'call', lambda *a, **k: calls.append((a, k)) or 0)
+    run_flow(monkeypatch, [*ENTER], ci.run, actual, folder, 'alpha')
+    assert '--permission-mode' not in calls[0][0][0]

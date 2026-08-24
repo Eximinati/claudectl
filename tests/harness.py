@@ -176,6 +176,14 @@ class Sandbox:
             (main_mod, 'config_dir', cfg),
         ]:
             self.mp.setattr(mod, attr, val)
+        # hooks._load/_save(cfgdir=None) resolve this module attribute, and a
+        # test that omits cfgdir (an endpoint called with an empty body, a TUI
+        # screen that installs a hook) would otherwise write the REAL account's
+        # settings.json — which is how the user's statusline once ended up as
+        # the literal 'x' a test uses as a stand-in
+        import claude_sessions.hooks as hooks_mod
+        self.mp.setattr(hooks_mod, 'settings_path',
+                        os.path.join(cfg, 'settings.json'))
         # single-account world in tests — real accounts.py multi-dir merge
         # is exercised separately, not by every sandboxed TUI test
         self.mp.setattr(config, 'all_config_dirs', lambda: [('default', cfg)])

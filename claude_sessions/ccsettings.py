@@ -34,7 +34,10 @@ SCHEMA = {
     # — how it answers —
     'model':                  ('str', [], 'Default model id for new sessions',
                                'Model & reasoning'),
-    'fallbackModel':          ('str', [], 'Model used when the primary is overloaded',
+    # an ARRAY, not a string: the chain is tried in order, and 'default'
+    # expands to the default model. Declared as 'str' until it was checked
+    # against the docs, which meant a two-model chain could not be written.
+    'fallbackModel':          ('list', [], 'Models tried, in order, when the primary is overloaded',
                                'Model & reasoning'),
     'availableModels':        ('list', [], 'Restrict the model picker to these ids',
                                'Model & reasoning'),
@@ -42,6 +45,26 @@ SCHEMA = {
                                'Default reasoning effort', 'Model & reasoning'),
     'alwaysThinkingEnabled':  ('bool', [], 'Think before every response',
                                'Model & reasoning'),
+    # `effortLevel` above does not accept it — ultracode has its own key, and
+    # it means "xhigh, plus plan a dynamic workflow per substantive task"
+    'ultracode':              ('bool', [], 'xhigh effort plus a planned workflow per task',
+                               'Model & reasoning'),
+    # — who decides —
+    # NESTED: the same `permissions` block carries allow/deny/ask, which
+    # health.propose_allowlist and denygen write. _set_path read-modify-writes
+    # it so those survive. Note Claude Code ignores an 'auto' value here when it
+    # comes from a PROJECT settings file — this editor only ever writes the
+    # account's own settings.json, which is the scope where it works.
+    'permissions.defaultMode': ('enum', ['default', 'manual', 'acceptEdits', 'plan',
+                                         'auto', 'dontAsk', 'bypassPermissions'],
+                                'Permission mode new sessions start in '
+                                '(default = manual)', 'Permissions & auto mode'),
+    'permissions.disableAutoMode': ('enum', ['disable'],
+                                    'Remove auto mode from this account entirely',
+                                    'Permissions & auto mode'),
+    'autoMode':               ('json', [], 'Auto-mode classifier config — trusted '
+                               'infrastructure and rule overrides',
+                               'Permissions & auto mode'),
     # — what it remembers —
     'autoCompactEnabled':     ('bool', [], 'Compact the context automatically',
                                'Context & memory'),
@@ -89,10 +112,66 @@ SCHEMA = {
 GROUPS = list(dict.fromkeys(v[3] for v in SCHEMA.values()))
 
 
+#: sentinel for "this key is not set" — None and '' are both legal VALUES for
+#: some keys, so absence needs its own marker
+_MISSING = object()
+
+
+def _get_path(d, key):
+    """Read a possibly dotted key. `permissions.defaultMode` lives inside the
+    same `permissions` block that carries allow/deny/ask rules, so it cannot be
+    a top-level key and cannot be read as one."""
+    cur = d
+    for part in key.split('.'):
+        if not isinstance(cur, dict) or part not in cur:
+            return _MISSING
+        cur = cur[part]
+    return cur
+
+
+def _set_path(d, key, value):
+    """Write a dotted key IN PLACE, creating intermediate dicts. Every level is
+    read-modify-written, so the siblings health.propose_allowlist and denygen
+    put in `permissions` survive."""
+    parts = key.split('.')
+    cur = d
+    for part in parts[:-1]:
+        nxt = cur.get(part)
+        cur[part] = dict(nxt) if isinstance(nxt, dict) else {}
+        cur = cur[part]
+    cur[parts[-1]] = value
+
+
+def _del_path(d, key):
+    """Remove a dotted key, and prune a block this left empty — an empty
+    `"permissions": {}` is noise Claude Code did not write and we should not
+    leave behind. Returns True when something was removed."""
+    parts = key.split('.')
+    cur = d
+    chain = []
+    for part in parts[:-1]:
+        if not isinstance(cur.get(part), dict):
+            return False
+        chain.append((cur, part))
+        cur = cur[part]
+    if parts[-1] not in cur:
+        return False
+    cur.pop(parts[-1])
+    for parent, part in reversed(chain):
+        if parent[part] == {}:
+            parent.pop(part)
+    return True
+
+
 def read(cfgdir=None):
     """{key: value} for every schema key the account actually sets."""
     s = hooks._load(cfgdir)
-    return {k: s[k] for k in SCHEMA if k in s}
+    out = {}
+    for k in SCHEMA:
+        v = _get_path(s, k)
+        if v is not _MISSING:
+            out[k] = v
+    return out
 
 
 def read_all():
@@ -114,15 +193,14 @@ def write(key, value, cfgdir=None):
     kind, choices = SCHEMA[key][0], SCHEMA[key][1]
     if value is None or value == '':
         s = hooks._load(cfgdir)
-        if key not in s:
+        if not _del_path(s, key):
             return True, 'already unset'
-        s.pop(key)
         return bool(hooks._save(s, cfgdir)), 'cleared %s' % key
     ok, coerced = _coerce(kind, choices, value)
     if not ok:
         return False, coerced
     s = hooks._load(cfgdir)
-    s[key] = coerced
+    _set_path(s, key, coerced)
     return bool(hooks._save(s, cfgdir)), 'set %s' % key
 
 

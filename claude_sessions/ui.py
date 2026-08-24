@@ -777,6 +777,85 @@ def _failover_menu():
             flash(msg, ok=ok, secs=2)
 
 
+def _budget_label(s):
+    cap = s.get('headless_budget_usd') or 0
+    return f"${cap:g} per call" if cap else 'off'
+
+
+def _automode_label():
+    """What the accounts currently start sessions in — 'mixed' when they
+    disagree, which is the state a machine is in after any hand-editing."""
+    try:
+        from . import automode
+        modes = {automode.default_mode(d) or '(inherit)'
+                 for _n, d in _c.all_config_dirs()}
+    except Exception:
+        return 'unavailable'
+    return modes.pop() if len(modes) == 1 else f'mixed ({len(modes)})'
+
+
+def _automode_menu():
+    """Per-account starting mode + the trusted-infrastructure entries.
+
+    Writes each ACCOUNT's settings.json: the classifier deliberately ignores an
+    `autoMode` block in a project file, and `defaultMode: auto` does not take
+    effect from one either.
+    """
+    from . import automode
+    while True:
+        accts = list(_c.all_config_dirs())
+        items = []
+        for name, d in accts:
+            mode = automode.default_mode(d) or '(inherit built-in)'
+            n_env = len([e for e in automode.environment(d) if e != '$defaults'])
+            items.append((f"{name:<12}  {mode:<20}{C_DIM}{n_env} trusted entry(ies){C_RESET}",
+                          ('acct', name, d)))
+        items += [(f"{'─' * W}", None),
+                  ("Show the rules the classifier actually uses", ('rules', 'config', '')),
+                  ("Show the built-in rules", ('rules', 'defaults', '')),
+                  ("Back", 'back')]
+        sel = menu(items, "AUTO MODE")
+        if not sel or sel == 'back':
+            return
+        kind = sel[0]
+        if kind == 'rules':
+            import json as _json
+            ok, data = (automode.config_json() if sel[1] == 'config'
+                        else automode.defaults_json())
+            body = (_json.dumps(data, indent=2) if ok and not isinstance(data, str)
+                    else str(data))
+            # pager takes (crumbs, lines) — crumbs first
+            pager(('CLAUDECTL', 'AUTO MODE', sel[1].upper()), body.splitlines())
+            continue
+        _name, cfgdir = sel[1], sel[2]
+        what = menu([("Starting permission mode", 'mode'),
+                     ("Trusted infrastructure (autoMode.environment)", 'env'),
+                     ("Reset this account's auto-mode config", 'reset'),
+                     ("Back", 'back')], f"AUTO MODE — {_name}")
+        if not what or what == 'back':
+            continue
+        if what == 'mode':
+            pick = menu([(l or 'inherit', v if v else '__unset__')
+                         for v, l in zip(PERMS, PERM_LABELS)], "STARTING MODE")
+            if pick is not None:
+                ok, msg = automode.set_default_mode(
+                    '' if pick == '__unset__' else pick, cfgdir)
+                flash(msg, ok=ok, secs=1.8)
+        elif what == 'env':
+            # "$defaults" is never shown: it is re-added on save, and a user
+            # deleting it would silently discard every built-in trust slot
+            cur = [e for e in automode.environment(cfgdir) if e != '$defaults']
+            v = text_input("Trusted infrastructure (one per line, plain English; "
+                           "blank = defaults only):", default=' | '.join(cur))
+            if v is not None:
+                ok, msg = automode.set_environment(
+                    [x.strip() for x in v.split('|')], cfgdir)
+                flash(msg, ok=ok, secs=1.8)
+        elif what == 'reset':
+            ok, msg = automode.reset(cfgdir)
+            flash(str(msg), ok=ok, secs=2)
+
+
 def settings_menu():
     """Edit ~/.claude/claudectl.json interactively."""
     while True:
@@ -787,7 +866,8 @@ def settings_menu():
         cfg_now = render.trunc(s['claude_config_dir'] or 'default (~/.claude)', wv)
         eff = s['default_effort'] or 'default'
         mod = s['default_model'] or 'default'
-        perm = s['default_permission'] or 'default'
+        _pv = s['default_permission'] or ''
+        perm = next((l for v, l in zip(PERMS, PERM_LABELS) if v == _pv), _pv or 'account default')
         think = s.get('default_max_thinking') or 'default'
         submod = next((l for v, l in zip(MODELS, MODEL_LABELS)
                        if v == s.get('default_subagent_model', '')), 'default')
@@ -800,10 +880,12 @@ def settings_menu():
             (f"Config dir  :  {cfg_now}   {C_DIM}(CLAUDE_CONFIG_DIR / account){C_RESET}", 'config_dir'),
             (f"Effort      :  {eff}   {C_DIM}(preselected in launch options){C_RESET}", 'effort'),
             (f"Model       :  {mod}   {C_DIM}(preselected in launch options){C_RESET}", 'model'),
-            (f"Permissions :  {perm}   {C_DIM}(--permission-mode){C_RESET}", 'permission'),
+            (f"Permissions :  {perm}   {C_DIM}({_c.PERM_PROFILES.get(_pv, '--permission-mode')}){C_RESET}", 'permission'),
             (f"Think cap   :  {think}   {C_DIM}(MAX_THINKING_TOKENS — save tokens){C_RESET}", 'max_thinking'),
             (f"Subagent mdl:  {submod}   {C_DIM}(CLAUDE_CODE_SUBAGENT_MODEL){C_RESET}", 'subagent_model'),
             (f"Economy mdl :  {xmod}   {C_DIM}(claudectl's own memory/gen calls — cuts cost){C_RESET}", 'extract_model'),
+            (f"Auto mode   :  {_automode_label()}   {C_DIM}(classifier config, per account){C_RESET}", 'automode'),
+            (f"Budget cap  :  {_budget_label(s)}   {C_DIM}(--max-budget-usd on claudectl's own calls){C_RESET}", 'headless_budget'),
             (f"Theme       :  {theme}", 'theme'),
             (f"Interface   :  {s.get('ui_mode', 'tui').upper()}   {C_DIM}(TUI here / GUI in browser — or run --gui){C_RESET}", 'ui_mode'),
             (f"Failover    :  {_failover_label(s)}   {C_DIM}(retry a dead model instead of hanging){C_RESET}", 'failover'),
@@ -843,6 +925,18 @@ def settings_menu():
                     s['claude_config_dir'] = v
                     save_settings(s)
                     flash("Saved — restart claudectl to apply", secs=1.6)
+        elif sel == 'automode':
+            _automode_menu()
+        elif sel == 'headless_budget':
+            v = text_input("Max $ per claudectl headless call (0 = no cap):",
+                           default=str(s.get('headless_budget_usd') or 0))
+            if v is not None:
+                try:
+                    s['headless_budget_usd'] = max(0.0, float(v or 0))
+                    save_settings(s)
+                    flash("Saved")
+                except ValueError:
+                    flash("Not a number", ok=False, secs=1.4)
         elif sel == 'theme':
             _theme_picker(s)
         elif sel == 'failover':
@@ -1187,7 +1281,8 @@ def launch_options_menu(project_name, defaults=None, is_new=False, agents=None,
             frame.append(f"    {bcol}│{C_RESET} {lc}{render.trunc(body, 44):<44}{C_RESET} {bcol}│{C_RESET}")
         frame.append(f"    {bcol}╰{'─' * 46}╯{C_RESET}")
         frame.append(
-            f"  {sel_c(2)}{'▸' if field == 2 else ' '}  Permissions :  [ {perm_color}{perm_label:<18}{C_RESET}{sel_c(2)} ]{C_RESET}   {C_DIM}← → cycle{C_RESET}")
+            f"  {sel_c(2)}{'▸' if field == 2 else ' '}  Permissions :  [ {perm_color}{perm_label:<18}{C_RESET}{sel_c(2)} ]{C_RESET}   "
+            f"{C_DIM}{_c.PERM_PROFILES.get(PERMS[perm_idx], '')}{C_RESET}")
         if is_new:
             frame += [
                 f"  {sel_c(3)}{'▸' if field == 3 else ' '}  Worktree    :  [ {render.trunc(_wt_label(), 18):<18} ]{C_RESET}   {C_DIM}← → cycle, → on 'custom'{C_RESET}",
@@ -1229,9 +1324,18 @@ def launch_options_menu(project_name, defaults=None, is_new=False, agents=None,
         adv_level, adv_msg = _c.advise(MODELS[model_idx], eff_cur)
         adv_c = {'ok': C_GREEN, 'tip': C_SRCH, 'warn': _c.C_WARN}.get(adv_level, C_DIM)
         adv_tag = {'ok': '', 'tip': 'tip: ', 'warn': 'note: '}.get(adv_level, '')
+        # Separate from advise(): a permission note depends on model AND mode,
+        # and advise() is precomputed by the GUI as a model x effort matrix.
+        pn_level, pn_msg = _c.perm_note(PERMS[perm_idx], MODELS[model_idx])
         frame += [
             '',
             f"  {adv_c}{render.trunc(adv_tag + adv_msg, render.content_width() - 4)}{C_RESET}",
+        ]
+        if pn_msg:
+            pn_c = {'warn': _c.C_WARN}.get(pn_level, C_SRCH)
+            frame.append(
+                f"  {pn_c}{render.trunc('note: ' + pn_msg, render.content_width() - 4)}{C_RESET}")
+        frame += [
             render.hint_keys([('↑↓', 'field'), ('← →', 'change'), ('1-4', 'preset'),
                               ('?', 'guide'), ('ENTER', 'launch'), ('ESC', 'back')]),
         ]

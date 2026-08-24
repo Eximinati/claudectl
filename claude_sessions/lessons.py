@@ -89,6 +89,25 @@ def _transcript_tail(proj_folder, sid):
     return '\n\n'.join(reversed(parts))
 
 
+#: enforced by --json-schema; the prompt below still spells the shape out for
+#: the fallback path (see memory._claude_json)
+LESSONS_SCHEMA = {
+    'type': 'object',
+    'properties': {'lessons': {'type': 'array', 'items': {
+        'type': 'object',
+        'properties': {
+            'title': {'type': 'string'},
+            'summary': {'type': 'string'},
+            'kind': {'type': 'string',
+                     'enum': ['error_fix', 'decision', 'correction', 'preference']},
+            'confidence': {'type': 'number'},
+            'files': {'type': 'array', 'items': {'type': 'string'}},
+        },
+        'required': ['title', 'summary', 'kind', 'confidence']}}},
+    'required': ['lessons'],
+}
+
+
 def extract_lessons(project_path, proj_folder, sid):
     """ONE Claude call → [{title,summary,kind,confidence,files}] (≤8)."""
     corpus = _transcript_tail(proj_folder, sid)
@@ -106,10 +125,10 @@ def extract_lessons(project_path, proj_folder, sid):
         f"At most {MAX_LESSONS} lessons. Empty list if nothing durable.\n\n"
         f"TRANSCRIPT (most recent session):\n{corpus}"
     )
-    data = memory._parse_json(memory._claude_stdin(
-        prompt, os.path.abspath(project_path),
+    data = memory._claude_json(
+        prompt, os.path.abspath(project_path), LESSONS_SCHEMA,
         crumbs=('CLAUDECTL', 'LESSONS', sid[:8]),
-        label=f"Learning from session {sid[:8]}..."))
+        label=f"Learning from session {sid[:8]}...")
     if not isinstance(data, dict):
         return []
     out = []

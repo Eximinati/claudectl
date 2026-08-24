@@ -215,6 +215,30 @@ def _context_bit(data):
         return ''
 
 
+def _reset_at(epoch):
+    """`resets_at` → short local time ('16:49' today, else 'Sat 08:59'), or ''.
+
+    The payload gives Unix epoch SECONDS. usage._fmt_reset takes an ISO string
+    because the OAuth endpoint it polls returns one — same display, different
+    input, so this converts rather than calling it with the wrong type. Epoch
+    milliseconds would render as a date in the year 56000, so the magnitude is
+    checked: `.claude.json` genuinely does use ms elsewhere in this codebase.
+    """
+    if not isinstance(epoch, (int, float)) or isinstance(epoch, bool):
+        return ''
+    try:
+        # local import, like _iso_age above: this module runs on EVERY turn and
+        # every import it can defer is latency it does not pay
+        from datetime import datetime
+        if epoch > 1e11:            # milliseconds, not seconds
+            epoch = epoch / 1000.0
+        dt = datetime.fromtimestamp(epoch).astimezone()
+        now = datetime.now(dt.tzinfo)
+        return dt.strftime('%H:%M') if dt.date() == now.date() else dt.strftime('%a %H:%M')
+    except Exception:
+        return ''
+
+
 def _limit_bits(data):
     """5h and 7d plan windows, straight off stdin.
 
@@ -222,16 +246,23 @@ def _limit_bits(data):
     That must never happen here: a thread started per turn, in a process Claude
     Code cancels whenever a new update arrives, is the wrong shape entirely —
     and the payload already carries the numbers for free.
+
+    The percentage alone does not answer the question you actually have when you
+    look at it, which is "how long until I get it back" — so the reset time
+    rides along, in the same '→ 16:49' shape the usage grid already uses.
     """
     out = []
     try:
         rl = data.get('rate_limits') or {}
         for key, label in (('five_hour', '5h'), ('seven_day', '7d')):
-            pct = (rl.get(key) or {}).get('used_percentage')
+            win = rl.get(key) or {}
+            pct = win.get('used_percentage')
             if not isinstance(pct, (int, float)) or isinstance(pct, bool):
                 continue
             col = _c.C_ERR if pct >= 90 else (_c.C_WARN if pct >= 75 else _c.C_DIM)
-            out.append(f'{col}{label} {int(pct)}%{_c.C_RESET}')
+            at = _reset_at(win.get('resets_at'))
+            out.append(f'{col}{label} {int(pct)}%{_c.C_RESET}'
+                       + (f'{_c.C_DIM}→{at}{_c.C_RESET}' if at else ''))
     except Exception:
         pass
     return out

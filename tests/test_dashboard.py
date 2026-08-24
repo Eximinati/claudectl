@@ -161,11 +161,7 @@ def test_dashboard_week_is_7_and_increasing(monkeypatch, tmp_path):
 
 def test_dashboard_jobs_elapsed_is_int(monkeypatch, tmp_path):
     _fresh(monkeypatch, tmp_path)
-    job = {'id': 'fakejob123', 'status': 'running', 'label': 'test job',
-           'messages': [], 'error': '', 'gate': None, 'decision': None,
-           'decision_evt': threading.Event(), 'inputs': [], 'started': time.time(),
-           'cancelled': False, 'cancel_event': threading.Event(), 'procs': [],
-           'lock': threading.RLock()}
+    job = gui_api.new_job('test job', jid='fakejob123')
     with gui_api._JOBS_LOCK:
         gui_api._JOBS[job['id']] = job
     srv, base = _serve(monkeypatch)
@@ -297,3 +293,85 @@ def test_the_stage_surface_comes_down_when_unfocused():
     assert "classList.toggle('stage-blur', !!on)" in PAGE
     assert 'if(window.STAGE)STAGE.blur(!v);' in PAGE, 'setVis does not call it'
     assert 'html.stage-blur #stage{visibility:hidden}' in PAGE
+
+
+# ── the dashboard's new answers ───────────────────────────────
+
+def test_today_is_split_by_account_in_tokens(monkeypatch, tmp_path):
+    """The quota ring stacks one arc per account. Tokens are the only
+    cross-account aggregate that is genuinely additive — an account's quota
+    `pct` is a share of ITS OWN window, so summing five of those produces a
+    number that looks like a total and means nothing."""
+    _fresh(monkeypatch, tmp_path)
+    srv, base = _serve(monkeypatch)
+    try:
+        _code, d = _req(f'{base}/api/dashboard')
+    finally:
+        srv.shutdown()
+    today = d['today']
+    assert isinstance(today['by_account'], dict)
+    assert all(isinstance(v, int) for v in today['by_account'].values())
+    # the parts must reconcile with the whole, or the ring lies about the total
+    if today['by_account']:
+        assert sum(today['by_account'].values()) == today['tokens']
+
+
+def test_the_dashboard_never_sums_quota_percentages():
+    """A guard on the RULE, not on one call site: percentages of five separate
+    windows are not addable, and the moment someone writes `+w.pct` in a reduce
+    the card starts reporting a confident wrong number."""
+    import re
+    from claude_sessions.gui_html import PAGE
+    js = PAGE[PAGE.index('<script>'):]
+    bad = re.findall(r'reduce\([^)]*\bpct\b[^)]*\+', js)
+    assert not bad, 'quota percentages are being summed: %s' % bad
+
+
+def test_finished_jobs_reach_the_dashboard_with_real_durations(monkeypatch, tmp_path):
+    """`elapsed` used to be `now - started`, so a job that ran for 12 seconds an
+    hour ago reported an hour. The Activity drawer shows finished jobs, which is
+    exactly where that would have been visible."""
+    _fresh(monkeypatch, tmp_path)
+    now = time.time()
+    # via the factory, NOT a hand-built literal: this dict went stale twice
+    # against job_status and each time surfaced as a 500, not a bad fixture
+    job = gui_api.new_job('Memory build', jid='oldjob', status='done',
+                          messages=['wrote 18 entities'],
+                          started=now - 3600, ended=now - 3558)
+    with gui_api._JOBS_LOCK:
+        gui_api._JOBS[job['id']] = job
+    srv, base = _serve(monkeypatch)
+    try:
+        _code, d = _req(f'{base}/api/dashboard')
+    finally:
+        srv.shutdown()
+        with gui_api._JOBS_LOCK:
+            gui_api._JOBS.pop('oldjob', None)
+    j = next(x for x in d['jobs'] if x['id'] == 'oldjob')
+    assert j['status'] == 'done'
+    assert j['elapsed'] == 42, j          # how long it RAN, not how long ago
+    assert j['ended'] and j['last'] == 'wrote 18 entities'
+
+
+def test_wiring_reports_a_statusline_that_will_never_be_drawn(monkeypatch, tmp_path):
+    """Installed-but-invisible looks identical to working from the settings
+    file: the classic renderer simply does not draw a statusLine."""
+    _fresh(monkeypatch, tmp_path)
+    from claude_sessions import hooks
+    from claude_sessions import config as _cfg
+    # the SAME dir _wiring() will read — hooks._load(None) resolves the module
+    # default, which is not necessarily the account the sandbox reports
+    _name, cfgdir = list(_cfg.all_config_dirs())[0]
+    s = hooks._load(cfgdir)
+    s['statusLine'] = {'type': 'command', 'command': 'x'}
+    s['tui'] = 'default'
+    hooks._save(s, cfgdir)
+    w = gui_api._wiring()
+    row = next(r for r in w['accounts'] if r['dir'] == cfgdir)
+    assert row['statusline'] is True
+    assert row['statusline_hidden'] is True
+    assert w['ok'] == 0                   # hidden does not count as wired
+
+    s['tui'] = 'fullscreen'
+    hooks._save(s, cfgdir)
+    assert gui_api._wiring()['accounts'][0]['statusline_hidden'] is False

@@ -133,3 +133,58 @@ def test_no_settings_writer_bypasses_the_atomic_helper():
             if 'settings' in src or 'settings' in f.stem:
                 offenders.append(f'{f.name}:{node.lineno}')
     assert not offenders, 'settings written without write_atomic: %s' % offenders
+
+
+def test_no_captured_subprocess_spawns_a_visible_console():
+    """Policy, and it is a VISIBLE bug: on Windows every console child gets its
+    own window unless CREATE_NO_WINDOW is passed. Opening the Repos or Tools tab
+    runs git across a dozen repos, so the user watched a dozen black windows
+    flash open and shut — while the output went to a pipe and the window showed
+    nothing at all.
+
+    Only CAPTURED spawns are covered. A spawn that deliberately shows a console
+    (proc.spawn_terminal, the failover proxy's log window, launching claude
+    itself) passes CREATE_NEW_CONSOLE and is exempt by that fact.
+    """
+    import ast
+    import pathlib
+    pkg = pathlib.Path(__file__).resolve().parent.parent / 'claude_sessions'
+    offenders = []
+    for f in sorted(pkg.glob('*.py')):
+        src = f.read_text(encoding='utf-8')
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = (fn.attr if isinstance(fn, ast.Attribute) else
+                    fn.id if isinstance(fn, ast.Name) else '')
+            if name not in ('run', 'Popen'):
+                continue
+            if not (isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name)
+                    and fn.value.id == 'subprocess'):
+                continue
+            seg = ast.get_source_segment(src, node) or ''
+            captured = ('capture_output' in seg or 'subprocess.PIPE' in seg
+                        or 'DEVNULL' in seg)
+            if not captured:
+                continue                      # inherits our console on purpose
+            if 'creationflags' in seg:
+                continue                      # says what it wants, either way
+            offenders.append(f'{f.name}:{node.lineno}')
+    assert not offenders, (
+        'captured subprocess with no creationflags (flashes a console on '
+        'Windows): %s' % offenders)
+
+
+def test_a_test_cannot_write_a_real_file_outside_the_temp_area():
+    """The guard that exists because a run of this suite replaced the real
+    ~/.claude/settings.json statusLine with the literal 'x' a test uses as a
+    stand-in. conftest wraps the one helper every settings writer routes
+    through; if that wrapper stops being armed, this passes silently and the
+    next leak reaches the user's machine, so assert it bites."""
+    import pytest
+    from claude_sessions import config
+    real = os.path.join(os.path.expanduser('~'), '.claude', 'settings.json')
+    with pytest.raises(AssertionError, match='outside the pytest temp area'):
+        config.write_atomic(real, '{}')

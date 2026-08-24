@@ -282,8 +282,36 @@ const IKIND = {
         c.stroke();
       }
     }
-    // value arc
-    if (v > 0.001) {
+    /* value arc — ONE arc, or one arc per segment.
+       `segments` exists because a single number cannot answer "how much of this
+       is whose". Each entry is {v, color}: v is that segment's share of the
+       whole (they sum to <= 1), and the arcs are laid end to end from 12
+       o'clock. A stacked arc is the right shape precisely when the parts ARE
+       additive — which is why the dashboard feeds it tokens and never
+       percentages of five separate quotas. */
+    const segs = Array.isArray(D.segments) ? D.segments.filter(s => s && s.v > 0.001) : null;
+    if (segs && segs.length) {
+      if (SK.glow) {
+        c.shadowColor = iRgba(tone, SK.glow * 0.5);
+        c.shadowBlur = 8 * SK.glow;
+      }
+      c.lineWidth = lww;
+      // butt caps between segments: a round cap would overlap its neighbour and
+      // make two adjacent shares look like one
+      c.lineCap = segs.length > 1 ? 'butt' : SK.cap;
+      // ALWAYS normalised: the segments together fill exactly `v`, whatever
+      // scale the caller happened to hand over. Leaving a gap when they sum to
+      // less than 1 would read as unaccounted usage rather than as rounding.
+      let a0 = -Math.PI / 2;
+      const total = segs.reduce((n, s) => n + s.v, 0) || 1;
+      for (const s of segs) {
+        const a1 = a0 + TAU2 * v * (s.v / total);
+        c.strokeStyle = s.color || tone;
+        c.beginPath(); c.arc(cx, cy, R, a0, a1); c.stroke();
+        a0 = a1;
+      }
+      c.shadowBlur = 0;
+    } else if (v > 0.001) {
       const g = c.createLinearGradient(cx - R, cy - R, cx + R, cy + R);
       g.addColorStop(0, tone);
       g.addColorStop(1, D.tone ? tone : P.accent2);
