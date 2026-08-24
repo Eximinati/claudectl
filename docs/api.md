@@ -19,6 +19,8 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/agents/library` | `api_agents_library` | — |
 | `/api/agents/read` | `api_agent_read` | — |
 | `/api/agents/session` | `api_agents_session_get` | — |
+| `/api/automode` | `api_automode` | Auto mode, per account: the mode sessions start in, the trusted- |
+| `/api/automode/config` | `api_automode_config` | The rules the classifier actually uses, straight from the CLI. |
 | `/api/background-agents` | `api_background_agents` | — |
 | `/api/brief` | `api_brief` | What to work on, and what changed since the last session. |
 | `/api/cc-settings` | `api_cc_settings_get` | Claude Code's own settings.json, per account, with the schema that says |
@@ -86,6 +88,7 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/agents/create` | `api_agent_create` | — |
 | `/api/agents/delete` | `api_agent_delete` | — |
 | `/api/agents/session` | `api_agents_session` | — |
+| `/api/automode` | `api_automode_set` | Set the starting mode and/or the environment entries for ONE account. |
 | `/api/cc-settings` | `api_cc_settings_set` | — |
 | `/api/claude-md/scaffold` | `api_claude_md_scaffold` | — |
 | `/api/conventions/sync` | `api_conventions_sync` | — |

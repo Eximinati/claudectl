@@ -320,3 +320,63 @@ def test_an_unknown_key_is_refused(acct):
 def test_a_list_setting_accepts_what_a_person_would_type(acct):
     ccsettings.write('availableModels', 'sonnet, opus\nhaiku', str(acct))
     assert ccsettings.read(str(acct))['availableModels'] == ['sonnet', 'opus', 'haiku']
+
+
+def test_a_nested_key_never_clobbers_its_siblings(tmp_path, monkeypatch):
+    """`permissions.defaultMode` lives in the same block as the allow/deny/ask
+    rules health.propose_allowlist and denygen write. A flat `s[key]=value`
+    would replace the whole block with one key."""
+    import json
+    acct = tmp_path / 'acct'
+    acct.mkdir()
+    (acct / 'settings.json').write_text(json.dumps({
+        'permissions': {'allow': ['Bash(git status:*)'], 'deny': ['Read(.env)']},
+        'model': 'opus'}), encoding='utf-8')
+
+    ok, msg = ccsettings.write('permissions.defaultMode', 'auto', str(acct))
+    assert ok, msg
+    got = json.loads((acct / 'settings.json').read_text(encoding='utf-8'))
+    assert got['permissions'] == {'allow': ['Bash(git status:*)'],
+                                  'deny': ['Read(.env)'], 'defaultMode': 'auto'}
+    assert got['model'] == 'opus'
+    assert ccsettings.read(str(acct))['permissions.defaultMode'] == 'auto'
+
+    # clearing removes only that key, and leaves the block it shares
+    ok, _m = ccsettings.write('permissions.defaultMode', '', str(acct))
+    assert ok
+    got = json.loads((acct / 'settings.json').read_text(encoding='utf-8'))
+    assert got['permissions'] == {'allow': ['Bash(git status:*)'], 'deny': ['Read(.env)']}
+    assert 'permissions.defaultMode' not in ccsettings.read(str(acct))
+
+
+def test_clearing_a_nested_key_prunes_a_block_it_emptied(tmp_path):
+    """An empty `"permissions": {}` is noise claudectl put there and should
+    take back — but only when claudectl is what created it."""
+    import json
+    acct = tmp_path / 'acct'
+    acct.mkdir()
+    (acct / 'settings.json').write_text('{}', encoding='utf-8')
+    ccsettings.write('permissions.defaultMode', 'plan', str(acct))
+    ccsettings.write('permissions.defaultMode', '', str(acct))
+    assert json.loads((acct / 'settings.json').read_text(encoding='utf-8')) == {}
+
+
+def test_the_enum_refuses_a_mode_claude_code_does_not_have(tmp_path):
+    acct = tmp_path / 'acct'
+    acct.mkdir()
+    ok, msg = ccsettings.write('permissions.defaultMode', 'yolo', str(acct))
+    assert not ok and 'expected one of' in msg
+    # and the real ones are all accepted
+    for mode in ('default', 'manual', 'acceptEdits', 'plan', 'auto',
+                 'dontAsk', 'bypassPermissions'):
+        assert ccsettings.write('permissions.defaultMode', mode, str(acct))[0], mode
+
+
+def test_fallback_model_is_a_chain_not_a_string(tmp_path):
+    """The docs specify an array — declared as 'str' it could only ever hold
+    one model, which is not a fallback CHAIN."""
+    acct = tmp_path / 'acct'
+    acct.mkdir()
+    ccsettings.write('fallbackModel', 'claude-sonnet-5, claude-haiku-4-5', str(acct))
+    assert ccsettings.read(str(acct))['fallbackModel'] == \
+        ['claude-sonnet-5', 'claude-haiku-4-5']

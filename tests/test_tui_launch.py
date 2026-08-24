@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest
 from harness import Sandbox, run_flow, typed, UP, DOWN, LEFT, RIGHT, ENTER, ESC
 
+from claude_sessions.config import EFFORTS, PERMS
 from claude_sessions.ui import launch_options_menu
 
 
@@ -93,13 +94,26 @@ def test_cycle_effort_and_model(monkeypatch, tmp_path):
 
 def test_cycle_wraps_backwards(monkeypatch, tmp_path):
     Sandbox(monkeypatch, tmp_path)
-    result, _ = run_menu(monkeypatch, flat(LEFT, ENTER))   # '' -> wraps to 'max'
-    assert result['effort'] == 'max'
+    result, _ = run_menu(monkeypatch, flat(LEFT, ENTER))   # '' -> wraps to the last
+    # against EFFORTS[-1], not a literal: this asserted 'max' and went stale the
+    # moment 'ultracode' was appended, which is a fact about the list's length
+    # rather than about wrapping
+    assert result['effort'] == EFFORTS[-1]
 
 
 def test_permission_field(monkeypatch, tmp_path):
     Sandbox(monkeypatch, tmp_path)
-    keys = flat(DOWN, DOWN, RIGHT, ENTER)   # perm -> 'plan'
+    keys = flat(DOWN, DOWN, RIGHT, ENTER)   # perm: one step right of ''
+    result, _ = run_menu(monkeypatch, keys)
+    assert result['perm'] == PERMS[1]
+
+
+def test_permission_can_still_reach_plan(monkeypatch, tmp_path):
+    """The mode list grew ('auto', 'default'); every mode must stay reachable
+    by cycling, which is the only way the TUI can select one."""
+    Sandbox(monkeypatch, tmp_path)
+    steps = PERMS.index('plan')
+    keys = flat(DOWN, DOWN, *([RIGHT] * steps), ENTER)
     result, _ = run_menu(monkeypatch, keys)
     assert result['perm'] == 'plan'
 

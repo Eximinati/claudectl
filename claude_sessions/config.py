@@ -53,7 +53,8 @@ _DEFAULT_SETTINGS = {
     'claude_config_dir': '',   # CLAUDE_CONFIG_DIR override ('' = default ~/.claude)
     'default_effort': '',      # preselected effort in launch options
     'default_model': '',       # preselected model in launch options
-    'default_permission': '',  # preselected --permission-mode
+    'default_permission': 'auto',  # preselected --permission-mode (see PERMS)
+    'perm_default_migrated': False,  # one-time '' -> 'auto' flip, see migrate_settings
     'project_defaults': {},    # encoded_name -> {'effort','model','permission'}
     'cost_table': {},          # user overrides for COST_PER_MTOK
     'theme': 'default',        # named palette (see THEMES)
@@ -83,6 +84,13 @@ _DEFAULT_SETTINGS = {
     'claude_md_commits': 7,        # AUTOGEN block: git log -N per repo
     'default_max_thinking': '',    # MAX_THINKING_TOKENS env for launches ('' = unset)
     'default_subagent_model': '',  # CLAUDE_CODE_SUBAGENT_MODEL env ('' = unset)
+    'launch_fallback_models': [],  # --fallback-model chain when the primary is
+                                   # overloaded. Unrelated to failover_models,
+                                   # which is claudectl's OWN proxy for a
+                                   # free-tier model deregistered upstream.
+    'launch_autocompact': '',      # --autocompact: 'auto' | '200k' | ... ('' = unset)
+    'headless_budget_usd': 0,      # --max-budget-usd cap on claudectl's OWN
+                                   # `claude -p` calls (0 = no cap)
     'ui_mode': 'tui',              # default interface: 'tui' | 'gui' (desktop app)
     'gui_shell': 'auto',          # GUI window: 'auto' | 'qt' | 'edge' | 'browser'
     # ── GUI appearance ──
@@ -94,6 +102,15 @@ _DEFAULT_SETTINGS = {
     # the next POST. `theme` was declared and survived, which is exactly why it
     # was the only one that appeared to work.
     'motion': 'full',
+    #: names of the sidebar nav groups the user has collapsed. Declared HERE for
+    #: the same reason every other appearance key is: load_settings drops what it
+    #: does not know and /api/settings does load->mutate->save, so an undeclared
+    #: key is written once and deleted by the next save.
+    'nav_collapsed': [],
+    #: sidebar width in px, 0 = "never dragged, use the CSS default". Kept as 0
+    #: rather than 280 so the default lives in exactly one place (app.css).
+    'side_w': 0,
+    'nav_h': 0,     # sidebar nav block height in px, 0 = CSS default (same rule)
     'skin': '',
     'stage': '',
     'world': '',
@@ -149,6 +166,82 @@ def load_settings():
             if isinstance(v, dict) and v.get('model'):
                 v['model'] = _norm_model(v['model'])
     return s
+
+
+def migrate_settings(s):
+    """One-time forward migrations of a loaded settings dict.
+
+    Returns (settings, changed). PURE — the caller saves. It is deliberately not
+    folded into load_settings(): that function is called on nearly every code
+    path including read-only ones, and a read that writes is a cache with no
+    invalidation waiting to happen.
+
+    The only migration so far is the permission default. Bumping
+    _DEFAULT_SETTINGS['default_permission'] to 'auto' reaches nobody who has
+    already run claudectl: load_settings() lets a stored '' win over the default,
+    and a stored per-project '' wins over THAT at launch time. The flag makes it
+    one-time, so a user who later chooses '' back is not overruled on next start.
+    """
+    changed = False
+    if not s.get('perm_default_migrated'):
+        if not (s.get('default_permission') or ''):
+            s['default_permission'] = 'auto'
+        pd = s.get('project_defaults')
+        if isinstance(pd, dict):
+            for v in pd.values():
+                if isinstance(v, dict) and not (v.get('permission') or ''):
+                    v['permission'] = 'auto'
+        s['perm_default_migrated'] = True
+        changed = True
+    return s, changed
+
+
+def effective_perm(perm, model='', omniroute=''):
+    """The --permission-mode value to actually pass, or '' to pass no flag.
+
+    Only `auto` is ever suppressed, and only where the classifier cannot work:
+
+    - OmniRoute: prepare_launch() repoints ANTHROPIC_BASE_URL at the free-tier
+      proxy, and the auto-mode classifier is a SEPARATE model request that would
+      be routed there too — to a catalog that does not serve it.
+    - An unsupported model (AUTO_UNSUPPORTED_MODELS).
+
+    In both cases Claude Code would start the session in manual anyway; not
+    passing the flag means the picker is not claiming a mode the session is not
+    in. Every other mode passes through untouched.
+    """
+    if perm != 'auto':
+        return perm
+    if omniroute or model in AUTO_UNSUPPORTED_MODELS:
+        return ''
+    return perm
+
+
+def launch_defaults(enc=''):
+    """(model, perm) for a launch with NO options picker — context injection and
+    the GUI's mirror of it. Resolves exactly like launch_options_menu's defaults
+    (project default over account default, an explicit '' winning) so a session
+    started this way is not silently in a different mode from one started
+    through the picker, and drops `auto` where the classifier cannot run.
+    """
+    s = load_settings()
+    proj = (s.get('project_defaults') or {}).get(enc or '') or {}
+    model = proj.get('model', s.get('default_model', ''))
+    perm = proj.get('permission', s.get('default_permission', ''))
+    return model, effective_perm(perm, model)
+
+
+def perm_note(perm, model='', omniroute=''):
+    """('level', 'message') for the permission row, or ('', '') when there is
+    nothing to say. Kept OUT of advise(): the GUI precomputes advise() as a
+    model x effort matrix, and a third axis would multiply it."""
+    if perm == 'auto' and not effective_perm(perm, model, omniroute):
+        why = ('OmniRoute routes the classifier at the free-tier proxy'
+               if omniroute else f'{model or "this model"} does not support auto mode')
+        return ('warn', f'auto is unavailable here ({why}) — this session starts in manual.')
+    if perm == 'bypassPermissions':
+        return ('warn', 'bypassPermissions skips every check — containers and VMs only.')
+    return ('', '')
 
 
 def write_atomic(path, text):
@@ -373,14 +466,50 @@ BAD_PREFIXES = ('<', '[', 'I0', 'W0', 'E0', 'Caveat', 'Base directory', 'session
 BAD_CONTAINS = ['.claude', 'plugins', 'interrupted by user', 'tool use', 'local-command']
 W = 62
 
-EFFORTS       = ['',        'low', 'medium', 'high', 'xhigh', 'max']
-EFFORT_LABELS = ['default', 'low', 'medium', 'high', 'xhigh', 'max']
+# `ultracode` is last on purpose: it is not a sixth model effort level but a
+# Claude Code setting that sends xhigh AND has Claude orchestrate a dynamic
+# workflow per substantive task. It is accepted by --effort (v2.1.203+) and by
+# nothing else — NOT by the `effortLevel` setting, NOT by CLAUDE_CODE_EFFORT_LEVEL.
+EFFORTS       = ['',        'low', 'medium', 'high', 'xhigh', 'max', 'ultracode']
+EFFORT_LABELS = ['default', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode']
+#: values --effort accepts that the effortLevel SETTING does not (ccsettings
+#: enforces this — a rejected value is a startup error the user sees instead of
+#: their session)
+EFFORT_LAUNCH_ONLY = {'max', 'ultracode'}
 # Full model ids — claude.exe rejects bare version strings like 'sonnet-4-6'
 MODELS        = ['', 'claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5']
 MODEL_LABELS  = ['default', 'haiku-4-5', 'sonnet-5', 'opus-5', 'fable-5']
-PERMS         = ['',        'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk']
-PERM_LABELS   = ['default', 'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk']
+# Permission modes, as Claude Code names them. Two entries need explaining:
+#
+#   ''         pass no --permission-mode at all. This is NOT "manual" — on a
+#              Pro/Max/Team plan Claude Code's own built-in starting mode is
+#              `auto`, so omitting the flag inherits whatever it decides.
+#   'default'  the config value for the mode Claude Code labels MANUAL. It is
+#              a real value that must be passed to force manual, which is why
+#              it is a separate entry and why ''s label is no longer 'default'.
+#
+# `auto` runs every action past a classifier model instead of past the user.
+# It is unavailable on some models/plans, and Claude Code then starts the
+# session in manual SILENTLY — see AUTO_UNSUPPORTED_MODELS / effective_perm.
+PERMS         = ['',                'auto', 'default', 'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk']
+PERM_LABELS   = ['account default', 'auto', 'manual',  'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk']
 PERM_RISKY    = {'bypassPermissions', 'dontAsk'}   # shown with warning tint
+#: one line per mode, same job PERM_LABELS cannot do — surfaced by the TUI
+#: launch picker and the GUI exactly like EFFORT_PROFILES already is.
+PERM_PROFILES = {
+    '':                  "inherit Claude Code's own default",
+    'auto':              'hands-off — a classifier reviews each action',
+    'default':           'manual — asks before edits, commands, network',
+    'plan':              'read-only until you approve a plan',
+    'acceptEdits':       'file edits + common fs commands, no prompt',
+    'bypassPermissions': 'skips every check — containers/VMs only',
+    'dontAsk':           'only pre-approved tools; denies the rest',
+}
+#: Models the auto-mode classifier does not support on ANY provider. Selecting
+#: `auto` with one of these does not error — Claude Code just starts the session
+#: in manual, so claudectl declines to pass the flag rather than show a mode the
+#: session is not in. Haiku and the claude-3 family are the documented cases.
+AUTO_UNSUPPORTED_MODELS = {'claude-haiku-4-5'}
 # launch-economy: cap thinking tokens (MAX_THINKING_TOKENS env) to cut cost on
 # routine work; '' = leave the model's default budget alone.
 THINKING_CAPS   = ['',        '4000', '8000', '16000', '32000']
@@ -422,6 +551,7 @@ EFFORT_PROFILES = {
     'high':   'complex work, thorough',
     'xhigh':  'best for coding & agentic',
     'max':    'maximum depth, priciest',
+    'ultracode': 'xhigh + a planned workflow per task',
 }
 # task-based quick-start presets: (name, description, opts-fields)
 LAUNCH_PRESETS = [

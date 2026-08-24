@@ -1,10 +1,26 @@
-"""Claude Code PostToolUse hook — append the Bash command to
-.claudectl/bash-log.txt (in the project cwd). Shell-agnostic; never errors.
+"""Claude Code hook — records what this project ran, and what it was refused.
+
+Two bindings, two logs, and the split matters:
+
+- **PostToolUse** appends the Bash command to `.claudectl/bash-log.txt`. That
+  feeds `health.frequent_bash_commands`, whose question is "what does this
+  project run a lot" — an allowlist candidate list.
+- **PermissionDenied** appends a structured record to `.claudectl/denied.jsonl`.
+
+Both used to write the same bash log, which made a denial indistinguishable
+from a success in the one file that claimed to teach the deny-rule generator
+"from real ones" — and dropped every non-Bash denial entirely, since it only
+ever read `tool_input.command`. Run with `--denied` for the second binding.
 """
 
 import sys
 import os
 import json
+
+# Runs as a plain script (hooks.py spawns `"<python>" "<abs path>"`), so there
+# is no package context — the path bootstrap is what makes `from claude_sessions
+# import ...` work below. Same pattern as recall_hook.py.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Claude Code captures stdout as a PIPE, so CPython picks the locale
 # codepage (cp1252 on Windows) and any non-ASCII character in the payload
@@ -12,17 +28,42 @@ import json
 sys.stdout.reconfigure(encoding='utf-8')
 
 
-def main():
+def _command_of(data):
+    """The command, for Bash — else the most identifying field the tool has.
+    A denial on Read(.env) or WebFetch is worth recording too, and recording it
+    as '' would make every non-Bash denial look like the same event."""
+    ti = data.get('tool_input') or {}
+    if not isinstance(ti, dict):
+        return ''
+    for key in ('command', 'file_path', 'path', 'url', 'pattern'):
+        v = ti.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ''
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    denied = '--denied' in argv
     try:
         data = json.load(sys.stdin)
     except Exception:
         return 0
     if not isinstance(data, dict):
         return 0
+    cwd = data.get('cwd') or os.getcwd()
+    if denied:
+        # the whole event, not just its command: the tool name is what tells a
+        # blocked Read from a blocked Bash, and the reason is what tells you
+        # which fix applies (an allow rule, or an autoMode.environment entry)
+        from claude_sessions.automode import record
+        record(cwd, str(data.get('tool_name') or ''), _command_of(data),
+               str(data.get('permission_decision_reason')
+                   or data.get('reason') or ''))
+        return 0
     cmd = str((data.get('tool_input') or {}).get('command', '')).strip()
     if not cmd:
         return 0
-    cwd = data.get('cwd') or os.getcwd()
     try:
         d = os.path.join(cwd, '.claudectl')
         os.makedirs(d, exist_ok=True)
