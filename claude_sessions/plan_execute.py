@@ -208,6 +208,11 @@ def _plan(task, plan_model, cwd, effort='', cfgdir=''):
         args += ['--model', plan_model]
     if effort:
         args += ['--effort', effort]
+    # plan_timeout_sec bounds how LONG this may run; this bounds what it may
+    # spend. Same helper as memory's calls, so there is one cap for all of
+    # claudectl's own headless work.
+    from .memory import _budget_args
+    args += _budget_args()
 
     env = None
     if cfgdir:
@@ -253,6 +258,9 @@ def _headless(model, prompt, cwd, omni_env=None, cfgdir=''):
     args = [exe, '-p', '--disallowedTools', 'Write,Edit,NotebookEdit,Bash']
     if model:
         args += ['--model', model]
+    # a council is N extra calls per plan — exactly where an uncapped spend adds up
+    from .memory import _budget_args
+    args += _budget_args()
     env = os.environ.copy()
     if cfgdir:
         env['CLAUDE_CONFIG_DIR'] = cfgdir

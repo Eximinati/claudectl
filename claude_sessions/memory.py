@@ -260,13 +260,27 @@ def extract_model():
         return ''
 
 
+def _budget_args():
+    """`--max-budget-usd`, when the user has set a cap. A timeout bounds how
+    LONG one of claudectl's own calls may run; this bounds what it may spend,
+    and subagent spend counts toward the same cap."""
+    try:
+        from .config import load_settings
+        cap = float(load_settings().get('headless_budget_usd') or 0)
+    except Exception:
+        return []
+    return ['--max-budget-usd', f'{cap:g}'] if cap > 0 else []
+
+
 def _claude_stdin(prompt, cwd, timeout=EXTRACT_TIMEOUT,
                   crumbs=('CLAUDECTL', 'MEMORY'), label='Working with Claude...',
-                  model=None):
+                  model=None, extra_args=()):
     """Run `claude -p` reading the prompt from stdin (avoids the Windows
     command-line length limit). Foreground: visible progress bar (ESC cancels).
     Background threads (_tls.silent): headless subprocess, no UI/keyboard.
     `model` overrides the economy extract_model; '' forces the account default.
+    `extra_args` is how _claude_json adds the structured-output flags without
+    becoming a second spawn site.
     Returns stdout text or ''."""
     from .config import get_claude_exe
     exe = get_claude_exe()
@@ -276,6 +290,8 @@ def _claude_stdin(prompt, cwd, timeout=EXTRACT_TIMEOUT,
     m = extract_model() if model is None else (model or '').strip()
     if m:
         args += ['--model', m]
+    args += _budget_args()
+    args += list(extra_args)
     if getattr(_tls, 'silent', False):
         from .gui_api import _run_cancellable
         try:
@@ -288,7 +304,63 @@ def _claude_stdin(prompt, cwd, timeout=EXTRACT_TIMEOUT,
     return out or ''
 
 
+#: last `total_cost_usd` reported by a _claude_json envelope, or None. The JSON
+#: output format carries the real figure, which is strictly better than the
+#: COST_PER_MTOK estimate claudectl otherwise has to make about its own calls.
+last_call_cost = None
+
+
+def _claude_json(prompt, cwd, schema, **kw):
+    """`claude -p --output-format json --json-schema <schema>` → the validated
+    object, or None.
+
+    This replaces recovering JSON from prose. `_parse_json` strips code fences
+    and slices between the first '{' and the last '}' — a heuristic that returns
+    None the moment the model wraps its answer in a sentence, and one that has
+    no way to notice it got a DIFFERENT shape than asked for.
+
+    The fallback is load-bearing, not defensive padding: Claude Code before
+    v2.1.205 silently ignored a schema it considered invalid and returned
+    unstructured text, so an older CLI lands on exactly the old behaviour rather
+    than on nothing.
+    """
+    global last_call_cost
+    last_call_cost = None
+    raw = _claude_stdin(prompt, cwd, extra_args=(
+        '--output-format', 'json', '--json-schema', json.dumps(schema)), **kw)
+    if not raw:
+        return None
+    env = None
+    try:
+        env = json.loads(raw.strip())
+    except Exception:
+        env = None
+    if isinstance(env, dict):
+        try:
+            c = env.get('total_cost_usd')
+            last_call_cost = float(c) if isinstance(c, (int, float)) else None
+        except Exception:
+            last_call_cost = None
+        if isinstance(env.get('structured_output'), (dict, list)):
+            return env['structured_output']
+        # envelope parsed but carried no structured output — the text result is
+        # still the model's answer, so try it the old way before giving up
+        if isinstance(env.get('result'), str):
+            return _parse_json(env['result'])
+    return _parse_json(raw)
+
+
 def _parse_json(text):
+    """Recover JSON from model prose. The FALLBACK path — _claude_json asks
+    Claude Code to enforce a schema and only lands here when that is
+    unavailable.
+
+    Tries the whole (de-fenced) text first, because a well-behaved answer needs
+    no surgery, and only then slices to the outermost object or array. The
+    array case matters: bracket-slicing a two-element array on '{'..'}' yields
+    '{...}, {...}', which is not JSON, so a list-shaped answer used to come back
+    as None from here even though it parsed perfectly as-is.
+    """
     if not text:
         return None
     t = text.strip()
@@ -297,12 +369,50 @@ def _parse_json(text):
         m = re.search(r'```(?:json)?\s*(.*?)```', t, re.S)
         if m:
             t = m.group(1).strip()
-    if '{' in t and '}' in t:
-        t = t[t.index('{'):t.rindex('}') + 1]
-    try:
-        return json.loads(t)
-    except Exception:
-        return None
+    for cand in (t, _slice_between(t, '{', '}'), _slice_between(t, '[', ']')):
+        if not cand:
+            continue
+        try:
+            return json.loads(cand)
+        except Exception:
+            continue
+    return None
+
+
+def _slice_between(t, open_ch, close_ch):
+    """The outermost open_ch..close_ch span, or '' when there isn't one."""
+    if open_ch not in t or close_ch not in t:
+        return ''
+    i, j = t.index(open_ch), t.rindex(close_ch)
+    return t[i:j + 1] if j > i else ''
+
+
+#: The shape _extract asks for, as a JSON Schema Claude Code enforces. The
+#: prompt still SPELLS OUT the shape below, deliberately: that text is what the
+#: fallback path (an older CLI, or a rejected schema) relies on.
+GRAPH_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'summary': {'type': 'string'},
+        'entities': {'type': 'array', 'items': {
+            'type': 'object',
+            'properties': {'name': {'type': 'string'},
+                           'type': {'type': 'string',
+                                    'enum': ['module', 'component', 'concept',
+                                             'service', 'model']},
+                           'summary': {'type': 'string'}},
+            'required': ['name', 'type', 'summary']}},
+        'relations': {'type': 'array', 'items': {
+            'type': 'object',
+            'properties': {'source': {'type': 'string'},
+                           'target': {'type': 'string'},
+                           'rel': {'type': 'string',
+                                   'enum': ['uses', 'calls', 'depends_on',
+                                            'contains', 'implements']}},
+            'required': ['source', 'target', 'rel']}},
+    },
+    'required': ['summary', 'entities', 'relations'],
+}
 
 
 def _extract(corpus_text, cwd, unit='', progress=''):
@@ -321,8 +431,8 @@ def _extract(corpus_text, cwd, unit='', progress=''):
         f"MODULE CONTENT:\n{corpus_text}"
     )
     label = f"Analyzing {unit} with Claude...  {progress}".strip()
-    data = _parse_json(_claude_stdin(
-        prompt, cwd, crumbs=('CLAUDECTL', 'MEMORY', unit or 'EXTRACT'), label=label))
+    data = _claude_json(prompt, cwd, GRAPH_SCHEMA,
+                        crumbs=('CLAUDECTL', 'MEMORY', unit or 'EXTRACT'), label=label)
     if not isinstance(data, dict):
         return {'summary': '', 'entities': [], 'relations': []}
     return {'summary': data.get('summary', '') or '',

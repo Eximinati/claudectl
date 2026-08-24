@@ -86,13 +86,37 @@ def build_prompt(diff, guidance):
         "vulnerabilities, and violations of the project rules above. Do NOT report "
         "style nits, pre-existing issues outside this diff, or speculative "
         "concerns. Distinguish rule-violations from bugs via the category.\n\n"
-        "Output a JSON array and NOTHING else. Each element:\n"
+        'Output ONLY JSON: {"findings":[...]}. Each element:\n'
         '{"file":"<path>","line":<int>,"severity":"critical|high|medium|low",'
         '"category":"bug|security|rule-violation|correctness|other",'
         '"confidence":<0-100 integer>,"summary":"<one line>",'
         '"detail":"<why it is wrong and how to fix it>"}\n'
-        "If there are no real issues, output exactly []."
+        'If there are no real issues, output exactly {"findings":[]}.'
     )
+
+
+#: enforced by --json-schema. An OBJECT wrapper rather than a bare array
+#: because parse_findings already accepts both and the wrapper leaves room to
+#: add fields later without changing the top-level type.
+FINDINGS_SCHEMA = {
+    'type': 'object',
+    'properties': {'findings': {'type': 'array', 'items': {
+        'type': 'object',
+        'properties': {
+            'file': {'type': 'string'},
+            'line': {'type': 'integer'},
+            'severity': {'type': 'string',
+                         'enum': ['critical', 'high', 'medium', 'low']},
+            'category': {'type': 'string',
+                         'enum': ['bug', 'security', 'rule-violation',
+                                  'correctness', 'other']},
+            'confidence': {'type': 'integer'},
+            'summary': {'type': 'string'},
+            'detail': {'type': 'string'},
+        },
+        'required': ['file', 'severity', 'confidence', 'summary']}}},
+    'required': ['findings'],
+}
 
 
 def parse_findings(text):
@@ -146,14 +170,18 @@ def run_review(project_path, proj_folder=None, staged=False, base=None,
     if silent:
         memory._tls.silent = True
     try:
-        out = memory._claude_stdin(prompt, cwd=project_path, timeout=300,
-                                   crumbs=('CLAUDECTL', 'REVIEW'),
-                                   label='Reviewing changes with Claude...',
-                                   model=model)
+        out = memory._claude_json(prompt, project_path, FINDINGS_SCHEMA,
+                                  timeout=300, crumbs=('CLAUDECTL', 'REVIEW'),
+                                  label='Reviewing changes with Claude...',
+                                  model=model)
     finally:
         if silent:
             memory._tls.silent = False
-    raw = parse_findings(out)
+    # _claude_json already returns the parsed object (and falls back to the
+    # prose recovery itself); parse_findings only has to normalise the shape
+    raw = (out.get('findings') if isinstance(out, dict)
+           else out if isinstance(out, list) else [])
+    raw = [f for f in (raw or []) if isinstance(f, dict)]
     kept = [f for f in raw if int(f.get('confidence', 0) or 0) >= min_confidence]
     kept.sort(key=_sev_key)
     return {'findings': kept, 'empty': False, 'raw_count': len(raw),
