@@ -99,7 +99,7 @@ def run(project_path, proj_folder, project_name):
     session — under an account of the user's choosing — seeded with its
     transcript. Returns True if a session was launched, False if cancelled."""
     from .ui import menu, flash, _cls
-    from .config import get_claude_exe, load_settings
+    from .config import get_claude_exe, launch_defaults
     from .sessions import load_add_dirs, read_extra_paths
 
     candidates = find_sessions_across_accounts(project_path)
@@ -139,8 +139,7 @@ def run(project_path, proj_folder, project_name):
     if extra:
         env['PATH'] = ';'.join(extra) + ';' + env.get('PATH', '')
 
-    settings = load_settings()
-    model = settings.get('default_model', '')
+    model, perm = launch_defaults(encoded)
 
     pointer = (f"Prior conversation context (from the '{acct_name}' account, session "
                f"'{title}') is saved at {CTX_FILE.replace(os.sep, '/')}. Read it first "
@@ -152,6 +151,8 @@ def run(project_path, proj_folder, project_name):
     args = [exe, '--system-prompt-file', merged_path]
     if model:
         args += ['--model', model]
+    if perm:
+        args += ['--permission-mode', perm]
     add_dirs = [d for d in load_add_dirs(target_folder) if os.path.isdir(d)]
     if add_dirs:
         args += ['--add-dir', *add_dirs]
