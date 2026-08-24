@@ -140,6 +140,35 @@ def test_rate_limits_come_from_stdin_and_never_from_the_api():
     assert 'import usage' not in inspect.getsource(sl), 'no OAuth poll on the turn path'
 
 
+def test_rate_limit_windows_say_when_they_reset():
+    """A percentage alone does not answer the question you have when you read
+    it. `resets_at` is Unix epoch SECONDS in this payload — usage.py's own
+    formatter takes ISO, because the endpoint IT polls returns ISO."""
+    import time
+    from datetime import datetime
+    soon = time.time() + 3600
+    out = _plain(sl.render({'cwd': 'D:/p', 'rate_limits': {
+        'five_hour': {'used_percentage': 32, 'resets_at': soon}}}))
+    assert '5h 32%' in out, out
+    assert datetime.fromtimestamp(soon).astimezone().strftime('%H:%M') in out, out
+
+
+def test_a_missing_or_millisecond_reset_never_prints_a_wrong_time():
+    """Absent is the documented normal case (each window may be independently
+    absent), and this codebase has already been bitten once by epoch
+    milliseconds read as seconds — which renders a plausible-looking date."""
+    import time
+    assert sl._reset_at(None) == ''
+    assert sl._reset_at('2026-01-01T00:00:00Z') == ''
+    assert sl._reset_at(True) == ''          # bool is an int; must not format
+    now = time.time()
+    assert sl._reset_at(now * 1000) == sl._reset_at(now)
+    # the percentage still renders when the window carries no reset time
+    out = _plain(sl.render({'cwd': 'D:/p',
+                            'rate_limits': {'seven_day': {'used_percentage': 45}}}))
+    assert '7d 45%' in out and '→' not in out, out
+
+
 def test_mode_segments_stay_quiet_on_an_ordinary_session():
     """They cost nothing when there is nothing to say — that is the whole
     reason they can be afforded at all."""
