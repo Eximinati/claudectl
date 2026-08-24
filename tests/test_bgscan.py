@@ -227,3 +227,24 @@ def test_sessions_menu_badge_shows_worker_progress(monkeypatch, tmp_path):
         assert 'lessons 3/9' in cap.plain
     finally:
         memory.clear_scan_lock(actual)
+
+
+def test_the_cooldown_does_not_swallow_the_first_minute_of_uptime(monkeypatch, tmp_path):
+    """`time.monotonic()` is seconds since BOOT, so 0 as the "never spawned"
+    sentinel put every spawn inside the 60s cooldown until the machine had been
+    up a minute — silent on a developer's box (uptime in hours) and on the
+    Windows CI runners, deterministic on a Linux runner (the job starts ~30s
+    after boot) and on claudectl launched from a login shortcut.
+
+    Mutation-verified: restoring the `0` default fails this.
+    """
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, _enc, folder, _ = sb.add_project('alpha', n_sessions=0)
+    memory._bg_spawned.clear()
+    monkeypatch.setattr(time, 'monotonic', lambda: 5.0)      # 5s of uptime
+    spawned = []
+    monkeypatch.setattr(subprocess, 'Popen',
+                        lambda args, **kw: spawned.append(args) or object())
+
+    assert memory.spawn_background_worker(actual, folder) is not None
+    assert len(spawned) == 1

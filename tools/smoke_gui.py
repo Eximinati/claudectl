@@ -700,22 +700,41 @@ def main():
                 pg.evaluate(f"ST.world='{sk}';applyTheme(ST.theme)")
             else:
                 pg.evaluate(f"ST.world='';ST.skin='{sk}';applyTheme(ST.theme)")
-            pg.wait_for_timeout(350)
+            # wait for the node, never for a fixed number of milliseconds:
+            # applyTheme rebuilds the scene and repaints the page, and bursting
+            # before .d-continue is back makes MO.burst return early — which
+            # reads as a broken burst rather than as a slow runner
+            pg.wait_for_selector('.d-continue', timeout=10000)
             pg.evaluate("MO.burst(document.querySelector('.d-continue'))")
             pg.wait_for_timeout(100)
             mounted_n = pg.evaluate("document.querySelectorAll('.burst').length")
             nodes = pg.evaluate("document.querySelectorAll('.burst i').length")
+            # The 1.6s budget is a property of the ANIMATION, so read it off the
+            # timeline — asserting it in wall clock measures the rasteriser, the
+            # exact mistake CLAUDE.md already records for scene time under
+            # SwiftShader. The animations live on the burst's PARTICLES, not on
+            # the host: reading only the host returns 0ms and makes the clause
+            # pass vacuously, which is the "check that runs nothing" failure
+            # this tool has already had once. The wall-clock wait below is only
+            # a leak check now, so it can be generous.
+            budget = pg.evaluate(
+                "Math.max(0,...[...document.querySelectorAll('.burst')]"
+                ".flatMap(h=>[h,...h.querySelectorAll('*')])"
+                ".flatMap(el=>el.getAnimations().map("
+                "a=>a.effect.getComputedTiming().endTime||0)))")
+            in_budget = 0 < budget <= 1600
             gone = True
             try:
-                # a burst must outlast neither the action it marks nor 2s
                 pg.wait_for_function(
-                    "document.querySelectorAll('.burst').length===0", timeout=2000)
+                    "document.querySelectorAll('.burst').length===0", timeout=8000)
             except Exception:
                 gone = False
             pg.wait_for_timeout(500)
             parked = pg.evaluate("MO._raf===null")
-            check(f'burst {sk}', mounted_n == 1 and nodes > 0 and gone and parked,
-                  f'mounted={mounted_n} nodes={nodes} cleaned={gone} parked={parked}')
+            check(f'burst {sk}',
+                  mounted_n == 1 and nodes > 0 and in_budget and gone and parked,
+                  f'mounted={mounted_n} nodes={nodes} budget={budget:.0f}ms '
+                  f'cleaned={gone} parked={parked}')
         pg.evaluate("MO.set('subtle');MO.burst(document.querySelector('.d-continue'))")
         pg.wait_for_timeout(150)
         check('no burst at motion=subtle',

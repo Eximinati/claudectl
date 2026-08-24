@@ -228,7 +228,13 @@ def spawn_background_worker(project_path, proj_folder):
     # takes scan.lock some milliseconds later. The claim is time-boxed because
     # the child, not this process, decides when the work is done.
     with _bg_lock:
-        if time.monotonic() - _bg_spawned.get(root, 0) < _BG_SPAWN_COOLDOWN:
+        # -inf, not 0: time.monotonic() is seconds since BOOT on every platform,
+        # so 0 as the "never spawned" sentinel put the whole first minute of
+        # uptime inside the cooldown and suppressed every spawn. Invisible in
+        # development (uptime is hours) and on the Windows CI runners (minutes
+        # to reach the job); deterministic on a Linux runner, which starts the
+        # job ~30s after boot, and on claudectl launched from a login shortcut.
+        if time.monotonic() - _bg_spawned.get(root, float('-inf')) < _BG_SPAWN_COOLDOWN:
             return None
         _bg_spawned[root] = time.monotonic()
     pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
