@@ -435,8 +435,10 @@ def ensure_running(base_url, timeout=25):
     if not exe:
         return False, 'OmniRoute not installed — run: npm install -g omniroute'
     try:
+        from .proc import no_window_flags
         subprocess.run([exe, 'serve', '--daemon'], capture_output=True,
-                       text=True, encoding='utf-8', errors='ignore', timeout=15)
+                       text=True, encoding='utf-8', errors='ignore', timeout=15,
+                       creationflags=no_window_flags)
     except Exception as e:
         return False, f'could not start OmniRoute: {e}'
     deadline = time.time() + timeout
@@ -462,8 +464,10 @@ def _cli(args, timeout=15):
     if not exe:
         return None
     try:
+        from .proc import no_window_flags
         r = subprocess.run([exe, *args], capture_output=True, text=True,
-                           encoding='utf-8', errors='ignore', timeout=timeout)
+                           encoding='utf-8', errors='ignore', timeout=timeout,
+                           creationflags=no_window_flags)
     except Exception:
         return None
     start = r.stdout.find('{')

@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 __all__ = ['run', 'git', 'pid_alive', 'kill_tree', 'spawn_terminal',
-           'new_console_flags', 'WINDOWS']
+           'new_console_flags', 'no_window_flags', 'WINDOWS']
 
 WINDOWS = os.name == 'nt'
 
@@ -21,20 +21,31 @@ WINDOWS = os.name == 'nt'
 #: at import, not at the call.
 new_console_flags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0)
 
+#: CREATE_NO_WINDOW — the opposite flag, and the one every CAPTURED call needs.
+#: Without it Windows gives each console child its own console window: opening
+#: the Repos or Tools tab runs git across a dozen repos and the user watches a
+#: dozen black windows flash open and shut. Nothing is ever shown in them —
+#: stdout and stderr are captured — so the window is pure visual noise.
+no_window_flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 
 def run(args, *, cwd=None, env=None, timeout=30, stdin=None, check=False):
-    """`subprocess.run` with the decoding pinned. Returns the CompletedProcess,
-    or None if it could not be run at all.
+    """`subprocess.run` with the decoding pinned and the console suppressed.
+    Returns the CompletedProcess, or None if it could not be run at all.
 
     `text=True` alone decodes with the locale codepage — cp1252 on Windows —
     so one non-ASCII path or branch name raises *inside* subprocess and the
     caller concludes the command failed. Every call in this codebase goes
     through here for that reason.
+
+    `creationflags` is the second reason: output is captured, so a console
+    window would show nothing and only flash. See no_window_flags.
     """
     try:
         r = subprocess.run(args, cwd=cwd, env=env, capture_output=True,
                            text=True, encoding='utf-8', errors='ignore',
-                           timeout=timeout, input=stdin)
+                           timeout=timeout, input=stdin,
+                           creationflags=no_window_flags)
     except Exception:
         return None
     if check and r.returncode:
@@ -100,7 +111,8 @@ def kill_tree(proc):
     try:
         if WINDOWS:
             r = subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)],
-                               capture_output=True)
+                               capture_output=True,
+                               creationflags=no_window_flags)
             if r.returncode:      # no such pid, or access denied — try direct
                 proc.kill()
         elif os.getpgid(proc.pid) == proc.pid:
