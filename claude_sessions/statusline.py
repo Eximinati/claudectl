@@ -435,6 +435,13 @@ def blockers(cfgdir=None):
                     'the installed command uses `-m claude_sessions`, which only '
                     'resolves when the session runs inside the claudectl '
                     'checkout — reinstall to point it at an absolute path'))
+    # The classic renderer simply does not draw a statusLine, and nothing says
+    # so: an account can be correctly installed and permanently blank.
+    if s.get('tui') != 'fullscreen':
+        out.append(('classic-tui',
+                    "tui is not 'fullscreen', and Claude Code's classic "
+                    'renderer draws no statusline — reinstall, or set '
+                    'Interface to fullscreen'))
     # Claude Code's own warning: "Status line is configured but disableAllHooks
     # is true".
     if s.get('disableAllHooks'):
@@ -471,6 +478,10 @@ def install(cfgdir=None):
     if cur and 'claude_sessions' not in str(cur):
         return False, f'A different statusline is already set: {str(cur)[:60]}'
     s['statusLine'] = {'type': 'command', 'command': _command()}
+    # Claude Code's classic TUI does not draw a statusLine at all, so an
+    # install that leaves `tui` alone is the silent failure `blockers()` exists
+    # for — the whole point of installing is to see the line.
+    s['tui'] = 'fullscreen'
     return ((True, 'Statusline installed') if hooks._save(s, cfgdir)
             else (False, 'Write failed'))
 

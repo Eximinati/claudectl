@@ -309,8 +309,10 @@ def test_install_and_remove_round_trip(monkeypatch, tmp_path):
     assert 'claude_sessions' in cmd and 'statusline' in cmd
     ok, _ = sl.remove()
     assert ok and not sl.is_installed()
-    # and it left the rest of settings.json alone
-    assert json.loads(p.read_text(encoding='utf-8')) == {}
+    # and it left the rest of settings.json alone — `tui` is there because
+    # install turns the fullscreen renderer on, and removing the statusline is
+    # not a reason to change the user's interface back
+    assert json.loads(p.read_text(encoding='utf-8')) == {'tui': 'fullscreen'}
 
 
 # ── the hook events ───────────────────────────────────────────
@@ -412,7 +414,8 @@ def test_the_installed_command_does_not_depend_on_the_working_directory():
 
 def test_the_current_command_reports_no_blocker(tmp_path, monkeypatch):
     d = _acct(tmp_path, monkeypatch,
-              {'statusLine': {'type': 'command', 'command': sl._command()}})
+              {'tui': 'fullscreen',
+               'statusLine': {'type': 'command', 'command': sl._command()}})
     assert sl.blockers(d) == []
 
 
@@ -449,7 +452,7 @@ def test_running_it_as_a_module_from_elsewhere_is_what_used_to_fail(tmp_path):
 
 def test_disabling_every_hook_is_reported_too(tmp_path, monkeypatch):
     d = _acct(tmp_path, monkeypatch,
-              {'disableAllHooks': True,
+              {'disableAllHooks': True, 'tui': 'fullscreen',
                'statusLine': {'command': sl._command()}})
     assert [c for c, _w in sl.blockers(d)] == ['hooks-disabled']
 
@@ -461,9 +464,27 @@ def test_by_account_carries_the_blockers_next_to_installed(tmp_path, monkeypatch
                    (b, sl._command())):
         p.mkdir()
         (p / 'settings.json').write_text(
-            json.dumps({'statusLine': {'command': cmd}}), encoding='utf-8')
+            json.dumps({'tui': 'fullscreen', 'statusLine': {'command': cmd}}),
+            encoding='utf-8')
     monkeypatch.setattr(hooks, 'account_dirs',
                         lambda: [('stale', str(a)), ('fixed', str(b))])
     rows = {n: (done, [c for c, _w in bl]) for n, _d, done, bl in sl.by_account()}
     assert rows['stale'] == (True, ['cwd-dependent-command'])
     assert rows['fixed'] == (True, [])
+
+
+def test_installing_turns_the_fullscreen_tui_on(tmp_path, monkeypatch):
+    """An installed statusline that Claude Code never draws is the failure
+    mode `blockers()` was written for, and the classic renderer draws none."""
+    d = _acct(tmp_path, monkeypatch, {'tui': 'default'})
+    ok, _msg = sl.install(d)
+    assert ok
+    s = json.loads((tmp_path / 'settings.json').read_text(encoding='utf-8'))
+    assert s['tui'] == 'fullscreen'
+    assert sl.blockers(d) == []
+
+
+def test_the_classic_tui_is_reported_as_a_blocker(tmp_path, monkeypatch):
+    d = _acct(tmp_path, monkeypatch,
+              {'statusLine': {'command': sl._command()}, 'tui': 'default'})
+    assert [k for k, _ in sl.blockers(d)] == ['classic-tui']
