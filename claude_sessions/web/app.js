@@ -443,6 +443,19 @@ async function jobStart(kind,params,o){
   jobPoll(J);
   return J;
 }
+/* Take over a job this client is not already tracking.
+   A job parked at an approval gate blocks until someone answers it, and the
+   client that started it may be a different window — or this one after a
+   reload, which drops JOBS entirely. Adopting it re-enters the SAME poll loop,
+   so it escalates to the gate modal by the existing path rather than by a
+   second implementation of gate rendering. */
+function jobOpen(jid,label){
+  const J=JOBS[jid]||{jid,kind:'',label:label||'Job',status:'running',msgs:[],
+    elapsed:0,sub:'',err:'',host:null,sel:'',onDone:null,memPath:null};
+  J.modal=true;
+  if(!JOBS[jid]){JOBS[jid]=J;jobPoll(J);}
+  else modalOpen(J);
+}
 async function jobPoll(J){
   if(!JOBS[J.jid])return;                       // finished or superseded
   if(document.hidden||!_VIS){setTimeout(()=>jobPoll(J),800);return;}
@@ -566,17 +579,144 @@ function modalGate(J,gate){
 }
 
 /* ── sidebar ── */
-const NAV=[['usage','chart','Usage'],['searchp','search','Search'],['mcp','plug','MCP servers'],
-  ['agents','robot','Agents'],['skills','ai','Skills'],['hooks','link','Hooks'],
-  ['plugins','folder','Plugins'],['ostyles','palette','Output styles'],
-  ['accounts','group','Accounts'],['client','ai','Claude Code'],
-  ['settings','settings','Settings'],['helpp','help','Help']];
+/* Twelve equal rows in one flat column read as a wall, and they took ~46% of the
+   sidebar's height away from the project list — the thing the sidebar is FOR.
+   Grouping is the fix for the reading problem; capping the height (.nav in
+   app.css) is the fix for the space problem, and both are needed. */
+const NAV_GROUPS=[
+  ['Workspace',[['usage','chart','Usage'],['searchp','search','Search']]],
+  ['Library',  [['agents','robot','Agents'],['skills','ai','Skills'],
+                ['hooks','link','Hooks'],['plugins','folder','Plugins'],
+                ['ostyles','palette','Output styles'],['mcp','plug','MCP servers']]],
+  ['System',   [['accounts','group','Accounts'],['client','ai','Claude Code'],
+                ['settings','settings','Settings'],['helpp','help','Help']]],
+];
+/* The FLAT list stays the public one: the command palette walks it, and both
+   tools/smoke_gui.py and tools/shot_gui.py evaluate `NAV.map(n => n[0])` to get
+   the page list rather than hardcoding one. Derived, never maintained twice. */
+const NAV=NAV_GROUPS.flatMap(g=>g[1]);
+/* Collapsed groups persist in claudectl.json (`nav_collapsed`), not in
+   localStorage: every other appearance choice this app makes is a setting, and
+   the Qt shell and a browser tab have to agree about the chrome. Stored as
+   NAMES rather than indices so reordering or inserting a group never silently
+   collapses a different one. */
+/* ── sidebar width: drag the grip, and it sticks ──────────────────────────────
+   Persisted as a setting, like every other chrome choice, so the Qt shell and a
+   browser tab agree. Clamped rather than free: below SIDE_MIN the project paths
+   and the nav labels are unreadable, and above SIDE_MAX the sidebar starts
+   taking the space the content needs. 0 means "never set" — the CSS fallback
+   stays in charge, which is what keeps the default in ONE place. */
+const SIDE_MIN=210,SIDE_MAX=520,NAV_MIN=34,PLIST_MIN=120;
+/* 0 always means "never dragged, the CSS default is in charge", for both axes.
+   Storing the actual default instead would put it in two places and make the
+   next change to app.css a silent no-op for everyone who has ever dragged. */
+function applySideWidth(px){
+  const r=document.documentElement;
+  px?r.style.setProperty('--side-w',clampSide(px)+'px'):r.style.removeProperty('--side-w');
+}
+function applyNavHeight(px){
+  const r=document.documentElement;
+  if(px){r.style.setProperty('--nav-h',px+'px');r.classList.add('nav-sized');}
+  else{r.style.removeProperty('--nav-h');r.classList.remove('nav-sized');}
+}
+function clampSide(px){return Math.min(SIDE_MAX,Math.max(SIDE_MIN,Math.round(px)));}
+function clampNav(px){
+  // the nav may grow until the project list hits its own floor — expressed
+  // against the live box rather than a guessed constant, so it stays right at
+  // any window height and for any number of nav groups the user has open
+  const list=$('#plist'),foot=document.querySelector('.side .foot');
+  if(!list||!foot)return Math.max(NAV_MIN,Math.round(px));
+  const room=foot.getBoundingClientRect().top-list.getBoundingClientRect().top-PLIST_MIN;
+  return Math.min(Math.max(room,NAV_MIN),Math.max(NAV_MIN,Math.round(px)));
+}
+/* ONE binder for both grips. Two copies of this would be two chances for the
+   release handler to leak a document-level pointermove listener, which is the
+   classic way a drag handle ends up moving things after you let go. */
+function bindGrip(id,{measure,clamp,apply,read,save,step}){
+  const g=$('#'+id);if(!g||g.__bound)return;g.__bound=1;
+  const cls=id+'-drag';
+  let v=0;
+  const move=ev=>{v=clamp(measure(ev));apply(v);};
+  const up=ev=>{
+    document.removeEventListener('pointermove',move);
+    document.removeEventListener('pointerup',up);
+    document.removeEventListener('pointercancel',up);
+    document.documentElement.classList.remove(cls);
+    if(window.INST)INST.refit();
+    if(v)save(v);
+  };
+  g.addEventListener('pointerdown',ev=>{
+    ev.preventDefault();
+    document.documentElement.classList.add(cls);
+    document.addEventListener('pointermove',move);
+    document.addEventListener('pointerup',up);
+    document.addEventListener('pointercancel',up);
+  });
+  g.addEventListener('dblclick',()=>{v=0;apply(0);save(0);
+    if(window.INST)INST.refit();});
+  // a focusable separator has to be operable from the keyboard
+  g.addEventListener('keydown',ev=>{
+    const d=step(ev.key);if(!d)return;
+    ev.preventDefault();
+    v=clamp(read()+d);apply(v);save(v);
+    if(window.INST)INST.refit();
+  });
+}
+function bindSideGrips(){
+  bindGrip('sgrip',{
+    // the sidebar starts at the viewport's left edge, so clientX IS the width
+    measure:ev=>ev.clientX, clamp:clampSide, apply:applySideWidth,
+    read:()=>ST.side_w||$('.side').offsetWidth,
+    save:v=>{ST.side_w=v;post('/api/settings',{side_w:v});},
+    step:k=>k==='ArrowLeft'?-16:k==='ArrowRight'?16:0});
+  bindGrip('hgrip',{
+    // grip-to-footer is exactly the nav's height, so no offset bookkeeping
+    measure:ev=>document.querySelector('.side .foot').getBoundingClientRect().top-ev.clientY,
+    clamp:clampNav, apply:applyNavHeight,
+    read:()=>ST.nav_h||$('#nav').offsetHeight,
+    save:v=>{ST.nav_h=v;post('/api/settings',{nav_h:v});},
+    step:k=>k==='ArrowUp'?16:k==='ArrowDown'?-16:0});
+}
+
+/* In the icon rail there IS no group label to click, so a collapsed group would
+   have no way back. The rail therefore ignores the collapsed set entirely; the
+   saved setting is untouched and comes back when the window widens again. */
+const RAIL=window.matchMedia('(max-width:1099px)');
+RAIL.addEventListener('change',()=>{if(ST)drawNav();});
+function navSaved(){return new Set(ST.nav_collapsed||[]);}
+function navCollapsed(){return RAIL.matches?new Set():navSaved();}
+async function toggleNavGroup(grp){
+  // the SAVED set, never the rail-filtered view — toggling off a rail would
+  // otherwise persist an empty set and silently discard the user's choices
+  const set=navSaved();
+  set.has(grp)?set.delete(grp):set.add(grp);
+  ST.nav_collapsed=[...set];
+  drawNav();
+  // one write per click; the page never re-reads, so a failed save is the only
+  // thing that could desync and it surfaces as the usual toast
+  await post('/api/settings',{nav_collapsed:ST.nav_collapsed});
+}
 /* Nav rows carry no gauge. They used to each own an animated canvas, which put
    ~10 looping surfaces in the chrome to encode numbers about pages you weren't
    looking at — the clearest case of motion that cost frames and said nothing. */
 function drawNav(){
-  $('#nav').innerHTML=NAV.map(([id,i,l])=>
-    `<div class="it${PAGE_===id?' sel':''}" onclick="go('${id}')">${ic(i)} ${l}</div>`).join('');
+  const col=navCollapsed();
+  $('#nav').innerHTML=NAV_GROUPS.map(([grp,items])=>{
+    const shut=col.has(grp);
+    // a collapsed group still shows a dot per page it hides, so the row is not
+    // an empty promise — and the current page's dot is lit, which is how you
+    // can tell where you are without opening it
+    const pips=shut?`<span class="gpip">${items.map(([id])=>
+      `<i class="${PAGE_===id?'on':''}"></i>`).join('')}</span>`:'';
+    return `<div class="grp${shut?' shut':''}" onclick="toggleNavGroup('${jsq(grp)}')"
+        role="button" tabindex="0" aria-expanded="${!shut}"
+        title="${shut?'Expand':'Collapse'} ${esc(grp)}">
+        <svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>
+        <span>${esc(grp)}</span>${pips}</div>`
+      +(shut?'':items.map(([id,i,l])=>
+        `<div class="it${PAGE_===id?' sel':''}" onclick="go('${id}')" title="${esc(l)}">${ic(i)} <span>${l}</span></div>`
+      ).join(''));
+  }).join('');
 }
 /* 14-day activity trace per project. Static inline SVG, never animated — this
    renders once per sidebar row and there can be dozens, so it is deliberately
@@ -600,15 +740,24 @@ function drawProjects(){
   const list=ST.projects.filter(p=>!q
     ||p.name.toLowerCase().includes(q)||p.path.toLowerCase().includes(q));
   MO.patch(box,list,p=>p.encoded,p=>{
-    const tags=p.accounts.length>1?' '+p.accounts.slice(1).map(a=>
-      `<span class="tag acct" style="color:${acctColor(a)}">${esc(a)}</span>`).join(' '):'';
+    // Account chips are flex:none, so with three of them they claimed the whole
+    // row and the project NAME shrank to a single character ("Claude" rendered
+    // as "("). Only the first two are ever named; the rest collapse into one
+    // +N chip that still carries them in its tooltip, and .pn keeps a floor
+    // width in app.css so no number of accounts can squeeze it out again.
+    const extra=p.accounts.slice(1);
+    const shown=extra.slice(0,2).map(a=>
+      `<span class="tag acct" style="color:${acctColor(a)}">${esc(a)}</span>`);
+    if(extra.length>2)shown.push(
+      `<span class="tag acct more" title="${esc(extra.slice(2).join(', '))}">+${extra.length-2}</span>`);
+    const tags=shown.length?' '+shown.join(' '):'';
     const active=ACTIVE_MEM.has(p.path);
     // a scanning project gets a live pip, not a spinning icon: the ring reads as
     // "this is happening" without dragging the eye across the sidebar
     const amk=(p.auto_memory||active)
       ?`<span class="amk${active?' pip':''}" title="${active?'memory updating now':'auto-memory on'}">${ic('refresh')}</span>`:'';
     const last=p.last_active?` <span style="opacity:.7">· ${esc(p.last_active)} ago</span>`:'';
-    return `<div class="nm"><span class="pn">${esc(p.name)}</span>${tags}${amk}</div>`
+    return `<div class="nm"><span class="pn" title="${esc(p.name)}">${esc(p.name)}</span>${tags}${amk}</div>`
       +`<div class="pt"><span class="pp">${esc(p.path)}${last}</span>`
       +`${miniSpark(PROJ_SPARK[p.encoded])}</div>`;
   },p=>'proj lift'+(CUR&&PAGE_==='project'&&CUR.encoded===p.encoded?' sel':''));
@@ -763,10 +912,12 @@ function drawHome(){
   const inst=(kind,key,o)=>INST.html(kind,key,o);
   paintNow(`
   <div class="dash">
+    <div class="dband d-b1"><span>Spend</span></div>
     <section class="card icard d-i1 spot lift">
-      <div class="ihd">${ic('bolt')}<span>plan quota</span><span class="sp"></span>
+      <div class="ihd">${ic('bolt')}<span>spend today</span><span class="sp"></span>
         <span id="iQuotaN" class="itag"></span></div>
-      ${inst('ring','quota',{fmt:'pct',sub:'of window',label:'highest window'})}
+      ${inst('ring','quota',{fmt:'tok',sub:'tokens today',label:'by account'})}
+      <div class="ileg" id="iQuotaLeg"></div>
       <div class="ifoot" id="iQuotaFoot">—</div></section>
     <section class="card icard d-i2 spot lift">
       <div class="ihd">${ic('chart')}<span>burn rate</span></div>
@@ -774,28 +925,35 @@ function drawHome(){
       <div class="ifoot" id="iBurnFoot">—</div></section>
     <section class="card icard d-i3 spot lift">
       <div class="ihd">${ic('plug')}<span>tooling</span></div>
-      ${inst('ring','mcp',{fmt:'ratio',unit:'/–',sub:'servers up',label:'mcp + failover'})}
+      ${inst('ring','mcp',{fmt:'ratio',unit:'/–',sub:'wired up',label:'mcp · hooks · statusline'})}
       <div class="ifoot" id="iMcpFoot">—</div></section>
-    <section class="card icard d-i4 spot lift">
-      <div class="ihd">${ic('history')}<span>activity</span></div>
+    <section class="card icard d-i4 spot lift act" onclick="openActivity()"
+      title="Open the activity log" role="button" tabindex="0">
+      <div class="ihd">${ic('history')}<span>activity</span><span class="sp"></span>
+        <span class="itag" id="iJobsN"></span></div>
       ${inst('eq','jobs',{fmt:'int',sub:'live now'})}
       <div class="joblist" id="dashJobs"></div>
       <div class="ifoot" id="iJobsFoot">—</div></section>
 
-    <section class="card d-continue spot lift" id="dashContinue">${continueTileHtml(ST.recent||[])}</section>
-    <section class="card d-projects spot">
-      <div class="lbl">Workspace <span id="dashProjN" style="color:var(--dim2)"></span></div>
-      ${inst('flow','flow',{noread:1,title:'Projects — size by tokens, colour by account, dashed links share an account'})}
-      <div class="dlist" id="dashProjects">${MO.skel(4)}</div></section>
+    <section class="card d-acct"><div class="lbl">Plan usage by account
+      <span id="dashAcctN" style="color:var(--dim2)"></span></div>
+      <div class="acct-rail" id="dashAcct"></div></section>
     <section class="card d-chart spot"><div class="lbl">Token trend</div>
       <div class="kpi" id="dashKpi"></div>
       <div class="tchart" id="dashChart">${MO.skel(2,40)}</div></section>
-    <section class="card d-acct"><div class="lbl">Plan usage by account</div>
-      <div class="acct-rail" id="dashAcct"></div></section>
+
+    <div class="dband d-b2"><span>Work</span></div>
+    <section class="card d-continue spot lift" id="dashContinue">${continueTileHtml(ST.recent||[])}</section>
     <section class="card d-recent spot"><div class="lbl">Recent sessions</div>
       <div class="fld"><input id="hqSearch" placeholder="Search every session…"></div>
       <div id="hqRes"></div>
       <div class="dlist" id="dashRecent">${MO.skel(4)}</div></section>
+
+    <div class="dband d-b3"><span>Workspace</span></div>
+    <section class="card d-projects spot">
+      <div class="lbl">Projects <span id="dashProjN" style="color:var(--dim2)"></span></div>
+      ${inst('flow','flow',{noread:1,title:'Projects — size by tokens, colour by account, dashed links share an account'})}
+      <div class="dlist" id="dashProjects">${MO.skel(4)}</div></section>
   </div>`);
   bindHomeSearch();
   mounted();
@@ -933,12 +1091,90 @@ async function refreshDashboard(){
       setV($('#dashContinue'),continueTileHtml(ST.recent));
     DASH_RECENT=d.recent||[];
   }
-  if(plan)setV($('#dashAcct'),(plan.accounts||[]).map(acctCard).join('')
-    ||'<div style="color:var(--dim2)">no accounts configured</div>');
+  if(plan){
+    setV($('#dashAcct'),(plan.accounts||[]).map(acctCard).join('')
+      ||'<div style="color:var(--dim2)">no accounts configured</div>');
+    // the count that the ring's arcs cannot carry: each of these is its OWN
+    // quota, so this rail is where "how close is each one" actually lives
+    const na=(plan.accounts||[]).length;
+    setV($('#dashAcctN'),na?`· ${na}`:'');
+  }
   else if(!d)setV($('#dashAcct'),'<div style="color:var(--dim2)">offline</div>');
   feedDashboard(d,plan);
   mounted();
 }
+/* ── activity drawer ──────────────────────────────────────────────────────
+   The card was a dead end: a live count and a 24h equalizer, and clicking it
+   did nothing, while the payload behind it already carried every job with its
+   status, timings and last message. Three groups, because those are the three
+   states a piece of work can be in from here.
+
+   It renders from DASH_ACT — the payload the 10s poll already fetched — and
+   NEVER fetches on its own, so opening it costs a repaint and nothing else.
+   The poll keeps running while it is open, so it stays live. */
+let DASH_ACT=null;
+function openActivity(){
+  drawActivity();
+  $('#actovl').classList.add('show');
+}
+function closeActivity(){$('#actovl').classList.remove('show');}
+function actAgo(ts){
+  if(!ts)return '';
+  const s=Math.max(0,Math.round(Date.now()/1000-ts));
+  return s<60?s+'s ago':s<3600?Math.round(s/60)+'m ago'
+    :s<86400?Math.round(s/3600)+'h ago':Math.round(s/86400)+'d ago';
+}
+function actDur(s){
+  s=Math.max(0,s|0);
+  return s<60?s+'s':s<3600?Math.round(s/60)+'m':(s/3600).toFixed(1)+'h';
+}
+function drawActivity(){
+  const el=$('#actBody');if(!el)return;
+  const d=DASH_ACT||{};
+  const jobs=d.jobs||[],live=d.live||{total:0,by_account:{}},recent=d.recent||[];
+  const running=jobs.filter(j=>j.status==='running'||j.status==='awaiting');
+  const done=jobs.filter(j=>j.status!=='running'&&j.status!=='awaiting');
+  const tone={done:'ok',error:'err',cancelled:'',awaiting:'warn',running:''};
+  const jobRow=j=>`<div class="arow3">
+    <span class="tag ${tone[j.status]||''}">${esc(j.status)}</span>
+    <div><b>${esc(j.kind||'job')}</b>
+      ${j.last?`<div class="asub">${esc(j.last)}</div>`:''}
+      ${j.error?`<div class="asub err">${esc(j.error)}</div>`:''}</div>
+    <span class="aage">${actDur(j.elapsed)}${j.ended?' · '+actAgo(j.ended):''}</span>
+    ${j.status==='awaiting'?`<button class="btn sm pri" onclick="closeActivity();jobOpen('${jsq(j.id)}')">Open</button>`:''}
+  </div>`;
+  // live Claude Code sessions are the OTHER kind of ongoing work, and the one
+  // that is usually actually happening — claudectl's own jobs are rare
+  const liveRows=Object.entries(live.by_account||{}).sort((a,b)=>b[1]-a[1])
+    .map(([n,c])=>`<div class="arow3">
+      <span class="dot" style="background:${acctColor(n)}"></span>
+      <div><b>${esc(n)}</b><div class="asub">${c} live session${c>1?'s':''}</div></div>
+      <span class="aage">within ${Math.round((live.window||900)/60)}m</span></div>`).join('');
+  // a session whose transcript stopped moving before the live window is one
+  // that ENDED — the payload has no separate "finished sessions" feed, and
+  // deriving it from mtime is exact rather than a guess
+  const now=Date.now()/1000, win=live.window||900;
+  const ended=recent.filter(r=>r.mtime&&now-r.mtime>win).slice(0,8);
+  const sessRow=r=>`<div class="arow3">
+    <span class="dot" style="background:${acctColor(r.account||'default')}"></span>
+    <div><b>${esc(r.project)}</b><div class="asub">${esc(r.title||r.sid)} · ${r.msgs} msgs</div></div>
+    <span class="aage">${esc(r.age)} ago</span>
+    <button class="btn sm" onclick="closeActivity();dashResumeSid('${jsq(r.sid)}')">Resume</button></div>`;
+  const sect=(title,n,body)=>`<div class="sect"><div class="secth"><h4>${title}</h4>
+      <span class="secttag">${n}</span></div>${body}</div>`;
+  const nRun=running.length+Object.keys(live.by_account||{}).length;
+  el.innerHTML=
+    sect('Running now',nRun||'',
+      (running.map(jobRow).join('')+liveRows)
+      ||'<div class="empty">No live sessions and no running jobs.</div>')
+    +sect('Finished',done.length||'',
+      done.length?done.map(jobRow).join('')
+        :'<div class="empty">No claudectl job has finished this run.</div>')
+    +sect('Recently ended sessions',ended.length||'',
+      ended.length?ended.map(sessRow).join('')
+        :'<div class="empty">Nothing has ended recently.</div>');
+}
+
 /* ── the instrument feed ───────────────────────────────────────────────────
    One place where the two dashboard fetches become gauge values, so the mapping
    from "what the API said" to "what the needle shows" is auditable in one read
@@ -952,14 +1188,33 @@ function feedDashboard(d,plan){
   const wins=accs.flatMap(a=>(a.windows||[]).map(w=>(w.pct||0)/100));
   const peakWin=wins.length?Math.max(...wins):0;
   const hot=accs.find(a=>(a.windows||[]).some(w=>(w.pct||0)>=80));
-  INST.set('quota',{v:peakWin,
-    tone:peakWin>=.8?'err':peakWin>=.6?'warn':null});
-  setRead('quota',peakWin*100);
+
+  /* ── Spend today ──────────────────────────────────────────────────────────
+     The ring plots TOKENS, split one arc per account, because tokens are the
+     only cross-account aggregate that is actually additive. Each account's
+     quota `pct` is a share of ITS OWN window, so summing or averaging those
+     five numbers produces something that looks like a total and means nothing.
+     The quota question is answered next to it as a COUNT of accounts with
+     headroom, plus the one that will run out first.
+
+     The ring's fill is still driven by the worst window — that is the thing
+     with a real ceiling — while the arcs inside it carry the split. */
+  const spendBy=Object.entries((d&&d.today&&d.today.by_account)||{})
+    .filter(([,t])=>t>0).sort((a,b)=>b[1]-a[1]);
+  const todayTok=spendBy.reduce((n,[,t])=>n+t,0)||((d&&d.today&&d.today.tokens)||0);
+  INST.set('quota',{v:peakWin||(todayTok?0.06:0),
+    tone:peakWin>=.8?'err':peakWin>=.6?'warn':null,
+    segments:spendBy.map(([n,t])=>({v:t,color:resolveColor(acctColor(n))}))});
+  setRead('quota',todayTok);
+  // a legend, because an arc with no name is a colour
+  setV($('#iQuotaLeg'),spendBy.slice(0,5).map(([n,t])=>
+    `<span><i style="background:${acctColor(n)}"></i>${esc(n)} ${fmtTok(t)}</span>`).join(''));
+  const roomy=accs.filter(a=>!(a.windows||[]).some(w=>(w.pct||0)>=50)).length;
   setV($('#iQuotaFoot'),accs.length
-    ?(hot?`<b>${esc(hot.email||hot.account)}</b> is the constraint`
-        :`${accs.length} account${accs.length>1?'s':''} · all healthy`)
-    :'no accounts configured');
-  setV($('#iQuotaN'),accs.length>1?accs.length+' accts':'');
+    ?(hot?`<b>${esc(hot.email||hot.account)}</b> runs out first — ${Math.round(peakWin*100)}% of its window`
+        :`${roomy}/${accs.length} account${accs.length>1?'s':''} under 50%`)
+    :(todayTok?'no plan accounts configured':'nothing spent today'));
+  setV($('#iQuotaN'),(d&&d.today&&d.today.cost)?'$'+(d.today.cost).toFixed(2):'');
 
   if(!d)return;
   const bd=d.breakdown||{};
@@ -973,19 +1228,63 @@ function feedDashboard(d,plan){
   const peakHr=peakDay/12||1;                 // a heavy day ≈ 12 working hours
   INST.set('burn',{v:Math.min(1,burn/peakHr)});
   setRead('burn',burn);
-  setV($('#iBurnFoot'),`today <b>${fmtTok(today)}</b> · peak day <b>${fmtTok(peakDay)}</b>`);
+  /* A rate wants a sentence that ends somewhere. Three additions, all from
+     numbers already in the payload: where today lands if it keeps up, how that
+     compares to the last seven days, and how much of it was free-tier. */
+  const proj=Math.round(burn*24);
+  const wk=(d.week||[]).filter(r=>r.tokens>0);
+  const wkAvg=wk.length?wk.reduce((n,r)=>n+r.tokens,0)/wk.length:0;
+  const ratio=wkAvg?today/wkAvg:0;
+  const omniT=(d.today||{}).omni_tokens||0;
+  // .ifoot is one clipped line — the long form lives in the tooltip
+  setV($('#iBurnFoot'),
+    `<span title="${esc(`${fmtTok(today)} so far today, on track for ${fmtTok(proj)} by midnight`
+      + (ratio ? `. That is ${ratio.toFixed(1)}x your 7-day average.` : '')
+      + (omniT ? ` ${fmtTok(omniT)} of it ran on free-tier models.` : ''))}">`
+    +`<b>${fmtTok(proj)}</b> by midnight`
+    +(ratio?` · <b>${ratio.toFixed(1)}×</b> 7-day avg`:'')
+    +(omniT?` · ${fmtTok(omniT)} free`:'')+'</span>');
 
+  /* ── Tooling → is the workspace actually wired up ──────────────────────────
+     MCP reachability alone answered a narrow question. The card now counts
+     every wiring claudectl can verify from files: MCP servers up, the failover
+     proxy, and per account whether hooks and a statusline are installed AND
+     whether the statusline will actually be drawn — an installed statusline
+     under the classic renderer is invisible, which from the settings file looks
+     exactly like one that works. */
   const mcp=d.mcp||[],up=mcp.filter(m=>m.running).length;
   const fo=!!((d.failover||{}).running);
-  const nodes=mcp.length+1,liveN=up+(fo?1:0);   // +1: the failover proxy counts
+  const wir=d.wiring||{accounts:[],ok:0,total:0};
+  /* The ring scores WIRING, not MCP reachability. An MCP server that is not
+     currently connected is usually not a fault — most start on demand, and
+     "1/10 up" is an ordinary healthy state — so counting them would pin this
+     card at red forever and it would stop meaning anything. That is the same
+     mistake the activity gauge already made once by measuring claudectl's
+     idleness instead of the workspace's work. MCP stays in the footer as
+     information; the ring counts things that are actually misconfigured. */
+  const nodes=wir.total+1,liveN=wir.ok+(fo?1:0);   // +1: the failover proxy
   INST.set('mcp',{v:nodes?liveN/nodes:0,
     tone:liveN===nodes?'ok':liveN?'warn':'err'});
   // the ring counts the reachable servers and the unit carries the total, so
   // the readout says "1 /2" without needing a formatter that knows both
-  setRead('mcp',up);
-  setUnit('mcp','/'+mcp.length);
-  setV($('#iMcpFoot'),`mcp <b>${up}/${mcp.length}</b> · failover `
-    +(fo?`<b style="color:var(--ok)">on</b>`:'off'));
+  setRead('mcp',liveN);
+  setUnit('mcp','/'+nodes);
+  // Name what is WRONG — a count of healthy things tells you nothing to do.
+  // Kept short because .ifoot is one clipped line: "statusline hidden" is the
+  // actionable half, and the reason belongs in a tooltip.
+  const broke=[];
+  (wir.accounts||[]).forEach(a=>{
+    if(a.statusline_hidden)broke.push([`${a.account}: statusline hidden`,
+      'installed but the classic renderer never draws it — set tui: fullscreen']);
+    else if(!a.statusline)broke.push([`${a.account}: no statusline`,'']);
+    if(!a.hooks)broke.push([`${a.account}: no hooks`,'']);
+  });
+  if(!fo)broke.push(['failover off','no model fallback proxy running']);
+  setV($('#iMcpFoot'),broke.length
+    ?`<span style="color:var(--warn)" title="${esc(broke.map(b=>b[0]+(b[1]?' — '+b[1]:'')).join('\n'))}">`
+      +`${esc(broke[0][0])}</span>`
+      +(broke.length>1?` <span style="color:var(--dim2)">+${broke.length-1} more</span>`:'')
+    :`mcp <b>${up}/${mcp.length}</b> up · ${wir.total} account${wir.total===1?'':'s'} wired`);
 
   /* ── Activity ──────────────────────────────────────────────────────────
      Reads LIVE CLAUDE CODE SESSIONS across every account, not claudectl's own
@@ -1005,7 +1304,13 @@ function feedDashboard(d,plan){
      Activity. */
   const live=d.live||{total:0,by_account:{}};
   const nlive=live.total||0;
-  const jobs=(d.jobs||[]).length;
+  const allJobs=d.jobs||[];
+  const runJobs=allJobs.filter(j=>j.status==='running'||j.status==='awaiting');
+  const jobs=runJobs.length;
+  DASH_ACT=d;                      // the drawer renders from the poll's payload
+  // …and re-renders on each poll while it is open, so it stays live without
+  // owning a timer of its own
+  if($('#actovl')&&$('#actovl').classList.contains('show'))drawActivity();
   INST.set('jobs',{v:Math.min(1,nlive/3),beats:nlive,series:d.hours||[]});
   // Feed the background: live sessions dominate, claudectl's own jobs also
   // count (a memory build IS the workspace working), burn is a floor.
@@ -1018,10 +1323,18 @@ function feedDashboard(d,plan){
   const byAcct=Object.entries(live.by_account||{})
     .sort((a,b)=>b[1]-a[1])
     .map(([n,c])=>`${esc(n)}${c>1?` <b>${c}</b>`:''}`).join(' · ');
-  setV($('#iJobsFoot'),nlive
-    ?`<b>${nlive}</b> live${byAcct?' · '+byAcct:''} · ${sess} today`
-    :(jobs?`<b>${jobs}</b> claudectl job${jobs>1?'s':''} · ${sess} today`
-          :`idle · <b>${sess}</b> session${sess===1?'':'s'} today`));
+  // an awaiting job is PARKED at an approval gate — the single most important
+  // thing on this page, because nothing moves until you answer it
+  const gated=allJobs.filter(j=>j.status==='awaiting').length;
+  setV($('#iJobsN'),gated?`${gated} needs you`:(allJobs.length>jobs
+    ?`${allJobs.length-jobs} done`:''));
+  $('#iJobsN').className='itag'+(gated?' hot':'');
+  setV($('#iJobsFoot'),gated
+    ?`<b style="color:var(--warn)">${gated} waiting for approval</b> — click to open`
+    :nlive
+      ?`<b>${nlive}</b> live${byAcct?' · '+byAcct:''} · ${sess} today`
+      :(jobs?`<b>${jobs}</b> claudectl job${jobs>1?'s':''} · ${sess} today`
+            :`idle · <b>${sess}</b> session${sess===1?'':'s'} today`));
 
   // flow map: one node per project, dashed links where two share a non-default
   // account. Positions are solved from the index, so the same set always lands
@@ -1738,17 +2051,59 @@ function drawTools(){
       ?iss.map(i=>`<div class="lrow"><span class="tag ${i.severity==='warn'?'warn':''}">${esc(i.severity)}</span>
           <div><b>${esc(i.message)}</b><div style="color:var(--dim);font-size:12px">${esc(i.hint||'')}</div></div></div>`).join('')
       :'<div class="empty">No issues found.</div>')
-      +(bash.length?`<h3 style="margin-top:14px">Most-run commands</h3>
-        <div style="color:var(--dim);font-size:13px;margin-bottom:8px">Allowlist candidates, taken from what this project actually ran.</div>
-        <div style="font:12px Consolas,monospace">${bash.map(b=>esc(b.command)+' ×'+b.count).join(' · ')}</div>
-        <div class="mrow"><button class="btn sm" onclick="allowlistApply()">Add to permissions</button></div>`:'');});
+      // one chip per command with its count, instead of a dot-separated run of
+      // monospace text that reads as a single unbreakable line
+      +(bash.length?`<div class="sect">
+        <div class="secth"><h4>Most-run commands</h4>
+          <button class="btn sm" onclick="allowlistApply()">Add to permissions</button></div>
+        <div class="secthint">Allowlist candidates, taken from what this project actually ran.</div>
+        <div class="cmdchips">${bash.map(b=>
+          `<span class="cmdchip"><b>${esc(b.command)}</b><i>${+b.count}</i></span>`).join('')}</div>
+        </div>`:'');});
   api('/api/brief?'+qs(C())).then(d=>{const b=$('#bOut');if(!b)return;
-    const sug=(d.suggestions||[]),since=(d.since_last||[]);
+    const sug=(d.suggestions||[]);
     b.innerHTML=(sug.length
-      ?sug.map(s=>`<div class="lrow"><span class="tag">${esc(s.tag)}</span><div>${esc(s.text)}</div></div>`).join('')
+      ?sug.map(s=>`<div class="lrow"><span class="tag">${esc(s.tag)}</span><div class="clamp3">${esc(s.text)}</div></div>`).join('')
       :'<div class="empty">Nothing to suggest yet.</div>')
-      +(since.length?`<h3 style="margin-top:14px">Since your last session</h3>
-        <div style="font:12px Consolas,monospace;white-space:pre-wrap">${esc(since.join('\n'))}</div>`:'');});
+      +sinceHtml(d);});
+}
+/* "Since your last session" was a single pre-wrapped blob of every commit in
+   every sub-repo — on a workspace of 8 repos it was most of the page and told
+   you nothing at a glance. One collapsible row per repo, summarised by counts,
+   and only the repo you open costs you any reading. */
+function sinceHtml(d){
+  const s=d.since||{};
+  const repos=s.repos||[];
+  if(!repos.length){
+    const note=s.note||((d.since_last||[]).join('\n'));
+    return note?`<div class="sect"><div class="secth"><h4>Since your last session</h4></div>
+      <div class="empty">${esc(note)}</div></div>`:'';
+  }
+  const tot=repos.reduce((n,r)=>n+r.commits.length,0);
+  const dirty=repos.reduce((n,r)=>n+(r.dirty?1:0),0);
+  return `<div class="sect"><div class="secth"><h4>Since your last session</h4>
+      <span class="secttag">${tot} commit${tot===1?'':'s'} · ${repos.length} repo${repos.length===1?'':'s'}${dirty?` · ${dirty} dirty`:''}</span>
+      <button class="btn sm icon" title="Re-read git in every repo" onclick="briefReload()">${ic('refresh')}</button></div>
+    ${repos.map(r=>`<details class="rgrp"${repos.length===1?' open':''}>
+      <summary><span class="rn">${esc(r.label||'this repo')}</span>
+        <span class="rc">${r.commits.length} commit${r.commits.length===1?'':'s'}</span>
+        ${r.dirty?`<span class="tag warn">${r.dirty} uncommitted</span>`:''}</summary>
+      ${r.commits.length?`<div class="clog">${r.commits.map(c=>{
+        const sp=c.indexOf(' ');
+        return `<div><code>${esc(sp>0?c.slice(0,sp):c)}</code>${esc(sp>0?c.slice(sp):'')}</div>`;
+      }).join('')}</div>`:'<div class="empty">No commits — working tree changes only.</div>'}
+    </details>`).join('')}</div>`;
+}
+/* The cached read is what makes reopening the tab instant; this is the way to
+   ask for a fresh one, so the cache is never something you cannot get past. */
+async function briefReload(){
+  const b=$('#bOut');if(b)b.innerHTML='<span class="spin"></span>';
+  const d=await api('/api/brief?'+qs(C())+'&refresh=1');
+  if(!$('#bOut'))return;                     // navigated away mid-fetch
+  const sug=(d.suggestions||[]);
+  $('#bOut').innerHTML=(sug.length
+    ?sug.map(s=>`<div class="lrow"><span class="tag">${esc(s.tag)}</span><div class="clamp3">${esc(s.text)}</div></div>`).join('')
+    :'<div class="empty">Nothing to suggest yet.</div>')+sinceHtml(d);
 }
 async function allowlistApply(){
   const r=await post('/api/health/allowlist',C());
@@ -2159,10 +2514,12 @@ async function drawPage(id){
    never opened. Read-only except the settings editor and the disk sweep, and
    the sweep reports before it ever deletes. */
 async function pgClient(nav){
-  const [use,bg,disk,cc]=await Promise.all([
+  const [use,bg,disk,cc,am]=await Promise.all([
     api('/api/client/usage'),api('/api/background-agents'),
-    api('/api/disk'),api('/api/cc-settings')]);
+    api('/api/disk'),api('/api/cc-settings'),
+    api('/api/automode?'+qs(CUR?{path:CUR.path}:{}))]);
   CCACCTS=cc.accounts||[];
+  AM=am;
   const useRows=(k,label)=>{
     const rows=(use[k]||[]);
     if(!rows.length)return `<div class="empty">No ${label} recorded as used yet.</div>`;
@@ -2199,6 +2556,7 @@ async function pgClient(nav){
           <input id="gcDays" type="number" min="1" value="30"></div>
         <button class="btn sm" onclick="gcRun(false)">Preview cleanup</button>
         <span id="gcOut"></span></div></div>
+    ${autoModeCard(am)}
     <div class="card"><h3>${ic('settings')} Claude Code settings</h3>
       <p style="color:var(--dim);font-size:13px;margin-bottom:12px">
         Written into each account's own <code>settings.json</code>. Leaving a field empty
@@ -2213,6 +2571,76 @@ async function pgClient(nav){
         <button class="btn sm" onclick="phSearch()">Search</button></div>
       <div id="phOut"></div></div>`))return;
 }
+/* ── auto mode ──
+   In auto mode a classifier reviews each action instead of you. It trusts your
+   working directory and the repo's existing remotes and NOTHING else, so
+   routine internal work gets blocked until you say what else is yours. Two
+   halves, and they answer each other: the environment entries are the fix, and
+   the denial list is the evidence for which entry to write. */
+let AM=null;
+function autoModeCard(am){
+  const accts=am.accounts||[],den=am.denials||[];
+  const modeChips=(a,i)=>(am.modes||[]).map(m=>
+    `<span class="chip${(a.mode||'')===m?' on':''}" title="${esc((am.profiles||{})[m]||'')}"
+       onclick="amSetMode(${i},'${jsq(m)}')">${esc((am.mode_labels||[])[(am.modes||[]).indexOf(m)]||m||'unset')}</span>`).join('');
+  const rows=accts.map((a,i)=>`<div class="amrow2">
+    <div class="amname" title="${esc(a.dir)}">${esc(a.name)}</div>
+    <div class="chips">${modeChips(a,i)}</div>
+    <div class="amenv">${a.environment.length
+      ? `${a.environment.filter(e=>e!=='$defaults').length} trusted entry(ies)`
+      : '<span style="color:var(--dim2)">defaults only</span>'}
+      <button class="btn sm" onclick="amEditEnv(${i})">Edit</button></div></div>`).join('');
+  // grouped, not a raw log: the question is "what keeps getting blocked"
+  const denRows=den.length?den.map(g=>`<div class="lrow">
+      <span class="tag warn">×${g.count}</span>
+      <div><b>${esc(g.key)}</b>
+        <div style="color:var(--dim);font-size:12px">${esc((g.samples||[])[0]||'')}</div>
+        ${g.reason?`<div style="color:var(--dim2);font-size:11.5px">${esc(g.reason)}</div>`:''}</div>
+    </div>`).join('')
+    :'<div class="empty">Nothing blocked in this project yet.</div>';
+  return `<div class="card"><h3>${ic('check')} Auto mode</h3>
+    <p style="color:var(--dim);font-size:13px;margin-bottom:12px">A classifier reviews each
+      action instead of you. It trusts this repo and its existing remotes; everything else
+      counts as external until you say otherwise. <b>Written to each account's own
+      <code>settings.json</code></b> — the classifier ignores <code>autoMode</code> from a
+      project file on purpose, since a checked-in file could otherwise grant itself rules.</p>
+    ${rows||'<div class="empty">No accounts configured.</div>'}
+    <div class="sect"><div class="secth"><h4>Recently blocked, in this project</h4>
+      <span class="secttag">${den.reduce((n,g)=>n+g.count,0)} denial(s)</span></div>
+      <div class="secthint">From the <code>PermissionDenied</code> hook. A destination that
+        keeps appearing belongs in the trusted list above; a command you want to run
+        unreviewed belongs in an allow rule.</div>
+      ${denRows}</div>
+    <div class="sect"><div class="secth"><h4>Effective rules</h4>
+      <button class="btn sm" onclick="amRules('config')">Show effective</button>
+      <button class="btn sm" onclick="amRules('defaults')">Show built-in</button></div>
+      <pre id="amRules" class="amrules"></pre></div></div>`;
+}
+async function amSetMode(i,mode){
+  const a=(AM.accounts||[])[i];if(!a)return;
+  const r=await post('/api/automode',{cfgdir:a.dir,mode});
+  if(r&&r.ok){a.mode=mode;toast(`${a.name}: ${mode||'unset'}`,'ok');go('client');}
+}
+async function amEditEnv(i){
+  const a=(AM.accounts||[])[i];if(!a)return;
+  // "$defaults" is never shown or edited: it is added back on save, and a user
+  // deleting it by accident would silently discard every built-in trust slot
+  const cur=(a.environment||[]).filter(e=>e!=='$defaults').join('\n');
+  const v=await ask('Trusted infrastructure — '+a.name,
+    [{type:'textarea',label:'One entry per line',value:cur}],
+    'Plain English, not patterns — the classifier reads them as prose. '
+    +'e.g. "Source control: github.com/acme and all repos under it"');
+  if(v===null)return;
+  const r=await post('/api/automode',{cfgdir:a.dir,environment:v[0]});
+  if(r&&r.ok){toast(r.message||'Saved','ok');go('client');}
+}
+async function amRules(which){
+  const el=$('#amRules');if(!el)return;
+  el.textContent='…';
+  const r=await api('/api/automode/config?'+qs({which}));
+  el.textContent=r.ok?JSON.stringify(r.rules,null,2):(r.error||'could not read');
+}
+
 /* Twenty-one raw camelCase keys against three unlabelled columns of white
    browser-default inputs is what this was. Three things fix it: the controls
    go through `.fld` so they are the app's inputs and follow the skin, the
@@ -3625,13 +4053,13 @@ async function setExtractSave(){
    time it lands. setV() and the gallery renderers have always guarded; the chip
    helpers did not, and threw an uncatchable pageerror on a fast settings→home
    hop. Cheaper here than at ~20 call sites. */
-function chipsFill(el,vals,labels,cur){
+function chipsFill(el,vals,labels,cur,onpick){
   if(!el)return;
   el.innerHTML=vals.map((v,i)=>
     `<span class="chip${v===cur?' on':''}" data-v="${esc(v)}">${esc(labels?labels[i]:(v||'default'))}</span>`).join('');
   el.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{
     el.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));
-    c.classList.add('on');});
+    c.classList.add('on');if(onpick)onpick(c.dataset.v);});
 }
 function chipVal(el){if(!el)return '';const c=el.querySelector('.chip.on');return c?c.dataset.v:'';}
 function chipSet(el,v){if(!el)return;el.querySelectorAll('.chip').forEach(c=>
@@ -3689,7 +4117,19 @@ function updateHint(){
   const role=(ST.options.effort_profiles||{})[e]||'';
   $('#fEffLabel').textContent=(e||'default')+(role?' · '+role:'');
   updateFrontierReadout();
+  updatePermHint(m);
   markPreset();
+}
+/* What the chosen mode means, and — the part that matters — whether it will
+   actually apply. `auto` is unavailable on some models, and Claude Code starts
+   the session in manual without saying so, so claudectl says so here. */
+function updatePermHint(model){
+  const el=$('#fPermHint');if(!el)return;
+  const p=chipVal($('#fPerm'));
+  const note=((ST.options.perm_notes||{})[p]||{})[model||'']||['',''];
+  const desc=(ST.options.perm_profiles||{})[p]||'';
+  el.className='fsub'+(note[0]?' adv-'+note[0]:'');
+  el.textContent=note[1]||desc;
 }
 function markPreset(){
   const [m,e]=currentModelEffort(),th=chipVal($('#fThink')),su=chipVal($('#fSub'));
@@ -3758,7 +4198,7 @@ function askLaunch(cfg){
   // an explicit saved default that isn't one of the frontier stops → respect
   // it by opening pinned to the exact combo, rather than silently rounding
   setPinMode(fi<0&&!!(curModel||curEffort));
-  chipsFill($('#fPerm'),o.perms,o.perm_labels,d.perm);
+  chipsFill($('#fPerm'),o.perms,o.perm_labels,d.perm,()=>updateHint());
   chipsFill($('#fThink'),o.thinking,o.thinking_labels,d.max_thinking);
   chipsFill($('#fSub'),o.models,o.model_labels,d.subagent_model);
   chipsFill($('#fWt'),['','*'],['off','auto'],'');
@@ -3852,7 +4292,7 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&$('#ovl').classList.contains('show')
      &&e.target.tagName!=='INPUT')doLaunch();
   if(e.key==='Escape'){
-    const openModals=['#ovl','#govl','#oovl','#jovl','#povl'].find(id=>$(id)&&$(id).classList.contains('show'));
+    const openModals=['#ovl','#govl','#oovl','#jovl','#povl','#actovl'].find(id=>$(id)&&$(id).classList.contains('show'));
     if(openModals)$(openModals).classList.remove('show');
     else $('#drawer').classList.remove('show');
     if(__lastFocus){__lastFocus.focus();__lastFocus=null;}
@@ -3986,6 +4426,7 @@ function startHeartbeat(){if(!HB_TIMER){heartbeat();HB_TIMER=setInterval(heartbe
     if(STAGE.tier==='off'||!MO.on)STAGE._static();
   }
   applyTheme(ST.theme);segDraw();
+  applySideWidth(ST.side_w||0);applyNavHeight(ST.nav_h||0);bindSideGrips();
   if(window.STAGE)STAGE.page(PAGE_);
   MO.spot($('#content'));
   watchContent();

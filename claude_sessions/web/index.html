@@ -67,6 +67,8 @@
     <div class="search"><input id="q" placeholder="Filter projects…"></div>
     <button class="btn sm openp" id="bOpenPath">＋ Open project by path…</button>
     <div class="plist" id="plist"></div>
+    <div class="hgrip" id="hgrip" role="separator" aria-orientation="horizontal"
+         tabindex="0" title="Drag to resize · double-click to reset"></div>
     <div class="nav" id="nav"></div>
     <div class="foot">
       <span>interface</span>
@@ -75,6 +77,8 @@
         <button id="segGui">GUI</button>
       </div>
     </div>
+    <div class="sgrip" id="sgrip" role="separator" aria-orientation="vertical"
+         tabindex="0" title="Drag to resize · double-click to reset"></div>
   </aside>
 
   <main class="main">
@@ -126,7 +130,8 @@
           </div>
         </div>
         <div class="grid2">
-          <div class="fld"><label>Permission mode</label><div class="chips" id="fPerm"></div></div>
+          <div class="fld"><label>Permission mode</label><div class="chips" id="fPerm"></div>
+            <div class="fsub" id="fPermHint"></div></div>
           <div class="fld" id="fAcctWrap"><label>Account</label><div class="chips" id="fAcct"></div></div>
           <div class="fld"><label>Thinking cap</label><div class="chips" id="fThink"></div></div>
           <div class="fld"><label>Subagent model</label><div class="chips" id="fSub"></div></div>
@@ -153,6 +158,17 @@
     <div class="mcards" id="gCards"></div>
     <div class="fld" style="margin-top:10px"><label>Effort</label><div id="gEffort"></div></div>
     <div class="mrow"><button class="btn pri" id="gClose">Close</button></div>
+  </div>
+</div>
+
+<!-- activity drawer: what is running, what finished, what just ended.
+     Renders from the dashboard poll's payload; it never fetches. -->
+<div class="ovl" id="actovl" role="dialog" aria-modal="true" aria-label="Activity">
+  <div class="modal wide">
+    <h3>Activity</h3>
+    <div class="sub">Live Claude Code sessions across every account, claudectl's own background jobs, and what has finished.</div>
+    <div id="actBody"></div>
+    <div class="mrow"><button class="btn pri" onclick="closeActivity()">Close</button></div>
   </div>
 </div>
 

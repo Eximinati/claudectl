@@ -148,6 +148,12 @@ def state_payload():
         'options': {
             'efforts': EFFORTS, 'models': MODELS, 'model_labels': MODEL_LABELS,
             'perms': PERMS, 'perm_labels': PERM_LABELS,
+            'perm_profiles': _c.PERM_PROFILES,
+            # (level, message) per mode x model — the pair the TUI renders under
+            # the permission row. Small enough to precompute; unlike advise() it
+            # does not multiply by effort.
+            'perm_notes': {p: {m: list(_c.perm_note(p, m)) for m in MODELS}
+                           for p in PERMS},
             'thinking': THINKING_CAPS, 'thinking_labels': THINKING_LABELS,
             'model_cards': _c.model_card_rows(),
             'effort_profiles': _c.EFFORT_PROFILES,
@@ -173,6 +179,13 @@ def state_payload():
         'failover_quiet': bool(s.get('failover_quiet')),
         'theme': s.get('theme', 'default'),
         'motion': _motion_level(s),
+        # collapsed sidebar nav groups — a list of group names, so adding or
+        # renaming a group never needs a migration: an unknown name is simply
+        # not matched by any group and is carried through untouched.
+        'nav_collapsed': [str(x) for x in (s.get('nav_collapsed') or [])],
+        # 0 = never dragged; the CSS default stays in charge
+        'side_w': int(s.get('side_w') or 0),
+        'nav_h': int(s.get('nav_h') or 0),
         # '' = wear whatever skin the selected palette names as its default
         'skin': s.get('skin', ''),
         # '' = classic mode (palette x skin). A name = that world, locked.
@@ -540,6 +553,9 @@ _SETTING_KEYS = (
     # read for back-compat (_motion_level) but never written again, so they age
     # out of settings.json
     'gui_shell', 'theme', 'motion', 'skin', 'stage', 'world', 'surface',
+    # NOTE: nav_collapsed and side_w are deliberately NOT here — they are
+    # clamped/typed explicitly below, and two owners for one key is how a
+    # sanitizer gets bypassed.
     'otel_enabled', 'otel_endpoint', 'otel_protocol', 'otel_headers',
     'editor', 'claude_exe',
     'plan_model', 'exec_model', 'omniroute_base_url',
@@ -561,6 +577,20 @@ def _api_settings(q, body):
             raw = raw.replace(',', '\n').split('\n')
         s['failover_models'] = [
             str(m).strip() for m in (raw or []) if str(m).strip()][:8]
+    # Chrome geometry is user input that decides layout on the NEXT boot, so a
+    # junk value would render an unusable window with no obvious way back.
+    # Clamped and typed here rather than trusted from the client.
+    if 'nav_collapsed' in body:
+        raw = body['nav_collapsed']
+        s['nav_collapsed'] = ([str(x)[:40] for x in raw][:16]
+                              if isinstance(raw, list) else [])
+    for key, lo, hi in (('side_w', 210, 520), ('nav_h', 34, 900)):
+        if key in body:
+            try:
+                v = int(body[key] or 0)
+            except (TypeError, ValueError):
+                v = 0
+            s[key] = 0 if v <= 0 else max(lo, min(hi, v))
     # api_key only overwritten when the user actually typed a new one — never
     # blanked by a settings-save round-trip that omits it because the frontend
     # never receives the raw key back to resubmit

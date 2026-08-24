@@ -50,11 +50,14 @@ def _run_cancellable(cmd, input_text=None, capture_output=True, text=True,
     if job and job.get('cancel_event', threading.Event()).is_set():
         raise JobCancelled
     try:
+        # CREATE_NO_WINDOW: a captured child shows nothing in its console,
+        # so the window is pure flicker. See proc.no_window_flags.
+        from .proc import no_window_flags
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE if capture_output else None,
                                 stderr=subprocess.STDOUT if capture_output else None,
                                 text=text, encoding=encoding, errors=errors,
-                                cwd=cwd, env=env)
+                                cwd=cwd, env=env, creationflags=no_window_flags)
     except Exception:
         return ''
     if job is not None:
@@ -145,20 +148,39 @@ def _reap_locked():
             _JOBS.pop(j['id'], None)
 
 
-def start_job(label, fn, inputs=None):
-    """Run fn() on a daemon thread under the UI bridge. Returns job id.
-    inputs: queued answers for any text_input the flow asks for."""
-    jid = uuid.uuid4().hex[:12]
-    job = {'id': jid, 'status': 'running', 'label': label, 'messages': [],
+def new_job(label, jid=None, inputs=None, **over):
+    """A job registry entry, with every field job_status expects.
+
+    A factory rather than a literal because tests hand-built this dict and it
+    went stale twice — once on `ended`, once on `result` — each time surfacing
+    as a 500 from /api/dashboard rather than as an obviously wrong fixture.
+    One definition of the shape, used by start_job and by anything else that
+    needs one.
+    """
+    job = {'id': jid or uuid.uuid4().hex[:12], 'status': 'running',
+           'label': label, 'messages': [],
            'result': None, 'error': '', 'gate': None,
            'decision': None, 'decision_evt': threading.Event(),
            'inputs': list(inputs or []), 'started': time.time(),
+           # set once, when the job reaches a terminal status. Without it
+           # `elapsed` for a finished job kept counting against the wall clock,
+           # so a job that ran for 12 seconds an hour ago reported "3600s".
+           'ended': 0.0,
            'cancelled': False,
            # its own lock: _JOBS_LOCK covers the REGISTRY, and four threads
            # (the job body, the poll loop, job_decide and job_cancel) mutate
            # the dict's contents — status, gate, decision, procs
            'lock': threading.RLock(),
            'cancel_event': threading.Event(), 'procs': []}
+    job.update(over)
+    return job
+
+
+def start_job(label, fn, inputs=None):
+    """Run fn() on a daemon thread under the UI bridge. Returns job id.
+    inputs: queued answers for any text_input the flow asks for."""
+    job = new_job(label, inputs=inputs)
+    jid = job['id']
     with _JOBS_LOCK:
         _JOBS[jid] = job
         _reap_locked()
@@ -188,6 +210,7 @@ def start_job(label, fn, inputs=None):
                 job['status'] = 'error'
                 job['error'] = job.get('error') or \
                     'job ended without setting a terminal status'
+            job['ended'] = time.time()
             _JOBCTX.job = None
 
     threading.Thread(target=_run, daemon=True).start()
@@ -201,7 +224,15 @@ def job_status(jid):
     with job['lock']:
         out = {k: job[k] for k in ('id', 'status', 'label', 'messages', 'error')}
         out['messages'] = list(out['messages'])
-        out['elapsed'] = int(time.time() - job['started'])
+        # how long it RAN, not how long ago it started. Whole seconds, because
+        # the poll loop compares this string 10x/sec and a fractional value
+        # churns the DOM (see the poll-flicker note in CLAUDE.md).
+        # .get: this dict is built in one place but read by four threads, and a
+        # job that has not finished simply has no end time yet
+        ended = job.get('ended') or 0
+        out['elapsed'] = int((ended or time.time()) - job['started'])
+        out['started'] = int(job['started'])
+        out['ended'] = int(ended)
         if job['status'] == 'awaiting' and job['gate']:
             g = job['gate']
             out['gate'] = {'title': g['title'], 'diff': g['diff'],
@@ -716,6 +747,39 @@ _dash_cache = None
 _dash_cached_at = 0.0
 
 
+def _wiring():
+    """Is this workspace actually set up — per account, from files only.
+
+    Everything here is a settings.json read (small, and already warm because
+    hooks._load is the one reader for that file). No subprocess: this rides the
+    dashboard poll, and the MCP probe next to it is already the expensive part
+    of that payload.
+    """
+    from . import hooks
+    from . import automode
+    rows = []
+    for name, d in _c.all_config_dirs():
+        try:
+            s = hooks._load(d)
+        except Exception:
+            s = {}
+        n_hooks = sum(len(v) for v in (s.get('hooks') or {}).values()
+                      if isinstance(v, list))
+        sl = bool(s.get('statusLine'))
+        rows.append({
+            'account': name, 'dir': d,
+            'hooks': n_hooks,
+            'statusline': sl,
+            # a statusline the classic renderer will never draw is installed and
+            # invisible, which looks identical to working from the settings file
+            'statusline_hidden': sl and s.get('tui') != 'fullscreen',
+            'mode': automode.default_mode(d) or '',
+        })
+    ok = sum(1 for r in rows
+             if r['hooks'] and r['statusline'] and not r['statusline_hidden'])
+    return {'accounts': rows, 'ok': ok, 'total': len(rows)}
+
+
 def api_dashboard(q, body):
     """Home-screen aggregate: today/week usage, live jobs, MCP status,
     cross-account recent sessions, failover proxy state. Cached _DASH_TTL
@@ -736,15 +800,27 @@ def api_dashboard(q, body):
     tday = next((d for d in bd['days'] if d['date'] == tkey), None) or {}
     tk, tc, ts = tday.get('tokens', 0), tday.get('cost', 0.0), tday.get('sessions', 0)
 
+    # Every job, terminal ones included. The dashboard used to send them all and
+    # the client kept only the running count, so "what did that memory build
+    # actually do" had no surface anywhere — the Activity drawer is that surface.
+    # _reap_locked already bounds the registry, so this cannot grow unbounded.
     with _JOBS_LOCK:
         items = list(_JOBS.items())
     jobs = []
     for jid, _jd in items:
         st = job_status(jid)
-        if st:
-            jobs.append({'id': st['id'], 'kind': st.get('label', ''),
-                         'status': st.get('status', ''),
-                         'elapsed': st.get('elapsed', 0)})
+        if not st:
+            continue
+        jobs.append({'id': st['id'], 'kind': st.get('label', ''),
+                     'status': st.get('status', ''),
+                     'elapsed': st.get('elapsed', 0),
+                     'started': st.get('started', 0),
+                     'ended': st.get('ended', 0),
+                     'error': (st.get('error') or '')[:200],
+                     # last line of chatter: what it was doing when it stopped
+                     'last': (st.get('messages') or [''])[-1][:160]})
+    jobs.sort(key=lambda j: (j['status'] not in ('awaiting', 'running'),
+                             -(j['ended'] or j['started'])))
 
     mcp_rows = [{'name': n, 'running': s == 'ok'}
                 for n, s in mcp_mod.get_mcp_status()]
@@ -772,7 +848,15 @@ def api_dashboard(q, body):
     except Exception:
         pass
 
-    _dash_cache = {'today': {'tokens': tk, 'cost': tc, 'sessions': ts},
+    _dash_cache = {'today': {'tokens': tk, 'cost': tc, 'sessions': ts,
+                             # {account: tokens} for TODAY — the one aggregate
+                             # across accounts that is genuinely additive, and
+                             # therefore the only honest thing to stack in a
+                             # single ring. Percentages of five separate quotas
+                             # are not summable and must never be added up.
+                             'by_account': dict(tday.get('accounts') or {}),
+                             'omni_tokens': tday.get('omni_tokens', 0)},
+                   'wiring': _wiring(),
                    'week': week, 'breakdown': bd, 'days': _DASH_DAYS,
                    # cross-account live sessions + the last 24 HOURS of activity.
                    # Hoisted out of the breakdown so the Activity card does not
@@ -1062,8 +1146,15 @@ def api_brief(q, body):
     """What to work on, and what changed since the last session."""
     from . import brief
     folder = _folder(q.get('cfgdir'), q['enc']) if q.get('enc') else None
+    # cached by default — this walks every repo in the project with two git
+    # calls each, and the Tools tab used to pay that on every visit
+    diff = brief.session_diff_rows(q['path'], folder,
+                                   refresh=q.get('refresh') in ('1', 'true'))
     return {'suggestions': [{'tag': t, 'text': x}
                             for t, x in brief.work_suggestions(q['path'], folder)],
+            # structured, so the GUI can collapse per repo and show counts.
+            # `since_last` stays for any client still reading the flat lines.
+            'since': diff,
             'since_last': brief.session_diff(q['path'], folder)}
 
 
@@ -1198,10 +1289,12 @@ def api_mcp_remove(q, body):
     exe = get_claude_exe()
     if not exe:
         return {'ok': False, 'error': 'claude.exe not found'}
+    from .proc import no_window_flags
     p = subprocess.run([exe, 'mcp', 'remove', body['name'],
                         '-s', body.get('scope', 'local')],
                        capture_output=True, text=True,
-                       encoding='utf-8', errors='ignore', timeout=30)
+                       encoding='utf-8', errors='ignore', timeout=30,
+                       creationflags=no_window_flags)
     return {'ok': p.returncode == 0, 'error': (p.stderr or '').strip()}
 
 
@@ -1218,8 +1311,10 @@ def api_mcp_add(q, body):
         args += ['--', *str(body.get('command', '')).split()]
     if body.get('scope'):
         args[3:3] = ['-s', body['scope']]
+    from .proc import no_window_flags
     p = subprocess.run(args, capture_output=True, text=True,
-                       encoding='utf-8', errors='ignore', timeout=60)
+                       encoding='utf-8', errors='ignore', timeout=60,
+                       creationflags=no_window_flags)
     return {'ok': p.returncode == 0, 'error': (p.stderr or '').strip()}
 
 
@@ -1505,6 +1600,70 @@ def api_cc_settings_get(q, body):
                          for n, d in _c.all_config_dirs()]}
 
 
+def api_automode(q, body):
+    """Auto mode, per account: the mode sessions start in, the trusted-
+    infrastructure entries this account has taught the classifier, and what the
+    classifier has actually been blocking in this project.
+
+    `claude auto-mode config` is NOT called here. It spawns the CLI, and this
+    endpoint is fetched on page load; the effective-config read is its own
+    endpoint so it is paid only when asked for.
+    """
+    from . import automode
+    path = q.get('path') or ''
+    return {
+        'accounts': [{'name': n, 'dir': d,
+                      'mode': automode.default_mode(d),
+                      'environment': automode.environment(d)}
+                     for n, d in _c.all_config_dirs()],
+        'modes': list(_c.PERMS), 'mode_labels': list(_c.PERM_LABELS),
+        'profiles': dict(_c.PERM_PROFILES),
+        'denials': automode.summarise(path) if path else [],
+    }
+
+
+def api_automode_config(q, body):
+    """The rules the classifier actually uses, straight from the CLI."""
+    from . import automode
+    body = body or {}           # GET carries no body — the floor test found this
+    which = q.get('which') or body.get('which') or 'config'
+    if which not in ('config', 'defaults'):
+        raise BadRequest('which must be config or defaults')
+    cfgdir = q.get('cfgdir') or body.get('cfgdir') or None
+    ok, data = (automode.config_json(cfgdir) if which == 'config'
+                else automode.defaults_json(cfgdir))
+    return {'ok': ok, 'rules': data if ok else None,
+            'error': '' if ok else str(data)}
+
+
+def api_automode_set(q, body):
+    """Set the starting mode and/or the environment entries for ONE account."""
+    from . import automode
+    cfgdir = body.get('cfgdir') or None
+    msgs = []
+    if 'mode' in body:
+        ok, m = automode.set_default_mode(body['mode'], cfgdir)
+        if not ok:
+            raise BadRequest(m)
+        msgs.append(m)
+    if 'environment' in body:
+        env = body['environment']
+        if isinstance(env, str):
+            env = env.splitlines()
+        if not isinstance(env, list):
+            raise BadRequest('environment must be a list of lines')
+        ok, m = automode.set_environment(env, cfgdir)
+        if not ok:
+            raise BadRequest(m)
+        msgs.append(m)
+    if 'reset' in body:
+        ok, m = automode.reset(cfgdir)
+        if not ok:
+            raise BadRequest(str(m))
+        msgs.append('reset to defaults')
+    return {'ok': True, 'message': ' · '.join(msgs) or 'nothing to do'}
+
+
 def api_cc_settings_set(q, body):
     from . import ccsettings
     cfgdir = body.get('cfgdir') or None
@@ -1643,7 +1802,7 @@ def api_inject_launch(q, body):
     under the chosen account (mirror of context_inject.run minus menus)."""
     import subprocess
     from .context_inject import _write_context_file, CTX_FILE
-    from .config import get_claude_exe, load_settings
+    from .config import get_claude_exe, launch_defaults
     from .sessions import load_add_dirs, read_extra_paths
     from .paths import encode_component, resolve_dir
 
@@ -1656,7 +1815,8 @@ def api_inject_launch(q, body):
     if not exe:
         return {'ok': False, 'error': 'claude.exe not found'}
     target_dir = body.get('target_cfgdir') or _c.config_dir
-    target_folder = _store.project_folder(target_dir, encode_component(path))
+    encoded = encode_component(path)
+    target_folder = _store.project_folder(target_dir, encoded)
     env = os.environ.copy()
     env['CLAUDE_CONFIG_DIR'] = target_dir
     extra = read_extra_paths(target_folder)
@@ -1667,9 +1827,11 @@ def api_inject_launch(q, body):
                f"is saved at {CTX_FILE.replace(os.sep, '/')}. Read it first for "
                f"background, then continue from where the user picks up.")
     args = [exe, '--append-system-prompt', pointer]
-    model = load_settings().get('default_model', '')
+    model, perm = launch_defaults(encoded)
     if model:
         args += ['--model', model]
+    if perm:
+        args += ['--permission-mode', perm]
     sp = os.path.join(target_folder, 'system-prompt.txt')
     if os.path.isfile(sp):
         args += ['--system-prompt-file', sp]
@@ -2389,6 +2551,8 @@ GET_ROUTES = {
     '/api/brief': api_brief,
     '/api/conventions': api_conventions,
     '/api/cc-settings': api_cc_settings_get,
+    '/api/automode': api_automode,
+    '/api/automode/config': api_automode_config,
     '/api/client/usage': api_client_usage,
     '/api/client/project': api_client_project,
     '/api/prompt-history': api_prompt_history,
@@ -2443,6 +2607,7 @@ POST_ROUTES = {
     '/api/health/allowlist': api_health_allowlist,
     '/api/conventions/sync': api_conventions_sync,
     '/api/cc-settings': api_cc_settings_set,
+    '/api/automode': api_automode_set,
     '/api/disk/gc': api_disk_gc,
     '/api/loop-md': api_loop_md_set,
     '/api/inject/launch': api_inject_launch,

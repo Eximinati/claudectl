@@ -194,6 +194,9 @@ def main():
                        "path:'/demo/acme-api',enc:'demo-acme-api',"
                        "choice:'new',cfgdir:''})"),
             ('guide', "openGuide&&openGuide()"),
+            # the activity drawer renders from DASH_ACT, which the dashboard
+            # poll has already populated by the time the audit reaches here
+            ('activity', "openActivity&&openActivity()"),
         ):
             try:
                 pg.evaluate(opener)

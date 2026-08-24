@@ -40,9 +40,17 @@ STATE = {
                  {'name': 'teamA', 'dir': 'w', 'active': False}],
     'recent': [{'project': 'acme-api', 'path': '/demo/acme-api', 'encoded': 'demo-acme-api',
                 'sid': 's1', 'name': 'a session', 'age': '2m', 'cfgdir': ''}],
+    # The permission list is the REAL one, for the same reason the presets below
+    # are: it grew from four modes to six, and a one-item ['d'] stub audits a
+    # control that cannot wrap, cannot overflow and cannot be wrong.
     'options': {'efforts': ['default', 'high'], 'models': ['opus', 'sonnet'],
-                'model_labels': ['Opus', 'Sonnet'], 'perms': ['default'],
-                'perm_labels': ['d'], 'thinking': [''], 'thinking_labels': [''],
+                'model_labels': ['Opus', 'Sonnet'],
+                'perms': list(_TH_CFG.PERMS), 'perm_labels': list(_TH_CFG.PERM_LABELS),
+                'perm_profiles': dict(_TH_CFG.PERM_PROFILES),
+                'perm_notes': {p: {m: list(_TH_CFG.perm_note(p, m))
+                                   for m in ('', 'opus', 'sonnet')}
+                               for p in _TH_CFG.PERMS},
+                'thinking': [''], 'thinking_labels': [''],
                 'frontier': [['opus', 'high', 'Opus', '$$', '70', 'note']],
                 # real presets, so the launch modal actually renders its cards.
                 # Without them tools/shot_gui.py audits an empty modal — which is
@@ -65,8 +73,28 @@ STATE = {
 }
 _NOW = time.time()
 DASH = {
-    'today': {'tokens': 412000, 'sessions': 7}, 'days': 30, 'generated_at': _NOW,
-    'jobs': [],
+    # by_account is what the quota ring's arcs are built from — three accounts
+    # so the segmented path is actually exercised. Tokens, never percentages:
+    # each account's quota % is a share of its OWN window and they do not add.
+    'today': {'tokens': 412000, 'sessions': 7, 'cost': 28.0,
+              'by_account': {'default': 240000, 'teamA': 130000, 'teamB': 42000},
+              'omni_tokens': 60000},
+    'days': 30, 'generated_at': _NOW,
+    'week': [{'tokens': 300000}] * 7,
+    # a finished job and a failed one, so the Activity drawer has all three
+    # groups to render. Nothing RUNNING: the parking assertions below depend on
+    # an idle workspace, and the live path is exercised explicitly further down.
+    'jobs': [{'id': 'j1', 'kind': 'Memory build', 'status': 'done', 'elapsed': 42,
+              'started': _NOW - 400, 'ended': _NOW - 358, 'error': '',
+              'last': 'wrote 18 entities'},
+             {'id': 'j2', 'kind': 'Code review', 'status': 'error', 'elapsed': 9,
+              'started': _NOW - 900, 'ended': _NOW - 891,
+              'error': 'claude.exe not found', 'last': ''}],
+    'wiring': {'ok': 1, 'total': 2, 'accounts': [
+        {'account': 'default', 'dir': '', 'hooks': 4, 'statusline': True,
+         'statusline_hidden': False, 'mode': 'auto'},
+        {'account': 'teamA', 'dir': 'w', 'hooks': 0, 'statusline': True,
+         'statusline_hidden': True, 'mode': ''}]},
     # An IDLE workspace: the parking assertions below all assume nothing is
     # running, and two permanently-live sessions would contradict them — the
     # stage is supposed to stay awake while sessions are live. The live path is
@@ -130,6 +158,19 @@ ROUTES = {
         {'account': 'teamA', 'dir': '~/.claude-teamA', 'bytes': 127_000_000,
          'stores': [{'name': 'projects', 'bytes': 115_000_000, 'files': 69,
                      'oldest_days': 40}]}]},
+    # auto mode: two accounts that DISAGREE about the starting mode, plus a
+    # denial group — the two states the card exists to make visible
+    '/api/automode': {
+        'accounts': [{'name': 'default', 'dir': '', 'mode': 'auto',
+                      'environment': ['$defaults', 'Source control: github.com/acme']},
+                     {'name': 'teamA', 'dir': 'w', 'mode': '', 'environment': []}],
+        'modes': list(_TH_CFG.PERMS), 'mode_labels': list(_TH_CFG.PERM_LABELS),
+        'profiles': dict(_TH_CFG.PERM_PROFILES),
+        'denials': [{'key': 'Bash:git', 'tool': 'Bash', 'count': 3, 'last': 0,
+                     'reason': 'Blocked by classifier',
+                     'samples': ['git push --force origin main']}]},
+    '/api/automode/config': {'ok': True, 'rules': {'allow': ['Test Artifacts: …']},
+                             'error': ''},
     '/api/cc-settings': {
         'groups': ['Model & reasoning', 'Context & memory', 'Advanced'],
         'schema': {
@@ -253,6 +294,21 @@ ROUTES = {
          'builtin': False, 'active': False, 'lines': 12}]},
     '/api/statusline': {'installed': False, 'preview': 'Opus 5 - memory 4m',
                         'command': 'py -m claude_sessions statusline'},
+    # the Tools tab's two async cards. Without them it audits two spinners —
+    # which is how a wall-of-text "since last session" block stayed unnoticed.
+    '/api/health': {'issues': [{'severity': 'warn', 'message': 'CLAUDE.md is heavy',
+                                'hint': 'trim prose; the memory digest is already micro'}],
+                    'bash': [{'command': c, 'count': n} for c, n in
+                             (('cd', 272), ('py', 93), ('grep', 53), ('ls', 26),
+                              ('git', 23), ('tasklist', 19), ('sed', 18))]},
+    '/api/brief': {
+        'suggestions': [{'tag': 'fix', 'text': 'recurring issue: ' + 'long prose ' * 30}],
+        'since': {'since': '2026-08-20', 'note': '', 'repos': [
+            {'label': 'IKM.IkmVision', 'path': '/demo/a', 'dirty': 7,
+             'commits': ['6580438 fix(cmake): select stubs by target architecture',
+                         'a5fdea9 Merged PR 869: Fix OCSORT + interpolation']},
+            {'label': 'IKM.Platform', 'path': '/demo/b', 'dirty': 2, 'commits': []}]},
+        'since_last': ['▸ IKM.IkmVision', '  6580438 fix(cmake)']},
     '/api/checkpoints': {'recognised': True, 'store': True, 'orphans': 1,
                          'files': [{'path': 'D:/x/a.py', 'name': 'a.py',
                                     'versions': [{'v': 1, 'size': 10, 'mtime': 1},
@@ -361,7 +417,37 @@ def main():
         # a genuine zero is a valid reading (no jobs running); only the '–'
         # placeholder means a gauge never received a feed
         check('readouts left the placeholder', '–' not in reads and '' not in reads, reads)
-        check('quota ring shows the peak window', reads and reads[0] == '88%', reads[:1])
+        # The readout is TOTAL TOKENS today, not a quota percentage. Each
+        # account's quota % is a share of its own window, so no sum or average
+        # of those five numbers is a meaningful "total" — tokens are the only
+        # cross-account aggregate that actually adds up. 240k+130k+42k = 412k.
+        check('quota ring reads the additive total', reads and reads[0] == '412.0k', reads[:1])
+        segs = pg.evaluate("(INST.feed('quota').segments||[]).length")
+        check('quota ring has one arc per account', segs == 3, segs)
+        leg = pg.evaluate("[...document.querySelectorAll('#iQuotaLeg span')].map(e=>e.textContent)")
+        check('every arc is named in the legend', len(leg) == 3, leg)
+
+        # ── the activity drawer ──
+        # It must render from the payload the poll already has and never fetch,
+        # so opening it costs a repaint and nothing else.
+        # openActivity() is fully synchronous — it renders from the payload the
+        # poll already fetched. So the counter is read in the SAME evaluate,
+        # with no await in between: anything else (the 10s poll, the heartbeat)
+        # cannot slip in, and the claim stays about the drawer rather than about
+        # whatever else the page happened to be doing.
+        nf = pg.evaluate("""(()=>{
+          const of=window.fetch; let n=0;
+          window.fetch=function(){n++;return of.apply(this,arguments)};
+          try{ openActivity(); } finally { window.fetch=of; }
+          return n;})()""")
+        check('activity drawer never fetches', nf == 0, nf)
+        rows = pg.evaluate("document.querySelectorAll('#actBody .arow3').length")
+        check('activity drawer lists the finished jobs', rows == 2, rows)
+        sects = pg.evaluate("document.querySelectorAll('#actBody .sect').length")
+        check('activity drawer has all three groups', sects == 3, sects)
+        pg.evaluate("closeActivity()")
+        check('activity drawer closes',
+              not pg.evaluate("document.querySelector('#actovl').classList.contains('show')"))
         units = pg.evaluate("[...document.querySelectorAll('.iread i')].map(e=>e.textContent)")
         print('       units:', units)
         foots = pg.evaluate("[...document.querySelectorAll('.ifoot')].map(e=>e.textContent.trim())")
