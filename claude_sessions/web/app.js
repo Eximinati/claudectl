@@ -2939,7 +2939,9 @@ async function pgPlugins(nav){
       <button class="btn sm danger" onclick='pluginRemove(${JSON.stringify(p.key)})'>${ic('del')}</button>
     </div>`;}).join('');
   paint(nav,`
+    ${selfCard(V)}
     ${verCard(V)}
+    ${modelCard(V)}
     <div class="card" id="pluginCard"><h3>${ic('folder')} Installed plugins</h3>
       <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">A plugin bundles skills, subagents, commands, hooks and MCP servers together. The tags say what each one actually placed on disk — the same information the Skills, Agents and Hooks pages now use to mark which of their rows came from a bundle rather than from you.</p>
       ${plugs||'<div style="color:var(--dim)">No plugins installed.</div>'}</div>
@@ -2956,6 +2958,62 @@ async function pgPlugins(nav){
    question asked of the whole toolchain, and a plugin update and a Claude Code
    update are the same kind of action with the same kind of risk. */
 let VER=null;
+/* claudectl's own version. A separate card from Claude Code's on purpose: it
+   has no channel and no rollback (PyPI is not a versions directory on disk),
+   and the one thing it does have that Claude Code's does not is a refusal —
+   a checkout is updated with git, not by installing a release over it. */
+function selfCard(V){
+  const c=(V||{}).claudectl||{};
+  if(!c.installed&&!c.error)return '';
+  const state=c.error?`<span class="tag warn">could not check (${esc(c.error)})</span>`
+    :c.update?`<span class="tag warn">${esc(c.latest)} available</span>`
+    :(c.current?'<span class="tag ok">current</span>':'');
+  const act=(c.update&&c.mode!=='checkout')
+    ? `<button class="btn sm pri" onclick="selfUpdate()">Update claudectl</button>`:'';
+  return `<div class="card" id="selfCard"><h3>${ic('bolt')} claudectl ${state}
+      <span class="sp"></span>
+      <button class="btn sm" onclick="verCheck()">${ic('refresh')} Check now</button>${act}
+    </h3>
+    <div class="kv"><span>installed</span><code>${esc(c.installed||'unknown')}</code></div>
+    <div class="kv"><span>latest on PyPI</span><code>${esc(c.latest||'?')}</code></div>
+    <div class="kv"><span>install mode</span><code>${esc(c.mode||'?')}</code>
+      ${c.mode==='checkout'?'<span style="color:var(--dim2);font-size:12px">a git checkout — update it with <code>git pull</code>, not with pip</span>'
+        :'<span style="color:var(--dim2);font-size:12px">the upgrade runs in its own window after claudectl exits, because pip cannot rewrite the script it is running from</span>'}</div>
+    </div>`;
+}
+function selfUpdate(){
+  inlineJob('#selfCard','claudectl_update',{},
+            {label:'Scheduling the claudectl upgrade',
+             onDone:()=>toast('claudectl upgrades once you close it')});
+}
+/* The model catalogue. It sits with the other two because it answers the same
+   question of a third thing — "is what claudectl is showing you still what
+   Anthropic offers?" — and because the ONE state a user has to be able to see
+   is that the picker fell back to the bundled list, which is not visible from
+   the picker itself.
+
+   The retired-pin warnings are the only per-model notice there is. A newly
+   released model needs no announcement: it is simply in the picker. */
+function modelCard(V){
+  const m=(V||{}).models||{};
+  const notes=(m.notices||[]);
+  const age=m.age||0;
+  const when=!m.live?'':(age<90?'just now':age<5400?`${Math.round(age/60)}m ago`
+    :age<172800?`${Math.round(age/3600)}h ago`:`${Math.round(age/86400)}d ago`);
+  const state=m.live?`<span class="tag ok">${m.count} models</span>`
+    :'<span class="tag warn">using the bundled list</span>';
+  return `<div class="card" id="modelCard"><h3>${ic('bolt')} Models ${state}
+      <span class="sp"></span>
+      <button class="btn sm" onclick="verCheck()">${ic('refresh')} Check now</button>
+    </h3>
+    <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">Read from Anthropic with the login Claude&nbsp;Code already holds, once a day, so a model released this week reaches the launch picker without a claudectl release. When it cannot be read, the picker falls back to the list shipped with this version — never to an empty one.</p>
+    ${m.live?`<div class="kv"><span>catalogue</span><code>${m.count} models across ${m.families} families</code>
+      <span style="color:var(--dim2);font-size:12px">checked ${esc(when)}</span></div>`
+      :'<div class="kv"><span>catalogue</span><code>not fetched</code><span style="color:var(--dim2);font-size:12px">a logged-out account, no network, or auto-update set to off</span></div>'}
+    ${notes.map(n=>`<div class="hrow"><span class="tag warn">retired</span>
+      <span style="flex:1;font-size:12.5px">${esc(n)}</span></div>`).join('')}
+    </div>`;
+}
 function verCard(V){
   const c=(V||{}).claude||{};
   if(!c.installed&&!c.error)return '';
@@ -3549,7 +3607,9 @@ async function pgSettings(nav){
       <span class="sp"></span>
       <button class="btn pri" onclick="foSave()">Save failover</button></div></div>
   <div class="card"><h3>Interface</h3>
-    <p style="color:var(--dim);font-size:13px">Default interface on startup — the toggle in the bottom-left does the same. <code>--tui</code>/<code>--gui</code> flags always override.</p></div>
+    <p style="color:var(--dim);font-size:13px">Default interface on startup — the toggle in the bottom-left does the same. <code>--tui</code>/<code>--gui</code> flags always override.</p>
+    ${fld('sUpd','Updates')}
+    <p style="color:var(--dim);font-size:13px;margin:0">One switch for everything claudectl fetches on your behalf: whether a newer release exists, and the current Claude model list. <b>Install on quit</b> runs the upgrade in its own window after claudectl closes — pip cannot rewrite the script it is running from. <b>Off</b> stops both checks.</p></div>
   <div class="card"><h3>${ic('refresh')} Auto-memory <span class="sp"></span>
     <span class="fld" style="margin:0"><select id="amInt" onchange="amSaveInterval(this.value)" style="width:auto"></select></span></h3>
     <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Projects checked below have their memory refreshed in the background — on GUI start and on the interval — whenever their files change. Only changed projects use Claude; nothing runs while unchanged.</p>
@@ -3570,6 +3630,13 @@ async function pgSettings(nav){
   chipsFill($('#sShell'),['auto','qt','edge','browser'],
     ['auto (Qt → Edge → browser)','Qt native window','Edge app window','browser tab'],
     ST.gui_shell||'auto');
+  // saves on pick rather than waiting for the Defaults card's Save button —
+  // it is in a different card, and a Save that only covers some of the page is
+  // worse than no Save at all
+  chipsFill($('#sUpd'),['notify','auto','off'],
+    ['tell me','install on quit','off'],ST.auto_update||'notify',
+    async v=>{await post('/api/settings',{auto_update:v});ST.auto_update=v;
+              toast('Updates: '+v,'ok');});
   drawThemeGallery();
   chipsFill($('#sPlanMod'),o.models,o.model_labels,ST.plan_model||'');
   chipsFill($('#sExecMod'),o.models,o.model_labels,ST.exec_model||'');
@@ -4148,6 +4215,17 @@ function cardVal(el){const c=el.querySelector('.mcard.on');return c?c.dataset.v:
 function cardSet(el,v){el.querySelectorAll('.mcard').forEach(c=>
   c.classList.toggle('on',c.dataset.v===v));}
 // effort as a real range slider (0..N over ST.options.efforts, incl '' default at 0)
+/* The tick row is GENERATED, and that is the whole fix for "the thumb shows
+   HIGH when the value is xhigh": index.html carried six labels while EFFORTS
+   had grown to seven, so the thumb at 4/6 of the track sat under the sixth
+   label's HIGH and `ultracode` was an unlabelled stop. One list, from the data
+   that drives the slider itself. */
+function effortTicksFill(){
+  const host=$('#fEffTicks');if(!host)return;
+  const es=ST.options.efforts||[],n=es.length-1;
+  host.innerHTML=es.map((e,i)=>
+    `<span style="--i:${n?i/n:0}">${esc(e||'default')}</span>`).join('');
+}
 function effortVal(){return (ST.options.efforts||[])[+($('#fEffort').value)]||'';}
 function effortSet(v){const i=(ST.options.efforts||[]).indexOf(v);$('#fEffort').value=i<0?0:i;}
 // ── single frontier slider: each stop IS an (model,effort) the advisor
@@ -4174,7 +4252,15 @@ function updateFrontierReadout(){
 function updateHint(){
   const [m,e]=currentModelEffort();
   const a=((ST.options.advice||{})[m]||{})[e]||['ok',''];
-  const lvl=a[0],msg=a[1];
+  let lvl=a[0],msg=a[1];
+  /* A model you pinned that Anthropic has since retired is still IN the list —
+     dropping it would reset the field to 'default' behind your back — so the
+     picker has to be the thing that says it is gone. Launching it otherwise
+     fails with an API error that never mentions where the id came from. */
+  if((ST.options.model_retired||[]).indexOf(m)>=0){
+    lvl='warn';
+    msg='Anthropic no longer offers '+m+' — this launch will fail. Pick another model.';
+  }
   $('#mHint').className='mhint adv-'+lvl;
   $('#mHint').innerHTML=(lvl==='warn'?'note: ':lvl==='tip'?'tip: ':'')+esc(msg)
     +`  <a id="mGuide">model guide ›</a>`;
@@ -4254,6 +4340,7 @@ function askLaunch(cfg){
   presetsFill($('#fPresets'));
   modelCardsFill($('#fModel'),curModel);
   const sl=$('#fEffort');sl.max=(o.efforts||[1]).length-1;effortSet(curEffort);
+  effortTicksFill();          // same list that just set sl.max
   sl.oninput=()=>{updateHint();};
   const fsl=$('#fFrontier');fsl.max=Math.max((o.frontier||[1]).length-1,0);
   const fi=frontierIndexFor(curModel,curEffort);
@@ -4424,6 +4511,29 @@ async function drawUsageBar(force){
   }
 }
 
+/* ── "claudectl N is out" strip ──
+   Its own element (#updbar), not a row inside #ubar, because drawUsageBar
+   rewrites that wholesale every 60s. Never polls: one fetch per session. */
+async function drawUpdateBar(){
+  let c;
+  try{c=(await api('/api/versions')).claudectl||{};}catch(e){return;}
+  if(!c.update)return;
+  const host=$('#updbar');if(!host)return;
+  const act=c.mode==='checkout'
+    ? `<span style="color:var(--dim2)">run <code>git pull</code> in your checkout</span>`
+    : `<button class="btn sm pri" id="updNow">Update now</button>`;
+  host.innerHTML=`<span class="uptxt">${ic('download')} <b>claudectl ${esc(c.latest)}</b>
+    is available — you have ${esc(c.installed||'?')}</span>${act}
+    <button class="btn sm" id="updHide">Dismiss</button>`;
+  host.style.display='flex';
+  const hide=$('#updHide');if(hide)hide.onclick=()=>{host.style.display='none';};
+  const now=$('#updNow');
+  if(now)now.onclick=()=>inlineJob('#updbar','claudectl_update',{},
+    {label:'Scheduling the claudectl upgrade',
+     onDone:()=>{toast('claudectl upgrades once you close it');
+                 host.style.display='none';}});
+}
+
 /* global poll: which projects' memory is updating right now (scheduler or
    on-open), so the sidebar markers stay live regardless of the open page */
 async function pollActiveMem(){
@@ -4502,4 +4612,8 @@ function startHeartbeat(){if(!HB_TIMER){heartbeat();HB_TIMER=setInterval(heartbe
   $('#bCont').innerHTML=ic('history')+' Continue';
   $('#bNew').innerHTML=ic('add')+' New session';
   render();drawUsageBar();startHeartbeat();
+  // deferred, and fetched ONCE per session: /api/versions also walks every
+  // marketplace on disk, which has no business competing with the first paint
+  // or repeating on a timer for an answer that changes once a release.
+  setTimeout(drawUpdateBar,3000);
 })();

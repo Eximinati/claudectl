@@ -2074,6 +2074,14 @@ def api_job_start(q, body):
                 raise RuntimeError(msg or 'update failed')
             return {'message': msg, 'installed': versions.installed_version()}
         jid = start_job('Updating Claude Code' + (f' to {target}' if target else ''), _cu)
+    elif kind == 'claudectl_update':
+        from . import versions
+        def _su():
+            ok, msg = versions.update_self()
+            if not ok:
+                raise RuntimeError(msg or 'update failed')
+            return {'message': msg}
+        jid = start_job('Updating claudectl', _su)
     elif kind == 'plugin_update':
         from . import versions
         key = str(body.get('key', '') or '')
@@ -2329,11 +2337,26 @@ def api_plugins(q, body):
 
 
 def api_versions(q, body):
-    """The installed Claude Code version against what has been released, plus
-    every plugin against what its marketplace offers."""
+    """claudectl and the installed Claude Code against what has been released,
+    every plugin against what its marketplace offers, and the model catalogue
+    against what Anthropic currently serves.
+
+    All four ride one route rather than getting one each: it is the same
+    question — is what you have still what exists? — and a new endpoint per
+    subject would be a new row in docs/api.md and the parity gate for no new
+    capability. `?refresh=1` is also the only place a request can force the
+    model catalogue to re-fetch; everything else reads its daily cache.
+    """
     from . import versions
+    from . import models as _mods
     refresh = str((q or {}).get('refresh', '')) in ('1', 'true', 'yes')
+    if refresh:
+        _mods.fetch(refresh=True)      # the only place a render can force one
+    mst = _mods.status()
+    mst['notices'] = _mods.notices()
     return {'claude': versions.status(refresh=refresh),
+            'claudectl': versions.self_status(refresh=refresh),
+            'models': mst,
             'plugins': versions.plugin_rows()}
 
 

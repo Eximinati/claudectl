@@ -120,6 +120,24 @@ def run():
     except Exception:
         pass          # a migration must never be the reason claudectl won't start
 
+    # ── is claudectl itself out of date? ──────────────────────────
+    # ABOVE the interface pick, so the GUI gets it too — that branch returns.
+    # BELOW the scriptable dispatches above, so `claudectl statusline` (every
+    # conversation turn) never starts a thread or reads this setting.
+    # The check is a daemon thread and every reader takes its cache; the install
+    # is deferred to exit, because pip cannot rewrite the console script of the
+    # process running from it.
+    from . import versions as _versions
+    _versions.start_background_check()
+    atexit.register(_versions.update_on_quit)
+
+    # ── and is the MODEL list out of date? ────────────────────────
+    # Same thread discipline, same TTL gate, same silence on failure. This is
+    # what puts a model released last week into the launch picker without a
+    # claudectl release; nothing downstream fetches, they all read its cache.
+    from . import models as _models
+    _models.refresh_in_background()
+
     # ── interface pick: --gui / --tui flags beat the ui_mode setting ──
     if '--gui' in sys.argv[1:] or (
             '--tui' not in sys.argv[1:]
@@ -262,9 +280,15 @@ def run():
     path = encoded_name = proj_folder = choice = None
     opts = dict(_EMPTY_OPTS)
 
+    def _banner():
+        """Plan usage, plus the update notice when there is one. menu() splits
+        this on newlines, so two facts stack rather than compete for one row."""
+        lines = [x for x in (_versions.update_notice(), usage_status_line()) if x]
+        return '\n'.join(lines)
+
     while True:
         sel = menu(full_items, "SELECT PROJECT",
-                   footer_fn=mcp_status_line, banner_fn=usage_status_line)
+                   footer_fn=mcp_status_line, banner_fn=_banner)
         if not sel:
             sys.exit(0)
 

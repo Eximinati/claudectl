@@ -2,7 +2,11 @@ import os
 import sys
 import time
 
-from .config import W, EFFORTS, EFFORT_LABELS, MODELS, MODEL_LABELS
+from .config import W, EFFORTS, EFFORT_LABELS
+# MODELS/MODEL_LABELS are deliberately NOT imported here. They are the
+# bundled floor; the two screens that need a model list bind the live one
+# from _c.models() as a local. Importing them would give a future reader
+# a list that silently predates the running catalogue.
 from .config import PERMS, PERM_LABELS, PERM_RISKY, THINKING_CAPS, THINKING_LABELS
 from .config import C_RESET, C_TITLE, C_SEL, C_DIM, C_SRCH, C_BOLD, C_GREEN
 from .config import load_settings, save_settings, find_editor, get_claude_exe, settings_file
@@ -670,6 +674,56 @@ def menu(items, title, footer='', footer_fn=None, banner_fn=None):
         render.render_frame(_build(*_last_status))
 
 
+#: two columns is what makes the help screen fit its frame; one would push the
+#: sessions block past a 35-row terminal.
+HELP_COLS = 2
+#: the narrowest terminal the help screen is WRITTEN for — not the narrowest it
+#: survives (render.content_width() floors at 40 and everything truncates
+#: there). Key blurbs must read whole at this width, which is the budget
+#: test_parity_gate.py checks them against. Lowering it is a decision about the
+#: product, which is exactly why it is here and not in a test fixture.
+HELP_MIN_COLS = 80
+
+
+def help_blurb_budget():
+    """Characters one help-grid cell gives a blurb at the current width.
+
+    Public and derived, not a constant repeated in the test: the first cut had
+    the test asserting 33 while this computed 32, so the gate against truncation
+    passed with four cells truncated.
+    """
+    return max(28, (render.content_width() - 8) // HELP_COLS - 3)
+
+
+def _session_key_lines(cols=HELP_COLS):
+    """The sessions-screen key list, GENERATED from session_menu.ACTIONS.
+
+    It used to be typed here, and it had drifted three keys behind the code:
+    `X` (plan→execute), `K` (inject context) and `R` (code review) were absent,
+    and for `R` this was the second of two missing entries, so code review had
+    no discoverable entry point anywhere in the product. Same rule that deleted
+    `docs/gui-audit.md`: a hand-kept copy of what the code already states is a
+    copy that will be wrong.
+
+    Imported inside the function because session_menu imports this module.
+    """
+    from .session_menu import key_rows
+    # `?` is the screen you are reading, so it is not one of its own entries.
+    rows = [(k, b) for k, b in key_rows() if k != '?']
+    # Follow the terminal rather than a fixed column: these blurbs are the ONLY
+    # description of each key now, so a width that truncates half of them on a
+    # normal window would lose what merging the three lists was meant to keep.
+    width = help_blurb_budget() if cols == HELP_COLS else max(
+        28, (render.content_width() - 8) // cols - 3)
+    out = []
+    for i in range(0, len(rows), cols):
+        cells = []
+        for k, blurb in rows[i:i + cols]:
+            cells.append(f"{k}  {render.trunc(blurb, width):<{width}}")
+        out.append('    ' + '  '.join(cells).rstrip())
+    return out
+
+
 def help_screen():
     """Static hotkey reference. ENTER/ESC returns."""
     frame = [
@@ -683,18 +737,8 @@ def help_screen():
         '',
         f"  {C_BOLD}Sessions screen{C_RESET}",
         f"    ↑↓ navigate    ENTER resume    ESC back    type to filter",
-        f"    r  rename                 d  archive / delete",
-        f"    f  fork                   v  view transcript (/ search)",
-        f"    e  export markdown        i  session info (tokens, cost, model)",
-        f"    F  changed files          t  tag session",
-        f"    u  project usage          M  memory map (CLAUDE.md hierarchy)",
-        f"    p  extra PATH entries     x  add-dirs (--add-dir)",
-        f"    c  scaffold CLAUDE.md     a  AI-generate CLAUDE.md",
-        f"    g  project agents         w  workspace status (provenance/freshness)",
-        f"    n  connections graph + Claude project memory (plexus, ask)",
-        f"    s  system prompt          A  archived view    ?  help",
-        f"    W  context weight audit (token cost of what Claude auto-loads)",
-        f"    C  compress CLAUDE.md with AI (cut per-turn tokens)",
+        f"    {C_DIM}/  opens the same list, type-to-filter{C_RESET}",
+    ] + _session_key_lines() + [
         f"    {C_DIM}AI updates preview a git-style diff before approve — re-view from w{C_RESET}",
         '',
         f"  {C_BOLD}Launch options{C_RESET}",
@@ -782,6 +826,18 @@ def _budget_label(s):
     return f"${cap:g} per call" if cap else 'off'
 
 
+_UPDATE_LABELS = {
+    'notify': 'tell me',
+    'auto':   'install on quit',
+    'off':    'off (no outbound check)',
+}
+
+
+def _update_label(s):
+    v = s.get('auto_update') or 'notify'
+    return _UPDATE_LABELS.get(v, v)
+
+
 def _automode_label():
     """What the accounts currently start sessions in — 'mixed' when they
     disagree, which is the state a machine is in after any hand-editing."""
@@ -860,6 +916,12 @@ def settings_menu():
     """Edit ~/.claude/claudectl.json interactively."""
     while True:
         s = load_settings()
+        # The LIVE roster shadows the module-level floor for this screen. The
+        # three saved pins are passed in so a model Anthropic has retired keeps
+        # its row here instead of reading back as 'default' — see config.models.
+        MODELS, MODEL_LABELS = _c.models(s.get('default_model', ''),
+                                         s.get('default_subagent_model', ''),
+                                         s.get('extract_model', ''))
         wv = render.content_width() - 22
         editor_now = render.trunc(s['editor'] or (find_editor() or 'NOT FOUND'), wv)
         claude_now = render.trunc(s['claude_exe'] or (get_claude_exe() or 'NOT FOUND'), wv)
@@ -889,6 +951,7 @@ def settings_menu():
             (f"Theme       :  {theme}", 'theme'),
             (f"Interface   :  {s.get('ui_mode', 'tui').upper()}   {C_DIM}(TUI here / GUI in browser — or run --gui){C_RESET}", 'ui_mode'),
             (f"Failover    :  {_failover_label(s)}   {C_DIM}(retry a dead model instead of hanging){C_RESET}", 'failover'),
+            (f"Updates     :  {_update_label(s)}   {C_DIM}(new claudectl releases + the model list){C_RESET}", 'auto_update'),
             (f"{'─' * W}", None),
             (f"Back", 'back'),
         ]
@@ -941,6 +1004,15 @@ def settings_menu():
             _theme_picker(s)
         elif sel == 'failover':
             _failover_menu()
+        elif sel == 'auto_update':
+            pick = menu([('Tell me when a new claudectl is released', 'notify'),
+                         ('Install it automatically when I quit claudectl', 'auto'),
+                         ('Off — never check (also stops the model-list refresh)', 'off')],
+                        "UPDATES")
+            if pick:
+                s['auto_update'] = pick
+                save_settings(s)
+                flash(f"Updates: {_UPDATE_LABELS.get(pick, pick)}", secs=2)
         elif sel == 'ui_mode':
             pick = menu([('TUI — this terminal interface', 'tui'),
                          ('GUI — web app in your browser', 'gui')],
@@ -1159,6 +1231,22 @@ def launch_options_menu(project_name, defaults=None, is_new=False, agents=None,
     selected_session_agents: refs chosen in the prior agent screen, shown read-only.
     defaults: optional dict with preselected 'effort'/'model'/'permission'."""
     d = defaults or {}
+    # Resolved once per screen, not per frame. Every index below is a cursor
+    # into this list, so a roster that changed length between two keystrokes
+    # would move the selection under the user's hand; and the saved model is
+    # passed in so a retired pin keeps its position rather than collapsing to
+    # index 0 (= account default) and being written back as an erasure.
+    MODELS, MODEL_LABELS = _c.models(d.get('model', ''), d.get('subagent_model', ''))
+    # Resolved with the roster, for the same reason and at the same cost: a pin
+    # Anthropic has retired is still IN the list above (dropping it would reset
+    # the field behind the user's back), so this screen has to be what says it
+    # is gone — otherwise the launch fails with an API error that never
+    # mentions where the id came from.
+    try:
+        from . import models as _mods
+        _retired = set(_mods.retired_pins())
+    except Exception:
+        _retired = set()
     effort_idx = EFFORTS.index(d.get('effort', '')) if d.get('effort', '') in EFFORTS else 0
     model_idx  = MODELS.index(d.get('model', ''))   if d.get('model', '')  in MODELS  else 0
     perm_idx   = PERMS.index(d.get('permission', '')) if d.get('permission', '') in PERMS else 0
@@ -1200,7 +1288,7 @@ def launch_options_menu(project_name, defaults=None, is_new=False, agents=None,
             if not mid:
                 out.append(('', 'default', '', '', 'account model', ''))
                 continue
-            prof = _c.MODEL_PROFILES.get(mid)
+            prof = _c.profile(mid)
             lbl = MODEL_LABELS[MODELS.index(mid)]
             if prof:
                 out.append((mid, lbl, _c.cost_bar(mid), _c.cap_bar(mid),
@@ -1322,6 +1410,10 @@ def launch_options_menu(project_name, defaults=None, is_new=False, agents=None,
         if memory_status:
             frame.append(f"  {C_DIM}{memory_status}{C_RESET}")
         adv_level, adv_msg = _c.advise(MODELS[model_idx], eff_cur)
+        if MODELS[model_idx] in _retired:
+            adv_level = 'warn'
+            adv_msg = (f"Anthropic no longer offers {MODELS[model_idx]} — "
+                       f"this launch will fail. Pick another model.")
         adv_c = {'ok': C_GREEN, 'tip': C_SRCH, 'warn': _c.C_WARN}.get(adv_level, C_DIM)
         adv_tag = {'ok': '', 'tip': 'tip: ', 'warn': 'note: '}.get(adv_level, '')
         # Separate from advise(): a permission note depends on model AND mode,

@@ -203,6 +203,17 @@ class Sandbox:
                 self.mp.setattr(m, 'open_in_editor', ed)
 
     def _stub_threads(self):
+        # The two update checks main.run() starts. Pinned the same way as the
+        # pollers below — the flag, not threading — so no thread is created at
+        # all. Left live they fetch over the network and then write their cache
+        # into config.config_dir READ AT CALL TIME, which after teardown is the
+        # user's real ~/.claude; and a thread still running while pytest unwinds
+        # monkeypatches is a race that surfaced as teardown errors in
+        # `_no_writes_outside_the_sandbox` on one full run in five.
+        from claude_sessions import versions as versions_mod
+        from claude_sessions import models as models_mod
+        self.mp.setattr(versions_mod, '_bg_started', True)
+        self.mp.setattr(models_mod, '_bg_started', True)
         self.mp.setattr(usage_mod, '_started', True)
         self.mp.setattr(usage_mod, '_ready', True)
         self.mp.setattr(usage_mod, '_data', {

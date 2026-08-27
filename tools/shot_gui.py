@@ -91,6 +91,40 @@ OVERFLOW_JS = """[...document.querySelectorAll('.dash>.card')].map(c=>{
   return (c.className.match(/d-[\\w]+/)||['?'])[0]+': '+(bad.length?bad.join(', '):'clean');})"""
 
 
+# Does the effort slider's thumb land on the label it names?
+#
+# Nothing here could answer that before: the audit walked boxes for overflow,
+# and a label sitting under the WRONG tick overflows nothing. index.html carried
+# six hand-typed labels while config.EFFORTS had grown to seven, so at xhigh the
+# thumb sat at 4/6 of the track — under HIGH — and `ultracode` had no label at
+# all. Every audit passed, partly because the stub offered two efforts.
+#
+# The thumb position is computed the way a browser lays a range out: centre to
+# centre, inset by half the thumb at each end.
+TICKS_JS = """(()=>{
+  const sl=document.querySelector('#fEffort'),host=document.querySelector('#fEffTicks');
+  if(!sl||!host)return ['effort slider or tick row missing'];
+  const r=sl.getBoundingClientRect(),spans=[...host.querySelectorAll('span')],n=+sl.max;
+  const thumb=parseFloat(getComputedStyle(document.documentElement)
+      .getPropertyValue('--thumb'))||16;
+  const bad=[];
+  if(spans.length!==n+1)bad.push(`${n+1} stops but ${spans.length} labels`);
+  const was=sl.value;
+  for(let v=0;v<=n&&v<spans.length;v++){
+    sl.value=v; sl.dispatchEvent(new Event('input'));
+    const x=r.left+thumb/2+(n?v/n:0)*(r.width-thumb);
+    const s=spans[v].getBoundingClientRect();
+    const drift=Math.round(x-(s.left+s.width/2));
+    if(Math.abs(drift)>12)
+      bad.push(`${spans[v].textContent} thumb ${drift}px off its label`);
+    const read=document.querySelector('#fEffLabel').textContent.trim();
+    if(!read.includes(spans[v].textContent))
+      bad.push(`label ${spans[v].textContent} but readout ${read}`);
+  }
+  sl.value=was; sl.dispatchEvent(new Event('input'));
+  return bad;
+})()"""
+
 # Same idea as OVERFLOW_JS but scoped to whatever modal is open.
 MODAL_JS = """(()=>{const m=document.querySelector('.ovl.show .modal');
   if(!m)return [];const mb=m.getBoundingClientRect();const bad=[];
@@ -219,6 +253,16 @@ def main():
             elif ovals:
                 state = 'OVAL ' + '; '.join(ovals)
             print(f'  {name:<8} {state}')
+            if name == 'launch':
+                # the effort slider lives behind Advanced ▸ "Pin an exact model"
+                pg.evaluate("(()=>{const d=document.querySelector('.ovl.show details');"
+                            "if(d)d.open=true;const c=document.querySelector('#fPinModel');"
+                            "if(c&&!c.checked){c.checked=true;"
+                            "c.dispatchEvent(new Event('change'));}})()")
+                pg.wait_for_timeout(300)
+                ticks = pg.evaluate(TICKS_JS)
+                print('  %-8s %s' % ('  ticks', '; '.join(ticks) if ticks
+                                     else 'every stop on its own label'))
             pg.screenshot(path=os.path.join(OUT, f'_modal_{name}.png'))
             pg.evaluate("document.querySelectorAll('.ovl').forEach("
                         "o=>o.classList.remove('show'))")

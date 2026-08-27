@@ -73,7 +73,7 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/usage/plan` | `api_usage_plan` | — |
 | `/api/usage/project` | `api_usage_project` | — |
 | `/api/usage/projects` | `api_usage_projects` | — |
-| `/api/versions` | `api_versions` | The installed Claude Code version against what has been released, plus |
+| `/api/versions` | `api_versions` | claudectl and the installed Claude Code against what has been released, |
 | `/api/worklog` | `api_worklog_get` | — |
 | `/api/workspace-status` | `api_workspace_status` | — |
 | `/api/worktree/diff` | `api_worktree_diff` | — |

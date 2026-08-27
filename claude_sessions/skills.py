@@ -20,7 +20,7 @@ import os
 import re
 import shutil
 
-from .config import W, get_claude_exe, open_in_editor, MODELS, MODEL_LABELS
+from .config import W, get_claude_exe, open_in_editor
 from .ui import (menu, text_input, flash, pause, confirm, multiselect,
                  run_with_progress, pager, _cls)
 from . import config as _c

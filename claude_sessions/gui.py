@@ -29,7 +29,7 @@ from urllib.parse import urlparse, parse_qs
 from . import config as _c
 from . import themes as _themes
 from .config import (load_settings, save_settings,
-                     EFFORTS, MODELS, MODEL_LABELS, PERMS, PERM_LABELS,
+                     EFFORTS, PERMS, PERM_LABELS,
                      THINKING_CAPS, THINKING_LABELS)
 from .paths import find_actual_path
 from .sessions import _is_anthropic_model, _used_omni   # noqa: F401 (re-exported)
@@ -140,25 +140,35 @@ def state_payload():
                                 or r.get('preview', '') or r['session_id'][:8]),
                        'age': format_age(r['timestamp']).strip() if r.get('timestamp') else '',
                        'cfgdir': r.get('cfgdir') or _c.config_dir})
+    from . import models as _m
+    _models, _model_labels = _c.models(s.get('default_model', ''),
+                                       s.get('default_subagent_model', ''),
+                                       s.get('extract_model', ''))
     return {
         'projects': list_projects(),
         'recent': recent,
         'accounts': [{'name': n, 'dir': d} for n, d in all_config_dirs()],
         'active_cfgdir': _c.config_dir,
         'options': {
-            'efforts': EFFORTS, 'models': MODELS, 'model_labels': MODEL_LABELS,
+            # LIVE roster (models.py), floor-backed. The three saved pins ride
+            # along so a retired model still renders in the picker instead of
+            # reading back as 'default' — the GUI writes ids[idx] on save too.
+            'efforts': EFFORTS, 'models': _models, 'model_labels': _model_labels,
             'perms': PERMS, 'perm_labels': PERM_LABELS,
             'perm_profiles': _c.PERM_PROFILES,
             # (level, message) per mode x model — the pair the TUI renders under
             # the permission row. Small enough to precompute; unlike advise() it
             # does not multiply by effort.
-            'perm_notes': {p: {m: list(_c.perm_note(p, m)) for m in MODELS}
+            'perm_notes': {p: {m: list(_c.perm_note(p, m)) for m in _models}
                            for p in PERMS},
             'thinking': THINKING_CAPS, 'thinking_labels': THINKING_LABELS,
             'model_cards': _c.model_card_rows(),
             'effort_profiles': _c.EFFORT_PROFILES,
             'presets': [[n, d, f] for n, d, f in _c.LAUNCH_PRESETS],
-            'advice': {m: {e: list(_c.advise(m, e)) for e in EFFORTS} for m in MODELS},
+            'advice': {m: {e: list(_c.advise(m, e)) for e in EFFORTS} for m in _models},
+            # ids, not sentences: the launch picker asks only whether the
+            # one model in front of you is still offered.
+            'model_retired': _m.retired_pins(),
             'frontier': [list(r) for r in _c.frontier_rows()],
         },
         'defaults': {'effort': s.get('default_effort', ''),
@@ -168,6 +178,7 @@ def state_payload():
                      'subagent_model': s.get('default_subagent_model', '')},
         'ui_mode': s.get('ui_mode', 'tui'),
         'gui_shell': s.get('gui_shell', 'auto'),
+        'auto_update': s.get('auto_update', 'notify'),
         'plan_model': s.get('plan_model', ''),
         'exec_model': s.get('exec_model', ''),
         'extract_model': s.get('extract_model', ''),
@@ -553,6 +564,7 @@ _SETTING_KEYS = (
     # read for back-compat (_motion_level) but never written again, so they age
     # out of settings.json
     'gui_shell', 'theme', 'motion', 'skin', 'stage', 'world', 'surface',
+    'auto_update',
     # NOTE: nav_collapsed and side_w are deliberately NOT here — they are
     # clamped/typed explicitly below, and two owners for one key is how a
     # sanitizer gets bypassed.

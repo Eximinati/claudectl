@@ -146,6 +146,30 @@ def test_a_project_default_wins_over_the_account_default(monkeypatch, tmp_path):
     assert args[args.index('--permission-mode') + 1] == 'plan'
 
 
+def test_a_pinned_project_model_does_not_reach_a_launch_with_no_picker(monkeypatch, tmp_path):
+    """The launch picker re-saves its model pick as the project default on every
+    launch, so one trial run on an expensive model became every later
+    context-inject — a path that shows no picker, so the choice was invisible
+    and unchangeable. The account default is the only model a no-picker launch
+    may use."""
+    import subprocess
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual = str(tmp_path / 'work' / 'alpha')
+    os.makedirs(actual, exist_ok=True)
+    enc = encode_component(actual)
+    folder = os.path.join(str(sb.projects), enc)
+    os.makedirs(folder, exist_ok=True)
+    make_jsonl(os.path.join(folder, 'aaaa0000-0000-0000-0000-000000000000.jsonl'),
+               title='Fix the bug')
+    config_mod.save_settings({'default_model': '',
+                              'project_defaults': {enc: {'model': 'claude-fable-5'}}})
+
+    calls = []
+    monkeypatch.setattr(subprocess, 'call', lambda *a, **k: calls.append((a, k)) or 0)
+    run_flow(monkeypatch, [*ENTER], ci.run, actual, folder, 'alpha')
+    assert '--model' not in calls[0][0][0]
+
+
 def test_auto_is_not_claimed_for_a_model_that_cannot_run_it(monkeypatch, tmp_path):
     import subprocess
     sb = Sandbox(monkeypatch, tmp_path)

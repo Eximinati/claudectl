@@ -26,7 +26,7 @@ def _routes():
 def test_every_tui_action_has_a_gui_counterpart():
     routes = _routes()
     missing = [(k, label, route)
-               for k, label, _scope, route in
+               for k, label, _scope, route, _blurb in
                session_menu.ACTIONS + session_menu.ARCHIVED_ACTIONS
                if route and route not in routes]
     assert not missing, 'TUI actions with no GUI route: %s' % (missing,)
@@ -37,7 +37,7 @@ def test_an_action_without_a_counterpart_must_say_why():
     but it has to be a decision, so the table carries a comment beside it."""
     src = io.open(session_menu.__file__, encoding='utf-8').read()
     table = src[src.index('ACTIONS = ['):src.index('#: actions reachable only')]
-    for k, label, _scope, route in session_menu.ACTIONS:
+    for k, label, _scope, route, _blurb in session_menu.ACTIONS:
         if route:
             continue
         line = next(ln for ln in table.splitlines() if "'%s'" % label in ln)
@@ -49,8 +49,125 @@ def test_the_action_table_still_drives_the_hints():
     the hints stop coming from it, the table is decoration."""
     src = io.open(session_menu.__file__, encoding='utf-8').read()
     assert "_hints('session')" in src and "_hints('project')" in src
-    labels = {label for _k, label, _s, _r in session_menu.ACTIONS}
+    labels = {label for _k, label, _s, _r, _b in session_menu.ACTIONS}
     assert {'view', 'fork', 'review', 'ctx audit'} <= labels
+
+
+def test_every_key_the_sessions_screen_handles_is_in_the_table():
+    """The gate for the drift the table exists to stop.
+
+    Three lists described this screen — ACTIONS (21 keys), the `/` palette (26)
+    and the help screen (22) — against 29 real handlers. `R`, code review, was
+    in neither of the two DISCOVERABLE ones, so a shipped feature had no entry
+    point anywhere in the product. Nothing could catch that by reading, because
+    the evidence was a `ev[1] == 'R'` branch six hundred lines from the table.
+
+    So the handlers are enumerated from the source: a key you can press and
+    that the table does not know about is a key nobody can find.
+    """
+    src = io.open(session_menu.__file__, encoding='utf-8').read()
+    tree = ast.parse(src)
+    handled = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare) or len(node.comparators) != 1:
+            continue
+        left, right = node.left, node.comparators[0]
+        # ev[1] == '<char>'
+        if (isinstance(left, ast.Subscript) and isinstance(right, ast.Constant)
+                and isinstance(right.value, str) and len(right.value) == 1):
+            handled.add(right.value)
+    assert len(handled) > 20, 'the handler walk found nothing — the dispatch shape changed'
+    known = {k for k, _l, _s, _r, _b in
+             session_menu.ACTIONS + session_menu.ARCHIVED_ACTIONS}
+    assert not (handled - known), (
+        'keys the sessions screen handles but the table does not list: %s'
+        % sorted(handled - known))
+
+
+def test_every_action_is_discoverable_without_reading_the_source():
+    """Both discovery surfaces come from ACTIONS, so neither can fall behind.
+
+    A key with no blurb is deliberately undiscoverable and must say why on its
+    line — today that is `/` alone, which opens the palette it would appear in.
+    """
+    src = io.open(session_menu.__file__, encoding='utf-8').read()
+    table = src[src.index('ACTIONS = ['):src.index('#: actions reachable only')]
+    silent = [(k, label) for k, label, _s, _r, blurb in session_menu.ACTIONS if not blurb]
+    for k, label in silent:
+        line = next(ln for ln in table.splitlines() if "'%s'" % label in ln)
+        assert '#' in line, 'undiscoverable action %r gives no reason' % (label,)
+    # the palette and the help screen are the same inventory, generated
+    palette = {k for _blurb, k in session_menu.palette_rows()}
+    assert palette == {k for k, _l, _s, _r, b in session_menu.ACTIONS if b}
+    assert 'R' in palette and 'X' in palette and 'K' in palette
+    from claude_sessions import ui
+    helptext = '\n'.join(ui._session_key_lines())
+    for key in ('R', 'X', 'K'):
+        assert ('\n    %s  ' % key) in helptext or ('  %s  ' % key) in helptext, key
+
+
+def test_the_palette_does_not_offer_an_action_that_is_guarded_off():
+    """Generating the palette from the table is what created this hazard: the
+    hand-written list simply omitted `!`, whose handler only runs while the
+    project has no CLAUDE.md and no memory graph. Picking a row that falls
+    through to the type-to-filter handler is worse than not seeing the row."""
+    assert '!' in {k for _b, k in session_menu.palette_rows()}
+    assert '!' not in {k for _b, k in session_menu.palette_rows(skip='!')}
+    # and the call site passes it — an unused parameter is not a guard
+    src = io.open(session_menu.__file__, encoding='utf-8').read()
+    assert "palette_rows(skip=" in src
+
+
+def _at_the_narrowest_supported_terminal(monkeypatch):
+    """Pin the terminal to the width the help screen is written for.
+
+    The budget follows the terminal, so "does this blurb fit" is meaningless
+    without one — on a wide CI console every blurb passes. The number comes
+    from `ui.HELP_MIN_COLS` rather than from here: a fixture that owns the
+    contract is a contract that can be relaxed by editing the test.
+    """
+    import shutil
+    from claude_sessions import render, ui
+    monkeypatch.setattr(shutil, 'get_terminal_size',
+                        lambda *a: os.terminal_size((ui.HELP_MIN_COLS, 35)))
+    render.invalidate()
+
+
+def test_a_blurb_fits_the_help_grid(monkeypatch):
+    """The blurb is the palette row AND the help cell, and only the help screen
+    has a hard budget — so it is written to that one. Truncating there loses the
+    only description a key has; the palette merely has room to spare.
+
+    The budget is ASKED of the renderer. The first cut restated it as 33 while
+    the renderer computed 32, so this gate passed with four cells truncated —
+    the duplicated-constant bug, inside the test written to prevent a different
+    duplication.
+    """
+    from claude_sessions import ui
+    _at_the_narrowest_supported_terminal(monkeypatch)
+    budget = ui.help_blurb_budget()
+    too_long = [(k, len(b), b) for k, _l, _s, _r, b in session_menu.ACTIONS
+                if len(b) > budget]
+    assert not too_long, (
+        'these truncate in the help screen (budget %d chars): %s'
+        % (budget, too_long))
+
+
+def test_the_help_grid_shows_every_blurb_whole(monkeypatch):
+    """The end of that argument, asserted on the rendered lines rather than on
+    the inputs: no cell may end in the truncation marker."""
+    from claude_sessions import ui
+    _at_the_narrowest_supported_terminal(monkeypatch)
+    from claude_sessions import render
+    lines = ui._session_key_lines()
+    assert lines, 'the help grid rendered nothing'
+    joined = '\n'.join(lines)
+    assert '…' not in joined, 'a help cell is truncated:\n' + joined
+    # The other half of the same invariant, and the one a lying budget would
+    # otherwise slip past: a cell wide enough never to truncate is a cell that
+    # runs off the frame. These lines carry no ANSI, so len() is the width.
+    over = [ln for ln in lines if len(ln) > render.content_width()]
+    assert not over, 'a help line overruns the frame:\n' + '\n'.join(over)
 
 
 def test_shift_keys_render_as_shift_in_the_hints():

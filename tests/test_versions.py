@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from harness import Sandbox, DOWN, ENTER, ESC, run_flow
 
 from claude_sessions import config as config_mod
-from claude_sessions import plugins, proc
+from claude_sessions import jsonstore, plugins, proc
 from claude_sessions import versions as v
 
 
@@ -331,8 +331,299 @@ def test_the_cache_is_written_inside_the_account_dir(monkeypatch, tmp_path):
     )['fetched'] < 60
 
 
+# ── claudectl's own version ──────────────────────────────────
+
+class _Dist:
+    """Enough of importlib.metadata.Distribution for versions._dist()."""
+
+    def __init__(self, version='1.6.0', direct_url=None, pkg_dir=None):
+        self.version = version
+        self._direct = direct_url
+        self._pkg = pkg_dir or os.path.dirname(v.__file__)
+
+    def locate_file(self, name):
+        # '' is the distribution root (site-packages); a name is a path in it —
+        # the same two answers importlib.metadata gives, and both are read.
+        return self._pkg if name else os.path.dirname(self._pkg)
+
+    def read_text(self, name):
+        return self._direct if name == 'direct_url.json' else None
+
+
+def _self(monkeypatch, dist=None, ver=None):
+    """Pin what claudectl looks like: a distribution (or none), and clear the
+    installed-version memo so one test cannot leak into the next."""
+    monkeypatch.setattr(v, '_SELF_VER', None)
+    monkeypatch.setattr(v, '_dist', lambda: dist)
+    if ver is not None:
+        monkeypatch.setattr(v, '_source_version', lambda: ver)
+
+
+def _pypi(monkeypatch, latest='1.7.0', calls=None):
+    doc = json.dumps({'info': {'version': latest}}).encode()
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake(req, timeout=0):
+        if calls is not None:
+            calls.append(getattr(req, 'full_url', req))
+        return _Resp(doc)
+
+    monkeypatch.setattr(v.urllib.request, 'urlopen', fake)
+
+
+def test_a_checkout_reports_its_version_and_refuses_to_be_pip_upgraded(monkeypatch, tmp_path):
+    """`python claude-sessions.py` is not an installed distribution. It still has
+    a version (pyproject says so) — but installing a release over it would leave
+    the checkout untouched and the user confused about which one is running."""
+    Sandbox(monkeypatch, tmp_path)
+    _self(monkeypatch, dist=None, ver='1.6.0')
+    assert v.self_installed() == '1.6.0'
+    assert v.self_install_mode() == 'checkout'
+    ok, msg = v.update_self()
+    assert ok is False and 'git pull' in msg
+
+
+def test_an_installed_copy_shadowed_by_a_checkout_is_not_the_one_running(monkeypatch, tmp_path):
+    """A checkout early on sys.path shadows a pip install: importlib still finds
+    the site-packages dist-info. Believing it would report the wrong version and
+    upgrade a package this process is not using."""
+    Sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(v, '_SELF_VER', None)
+    elsewhere = str(tmp_path / 'site-packages' / 'claude_sessions')
+    from importlib import metadata as _md
+    monkeypatch.setattr(_md, 'distribution',
+                        lambda name: _Dist(version='1.5.0', pkg_dir=elsewhere))
+    assert v._dist() is None                       # not the one we are running
+    assert v.self_install_mode() == 'checkout'
+
+
+def test_an_editable_install_is_a_checkout(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    _self(monkeypatch, dist=_Dist(direct_url=json.dumps(
+        {'url': 'file:///d/claude', 'dir_info': {'editable': True}})))
+    assert v.self_install_mode() == 'checkout'
+
+
+def test_a_pipx_venv_is_recognised_by_its_path(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    pipx = os.path.join('C:', os.sep, 'Users', 'x', 'pipx', 'venvs', 'claudectl',
+                        'Lib', 'site-packages', 'claude_sessions')
+    _self(monkeypatch, dist=_Dist(pkg_dir=pipx))
+    assert v.self_install_mode() == 'pipx'
+
+    _self(monkeypatch, dist=_Dist(pkg_dir=os.path.join(
+        'C:', os.sep, 'Python312', 'Lib', 'site-packages', 'claude_sessions')))
+    assert v.self_install_mode() == 'pip'
+
+
+def test_pipx_home_is_honoured_when_the_path_does_not_say_pipx(monkeypatch, tmp_path):
+    """PIPX_HOME relocates the venvs, so the path no longer carries the word."""
+    Sandbox(monkeypatch, tmp_path)
+    home = tmp_path / 'tools'
+    monkeypatch.setenv('PIPX_HOME', str(home))
+    _self(monkeypatch, dist=_Dist(
+        pkg_dir=str(home / 'venvs' / 'claudectl' / 'lib' / 'claude_sessions')))
+    assert v.self_install_mode() == 'pipx'
+
+
+def test_pipx_and_pip_get_different_upgrade_commands(monkeypatch, tmp_path):
+    """`pipx upgrade` and `pip install -U` are not interchangeable — the wrong
+    one either does nothing or installs into the wrong environment."""
+    Sandbox(monkeypatch, tmp_path)
+    seen = []
+    monkeypatch.setattr(v.proc, 'spawn_terminal',
+                        lambda argv, **k: (seen.append(argv) or (object(), '')))
+
+    monkeypatch.setattr(v, 'self_install_mode', lambda: 'pipx')
+    assert v.update_self()[0]
+    assert seen[-1][5:] == ['pipx', 'upgrade', 'claudectl']
+
+    monkeypatch.setattr(v, 'self_install_mode', lambda: 'pip')
+    assert v.update_self()[0]
+    assert seen[-1][6:] == ['-m', 'pip', 'install', '-U', 'claudectl']
+
+
+def test_the_upgrade_is_deferred_to_a_window_that_waits_for_this_process(monkeypatch, tmp_path):
+    """pip rewrites the console script, which Windows keeps locked while it is
+    the running process — so the install cannot happen here. The spawned command
+    carries our pid and re-enters claudectl through the __main__ dispatch that
+    imports nothing pip is about to replace."""
+    Sandbox(monkeypatch, tmp_path)
+    seen = []
+    monkeypatch.setattr(v.proc, 'spawn_terminal',
+                        lambda argv, **k: (seen.append(argv) or (object(), '')))
+    monkeypatch.setattr(v, 'self_install_mode', lambda: 'pip')
+    ok, _msg = v.update_self()
+    assert ok
+    argv = seen[0]
+    assert argv[1:4] == ['-m', 'claude_sessions', '--self-update']
+    assert argv[4] == str(os.getpid())
+
+
+def test_a_failed_spawn_is_not_reported_as_a_scheduled_update(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(v, 'self_install_mode', lambda: 'pip')
+    monkeypatch.setattr(v.proc, 'spawn_terminal', lambda argv, **k: (None, 'no console'))
+    ok, msg = v.update_self()
+    assert ok is False and 'no console' in msg
+
+
+def test_pypi_is_cached_for_a_day_and_refreshes_on_demand(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    calls = []
+    _pypi(monkeypatch, calls=calls)
+    assert v.self_released()['latest'] == '1.7.0'
+    assert len(calls) == 1
+    v.self_released()                       # served from disk
+    assert len(calls) == 1
+    v.self_released(refresh=True)
+    assert len(calls) == 2
+    assert (sb.cfg / 'claudectl-self.json').is_file()
+
+
+def test_the_two_version_caches_do_not_overwrite_each_other(monkeypatch, tmp_path):
+    """released() writes its whole document, so claudectl's answer lives in its
+    own file — sharing one would mean each fetch erasing the other."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    _npm(monkeypatch)
+    v.released()
+    _pypi(monkeypatch)
+    v.self_released()
+    assert json.loads((sb.cfg / 'claudectl-versions.json').read_text(
+        encoding='utf-8'))['latest'] == '2.1.241'
+    assert json.loads((sb.cfg / 'claudectl-self.json').read_text(
+        encoding='utf-8'))['latest'] == '1.7.0'
+
+
+def test_a_dead_pypi_keeps_the_cached_answer_and_says_why(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    _pypi(monkeypatch)
+    v.self_released()
+
+    def boom(*a, **k):
+        raise OSError('no route to host')
+    monkeypatch.setattr(v.urllib.request, 'urlopen', boom)
+    out = v.self_released(refresh=True)
+    assert out['latest'] == '1.7.0'
+    assert 'no route' in out['error']
+
+
+def test_status_says_whether_claudectl_is_behind(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    _self(monkeypatch, dist=_Dist(version='1.6.0'))
+    _pypi(monkeypatch, latest='1.7.0')
+    st = v.self_status(refresh=True)
+    assert st['installed'] == '1.6.0' and st['latest'] == '1.7.0'
+    assert st['update'] is True and st['current'] is False
+
+    monkeypatch.setattr(v, '_SELF_VER', None)
+    monkeypatch.setattr(v, '_dist', lambda: _Dist(version='1.7.0'))
+    st = v.self_status(refresh=True)
+    assert st['update'] is False and st['current'] is True
+
+
+def test_a_newer_installed_build_is_not_an_update(monkeypatch, tmp_path):
+    """Running 1.8.0.dev against a published 1.7.0 must not offer a downgrade."""
+    Sandbox(monkeypatch, tmp_path)
+    _self(monkeypatch, dist=_Dist(version='1.8.0'))
+    _pypi(monkeypatch, latest='1.7.0')
+    assert v.self_status(refresh=True)['update'] is False
+
+
+def test_the_banner_notice_never_touches_the_network(monkeypatch, tmp_path):
+    """ui.menu re-polls banner_fn every 0.5s, so a fetch here is a stall twice a
+    second — and the case that matters is a cache past its TTL, which is exactly
+    when a well-meaning `self_released()` call WOULD go to the network. Warming
+    the cache first would only prove the TTL works, not that this reads it."""
+    Sandbox(monkeypatch, tmp_path)
+    _self(monkeypatch, dist=_Dist(version='1.6.0'))
+    jsonstore.save(v._self_cache_path(),
+                   {'latest': '1.7.0', 'fetched': time.time() - v.SELF_TTL * 10})
+
+    def boom(*a, **k):
+        raise AssertionError('update_notice fetched')
+    monkeypatch.setattr(v.urllib.request, 'urlopen', boom)
+    assert '1.7.0' in v.update_notice()
+
+
+def test_no_notice_when_there_is_nothing_to_say(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    _self(monkeypatch, dist=_Dist(version='1.7.0'))
+    _pypi(monkeypatch, latest='1.7.0')
+    v.self_released()
+    assert v.update_notice() == ''
+
+
+def test_off_means_no_outbound_check_at_all(monkeypatch, tmp_path):
+    """One switch covers every network check claudectl makes on the user's
+    behalf, so 'off' has to actually stop the thread starting."""
+    Sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(v, '_bg_started', False)
+    s = config_mod.load_settings()
+    s['auto_update'] = 'off'
+    config_mod.save_settings(s)
+    started = []
+    monkeypatch.setattr(v, 'self_released',
+                        lambda *a, **k: started.append(1) or {})
+    v.start_background_check()
+    assert started == []
+
+
+def test_only_auto_installs_on_quit(monkeypatch, tmp_path):
+    Sandbox(monkeypatch, tmp_path)
+    _self(monkeypatch, dist=_Dist(version='1.6.0'))
+    _pypi(monkeypatch, latest='1.7.0')
+    v.self_released()
+    calls = []
+    monkeypatch.setattr(v, 'update_self', lambda: (calls.append(1) or (True, 'ok')))
+
+    for mode, expect in (('notify', 0), ('off', 0), ('auto', 1)):
+        del calls[:]
+        s = config_mod.load_settings()
+        s['auto_update'] = mode
+        config_mod.save_settings(s)
+        v.update_on_quit()
+        assert len(calls) == expect, mode
+
+
+def test_the_deferred_worker_waits_for_the_pid_then_runs(monkeypatch):
+    """proc.wait_and_run is what makes a program able to replace its own files.
+    It lives in proc so the waiting process imports nothing pip is replacing."""
+    import subprocess as _sp
+    alive = [True, True, False]
+    monkeypatch.setattr(proc, 'pid_alive', lambda p: alive.pop(0) if alive else False)
+    ran = []
+    monkeypatch.setattr(_sp, 'call', lambda argv: ran.append(argv) or 0)
+    rc = proc.wait_and_run(1234, ['pipx', 'upgrade', 'claudectl'],
+                           poll=0, out=lambda *a: None)
+    assert rc == 0 and ran == [['pipx', 'upgrade', 'claudectl']]
+    assert alive == []          # it really waited rather than running straight away
+
+
+def test_the_worker_refuses_an_empty_command(monkeypatch):
+    assert proc.wait_and_run(1, [], out=lambda *a: None) == 2
+
+
+def test_main_dispatches_the_worker_before_importing_the_package(monkeypatch):
+    """The whole point of putting --self-update in __main__ is that pip is about
+    to replace every file in this package, so the worker must not be holding a
+    lazy import of one. Guarding the source keeps that true."""
+    src = io.open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), 'claude_sessions', '__main__.py'),
+        encoding='utf-8').read()
+    assert src.index('--self-update') < src.index('from .main import run')
+
+
 # ── the screen ───────────────────────────────────────────────
 
+_SST = {'installed': '1.6.0', 'mode': 'pip', 'latest': '1.6.0',
+        'update': False, 'current': True, 'error': '', 'fetched': 0}
 _ST = {'installed': '2.1.239', 'mode': 'native', 'channel': 'latest',
        'latest': '2.1.241', 'stable': '2.1.231', 'behind': 2, 'current': False,
        'target': '2.1.241', 'versions': ['2.1.241', '2.1.240', '2.1.239'],
@@ -342,13 +633,32 @@ _ROWS = [{'key': 'demo@mkt', 'name': 'demo', 'marketplace': 'mkt',
           'ref': '', 'outdated': True}]
 
 
-def _screen(monkeypatch, tmp_path, keys, upd=None, plug=None):
+def _screen(monkeypatch, tmp_path, keys, upd=None, plug=None, sst=None, self_upd=None):
     Sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(v, 'status', lambda refresh=False: dict(_ST))
+    monkeypatch.setattr(v, 'self_status', lambda refresh=False: dict(sst or _SST))
     monkeypatch.setattr(v, 'plugin_rows', lambda: [dict(r) for r in _ROWS])
     monkeypatch.setattr(v, 'update_claude', upd or (lambda t='': (True, 'ok')))
     monkeypatch.setattr(v, 'update_plugin', plug or (lambda k: (True, 'ok')))
+    monkeypatch.setattr(v, 'update_self', self_upd or (lambda: (True, 'ok')))
     return run_flow(monkeypatch, keys, v.updates_menu)
+
+
+def test_the_screen_states_claudectls_own_version(monkeypatch, tmp_path):
+    _r, cap, _ = _screen(monkeypatch, tmp_path, [*ESC])
+    assert 'claudectl' in cap.text and '1.6.0' in cap.text
+    assert 'installed via pip' in cap.text
+    # up to date: no update row competing with Claude Code's
+    assert 'Update claudectl' not in cap.text
+
+
+def test_the_claudectl_update_row_appears_only_when_one_exists(monkeypatch, tmp_path):
+    behind = dict(_SST, latest='1.7.0', update=True, current=False)
+    seen = []
+    _r, cap, _ = _screen(monkeypatch, tmp_path, [*ENTER, *ESC], sst=behind,
+                         self_upd=lambda: (seen.append(1) or (True, 'scheduled')))
+    assert 'Update claudectl to 1.7.0' in cap.text
+    assert seen == [1]          # it is the first selectable row when present
 
 
 def test_the_screen_states_both_versions_and_what_is_behind(monkeypatch, tmp_path):

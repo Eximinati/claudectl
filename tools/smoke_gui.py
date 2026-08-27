@@ -43,7 +43,12 @@ STATE = {
     # The permission list is the REAL one, for the same reason the presets below
     # are: it grew from four modes to six, and a one-item ['d'] stub audits a
     # control that cannot wrap, cannot overflow and cannot be wrong.
-    'options': {'efforts': ['default', 'high'], 'models': ['opus', 'sonnet'],
+    # ...and the effort list is real for a sharper version of the same reason:
+    # the tick row under the slider is laid out per stop, and a two-stop stub
+    # cannot put a label in the wrong place. It shipped six hand-typed labels
+    # against a seven-stop slider — the thumb pointed at HIGH while the readout
+    # said xhigh — and every audit passed, because they were auditing two stops.
+    'options': {'efforts': list(_TH_CFG.EFFORTS), 'models': ['opus', 'sonnet'],
                 'model_labels': ['Opus', 'Sonnet'],
                 'perms': list(_TH_CFG.PERMS), 'perm_labels': list(_TH_CFG.PERM_LABELS),
                 'perm_profiles': dict(_TH_CFG.PERM_PROFILES),
@@ -259,8 +264,17 @@ ROUTES = {
                      'provides': {'skill': ['a', 'b'], 'hook': ['h']}}]},
     '/api/plugins/provenance': {'provenance': {'skill': {'a': 'demo@official'}}},
     # one plugin behind its marketplace and a Claude Code two releases behind:
-    # the update buttons only exist in that state, so the stub has to be in it
+    # the update buttons only exist in that state, so the stub has to be in it.
+    # Same rule for the other two subjects on this route — claudectl with an
+    # upgrade waiting, and a model catalogue holding a retired pin, because the
+    # warning rows are the only part of those cards worth auditing.
     '/api/versions': {
+        'claudectl': {'installed': '1.6.0', 'latest': '1.7.0', 'mode': 'pip',
+                      'update': True, 'current': False, 'error': ''},
+        'models': {'count': 4, 'families': 4, 'live': True, 'age': 3600,
+                   'fetched': 1, 'error': '',
+                   'notices': ['default_model is set to claude-opus-4-1, '
+                               'which Anthropic no longer offers']},
         'claude': {'installed': '2.1.239', 'mode': 'native', 'channel': 'latest',
                    'latest': '2.1.241', 'stable': '2.1.231', 'behind': 2,
                    'current': False, 'target': '2.1.241',

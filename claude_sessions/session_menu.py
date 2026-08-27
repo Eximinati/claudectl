@@ -12,48 +12,97 @@ from .claude_md import scaffold_claude_md, ai_scaffold_claude_md
 from .system_prompt import edit_system_prompt
 
 
-#: Every action this screen offers, and the GUI route that does the same thing.
+#: THE inventory of this screen. Everything a key does is here once, and both
+#: places the user discovers it — the `/` palette and the help screen — are
+#: generated from it.
 #:
-#: Hoisted out of the render loop so parity can be ASSERTED rather than
-#: reviewed. `tests/test_gui_parity.py` walks this table and fails when an
-#: entry names no counterpart — drift has happened in both directions, and a
-#: hint string buried in a render call is not something a test can enumerate.
+#: It did not start that way. Three lists described the same 29 keys: this
+#: table (21 entries), the palette (26) and `ui.help_screen` (22). `R`, code
+#: review, was in NEITHER discoverable list, so the feature had no entry point
+#: anywhere in the product; `X` and `K` were missing from help. That is the
+#: same failure as the hand-kept `docs/gui-audit.md` — a second copy of what
+#: the code already states is a copy that will be wrong.
 #:
-#: (key, label, scope, route). A route of '' means the action is terminal-only
-#: BY DESIGN, and the reason belongs next to it.
+#: (key, label, scope, route, blurb)
+#:   scope   'session' / 'project' put the key in the two hint rows under the
+#:           list; 'more' keeps it out of that one-line bar but in the palette
+#:           and help; 'meta' is the discovery surface itself.
+#:   route   the GUI endpoint doing the same thing. '' means terminal-only BY
+#:           DESIGN and the reason belongs on the line — test_parity_gate.py
+#:           fails a blank route with no comment.
+#:   blurb   what BOTH discovery surfaces show. It is written to the help
+#:           screen's budget, not the palette's: help must fit its frame, which
+#:           forces two columns, which on an 80-column terminal leaves about 32
+#:           characters — and there the blurb is the only thing identifying the
+#:           key, while the palette is a menu with room to spare. Ask
+#:           `ui.help_blurb_budget()` for the number; test_parity_gate.py fails
+#:           a blurb that would truncate.
 ACTIONS = [
-    ('v', 'view', 'session', '/api/transcript'),
-    ('r', 'rename', 'session', '/api/rename'),
-    ('f', 'fork', 'session', '/api/launch'),          # choice='fork:<sid>'
-    ('t', 'tag', 'session', '/api/session/tags'),
-    ('d', 'archive', 'session', '/api/session/archive'),
-    ('e', 'export', 'session', '/api/session/export'),
-    ('i', 'info', 'session', '/api/session/meta'),
-    ('F', 'files', 'session', '/api/session/changed-files'),
-    ('A', 'archived', 'session', '/api/session/archived'),
-    ('m', 'memory', 'project', '/api/memory/state'),
-    ('g', 'agents', 'project', '/api/agents/session'),
-    ('n', 'graph', 'project', '/api/graph-lite'),
-    ('X', 'plan→exec', 'project', '/api/job'),
-    ('R', 'review', 'project', '/api/job'),
-    ('a', 'ai-analyze', 'project', '/api/job'),
-    ('c', 'claude.md', 'project', '/api/claude-md'),
-    ('s', 'sys-prompt', 'project', '/api/system-prompt'),
-    ('u', 'usage', 'project', '/api/usage/project'),
-    ('w', 'status', 'project', '/api/workspace-status'),
-    ('K', 'inject context', 'project', '/api/inject/sessions'),
-    ('W', 'ctx audit', 'project', '/api/ctxaudit'),
+    ('v', 'view',           'session', '/api/transcript',            'View transcript (/ to search)'),
+    ('r', 'rename',         'session', '/api/rename',                'Rename session'),
+    ('f', 'fork',           'session', '/api/launch',                'Fork session'),  # choice='fork:<sid>'
+    ('t', 'tag',            'session', '/api/session/tags',          'Tag session'),
+    ('d', 'archive',        'session', '/api/session/archive',       'Archive / delete session'),
+    ('e', 'export',         'session', '/api/session/export',        'Export to markdown'),
+    ('i', 'info',           'session', '/api/session/meta',          'Session info: tokens, cost'),
+    ('F', 'files',          'session', '/api/session/changed-files', 'Changed files'),
+    ('A', 'archived',       'session', '/api/session/archived',      'Archived sessions view'),
+    ('m', 'memory',         'project', '/api/memory/state',          'Memory hub: build, ask, preview'),
+    ('g', 'agents',         'project', '/api/agents/session',        'Project agents'),
+    ('n', 'graph',          'project', '/api/graph-lite',            'Architecture + memory graph'),
+    ('X', 'plan→exec',      'project', '/api/job',                   'Plan on one model, run another'),
+    ('R', 'review',         'project', '/api/job',                   'Code review of the working tree'),
+    ('a', 'ai-analyze',     'project', '/api/job',                   'AI-generate CLAUDE.md'),
+    ('c', 'claude.md',      'project', '/api/claude-md',             'Scaffold CLAUDE.md'),
+    ('s', 'sys-prompt',     'project', '/api/system-prompt',         'System prompt'),
+    ('u', 'usage',          'project', '/api/usage/project',         'Project usage stats'),
+    ('w', 'status',         'project', '/api/workspace-status',      'Workspace status & freshness'),
+    ('K', 'inject context', 'project', '/api/inject/sessions',       'Inject context from another chat'),
+    ('W', 'ctx audit',      'project', '/api/ctxaudit',              'Context weight audit (tokens)'),
+    # ── in the palette and in help, but not in the hint bar: that bar is one
+    #    line wide, and these are the half that is reached less often.
+    ('L', 'lessons',        'more', '/api/lessons',      'Lessons review'),
+    ('M', 'memory map',     'more', '/api/memory-map',   'Memory files map (hierarchy)'),
+    ('C', 'compress',       'more', '/api/job',          'Compress CLAUDE.md with AI'),
+    ('p', 'extra PATH',     'more', '/api/extra-paths',  'Extra PATH entries'),
+    ('x', 'add-dirs',       'more', '/api/add-dirs',     'Add directories (--add-dir)'),
+    ('!', 'set up project', 'more', '',                  'One-key setup: CLAUDE.md+memory'),  # the GUI has both halves, scaffold then memory build, but never chained into one action
+    # ── the discovery surface itself. Listing `/` inside the palette it opens
+    #    would be a loop, so it carries no blurb; `?` is a real destination.
+    ('/', 'actions',        'meta', '',                  ''),   # opens the palette below
+    ('?', 'help',           'meta', '',                  'Help'),   # opens ui.help_screen
 ]
 
 #: actions reachable only from the archived view
 ARCHIVED_ACTIONS = [
-    ('d', 'restore/delete', 'session', '/api/session/restore'),
+    ('d', 'restore/delete', 'session', '/api/session/restore', 'Restore or delete'),
 ]
+
+
+def palette_rows(skip=()):
+    """[(blurb, key)] for the `/` palette, in table order.
+
+    Generated rather than typed: the hand-written list was missing `R` and had
+    no way to notice.
+
+    `skip` drops keys whose handler is guarded off right now. Generating the
+    palette from the table is what created the need for it — the hand-written
+    list simply omitted `!`, and a row that falls through to the type-to-filter
+    handler when picked is worse than no row.
+    """
+    return [(blurb, k) for k, _l, _sc, _r, blurb in ACTIONS
+            if blurb and k not in skip]
+
+
+def key_rows():
+    """[(key, blurb)] for the help screen — every key except the palette that
+    opens onto them."""
+    return [(k, blurb) for k, _l, _sc, _r, blurb in ACTIONS if blurb]
 
 
 def _hints(scope):
     return [(('⇧' + k) if k.isupper() else k, label)
-            for k, label, sc, _r in ACTIONS if sc == scope]
+            for k, label, sc, _r, _b in ACTIONS if sc == scope]
 
 
 def _sid_of(val):
@@ -624,25 +673,11 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path, extra_ac
                     flash(f"Setup failed: {e}", ok=False, secs=2)
 
         elif ev[0] == 'char' and ev[1] == '/' and not show_archived:
-            # Action palette — every action, discoverable, type-to-filter
-            actions = [
-                ('Memory hub (build, ask, preview, lessons)', 'm'),
-                ('View transcript', 'v'), ('Rename session', 'r'),
-                ('Fork session', 'f'), ('Tag session', 't'),
-                ('Archive session', 'd'), ('Export to markdown', 'e'),
-                ('Session info (tokens, cost)', 'i'), ('Changed files', 'F'),
-                ('Archived sessions view', 'A'), ('Lessons review', 'L'),
-                ('Plan with one model, execute with another', 'X'),
-                ('Architecture graph', 'n'), ('Project agents', 'g'),
-                ('AI-analyze CLAUDE.md', 'a'), ('Scaffold CLAUDE.md', 'c'),
-                ('Context weight audit (token cost)', 'W'),
-                ('Compress CLAUDE.md with AI (save tokens)', 'C'),
-                ('System prompt', 's'), ('Memory files map', 'M'),
-                ('Project usage stats', 'u'), ('Workspace status', 'w'),
-                ('New chat with context from another session/account', 'K'),
-                ('Extra PATH entries', 'p'), ('Add directories', 'x'),
-                ('Help', '?'),
-            ]
+            # Action palette — every action, discoverable, type-to-filter.
+            # Built from ACTIONS so it cannot fall behind the keys again.
+            # '!' is guarded on the project not being set up; it announces
+            # itself with a banner exactly when it applies.
+            actions = palette_rows(skip='' if not_set_up else '!')
             pick = menu(actions, "ACTIONS  (type to filter)")
             if pick:
                 pending_ev = ('char', pick)

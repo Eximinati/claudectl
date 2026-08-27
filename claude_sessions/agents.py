@@ -8,7 +8,7 @@ tools, model) followed by the system-prompt body.
 import os
 import re
 
-from .config import W, get_claude_exe, open_in_editor, config_dir, MODELS, MODEL_LABELS
+from .config import W, get_claude_exe, open_in_editor, config_dir
 from .ui import (menu, text_input, flash, pause, confirm, multiselect,
                  run_with_progress, pager, _cls)
 from . import config as _c
@@ -159,7 +159,8 @@ def _new_agent_manual(project_path):
                         "TOOLS (none selected = inherit all)")
     if tools is None:
         return
-    model = menu([(l, v) for l, v in zip(MODEL_LABELS, MODELS)], "MODEL (default = inherit)")
+    _ids, _labels = _c.models()
+    model = menu([(l, v) for l, v in zip(_labels, _ids)], "MODEL (default = inherit)")
     meta = {'name': name, 'description': desc}
     if tools:
         meta['tools'] = ', '.join(t for t in KNOWN_TOOLS if t in tools)

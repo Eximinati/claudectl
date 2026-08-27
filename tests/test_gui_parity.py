@@ -1,6 +1,7 @@
 """Full-parity GUI API tests: endpoint groups + the job model with its
 diff-approval gate, driven over real HTTP against a sandboxed server."""
 
+import io
 import json
 import os
 import sys
@@ -1141,3 +1142,56 @@ def test_every_gate_publishes_diff_as_a_list_of_lines(monkeypatch, tmp_path):
         assert isinstance(diff, list), title
         assert all(isinstance(l, str) for l in diff), title
     assert seen['PAGER'] == ['line one', 'line two']
+
+
+# ── the effort slider's tick row ─────────────────────────────
+
+def _web(name):
+    import claude_sessions.gui as gui_mod
+    return io.open(os.path.join(os.path.dirname(os.path.abspath(gui_mod.__file__)),
+                                'web', name), encoding='utf-8').read()
+
+
+def test_the_effort_ticks_are_not_typed_out_in_the_markup():
+    """`index.html` held six labels while `config.EFFORTS` had grown to seven
+    (`ultracode`), so the slider ran 0..6 against a row laid out for 0..5: at
+    xhigh the thumb sat at 4/6 of the track and pointed at HIGH, and the
+    seventh stop was unlabelled.
+
+    The row comes from `ST.options.efforts` now — the same list that sets
+    `sl.max` two lines earlier — so the two cannot disagree about how many
+    stops there are.
+    """
+    html, js = _web('index.html'), _web('app.js')
+    assert 'id="fEffTicks"' in html
+    assert '<span>xhigh</span>' not in html, 'the tick labels are typed out again'
+    assert 'function effortTicksFill' in js
+    # and it is actually called from the launch modal's fill
+    assert 'effortTicksFill();' in js
+
+
+def test_every_effort_gets_a_tick():
+    """Rendered from the real EFFORTS, one label per entry — including the one
+    the hand-written row had missed."""
+    from claude_sessions import config as cfg
+    labels = [e or 'default' for e in cfg.EFFORTS]
+    assert len(labels) == len(cfg.EFFORT_LABELS)
+    assert labels == list(cfg.EFFORT_LABELS), (
+        'the picker labels an effort differently from EFFORT_LABELS')
+    assert 'ultracode' in labels, 'the stop that had no label'
+
+
+def test_the_ticks_sit_on_their_stops_not_between_them():
+    """`justify-content:space-between` aligns label BOXES: with labels of
+    unequal width ("DEFAULT" vs "LOW") each centre drifts off its own tick, so
+    the row would have pointed at the wrong stop even with the right count.
+
+    Each label is absolutely placed at its fraction and centred on it, over a
+    track inset by half the thumb — the span the thumb actually travels.
+    """
+    css = _web('app.css')
+    block = css[css.index('.effticks{'):css.index('.frontends{')]
+    assert 'space-between' not in block, 'boxes aligned, not centres'
+    assert 'position:absolute' in block and 'translateX(-50%)' in block
+    assert 'var(--i)' in block, 'the stop fraction is not used to place it'
+    assert 'var(--thumb)' in block, 'the row does not share the thumb travel'

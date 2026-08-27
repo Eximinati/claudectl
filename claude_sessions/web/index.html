@@ -94,6 +94,10 @@
       </span>
     </div>
     <div class="ubar" id="ubar"></div>
+    <!-- "claudectl N is out". Its OWN element rather than a row inside #ubar,
+         because drawUsageBar rewrites that innerHTML wholesale every 60s and
+         would wipe it. Outside #content for the same reason #jban is. -->
+    <div class="updbar" id="updbar" style="display:none"></div>
     <div class="tabs" id="tabs" style="display:none"></div>
     <!-- running-job banner. Outside #content on purpose: the SPA rewrites
          #content wholesale, and a job outlives navigation (the work runs in a
@@ -125,7 +129,9 @@
           <div class="fld"><label>Model</label><div class="mcards" id="fModel"></div></div>
           <div class="fld"><label>Effort</label>
             <input type="range" id="fEffort" min="0" step="1">
-            <div class="effticks"><span>default</span><span>low</span><span>medium</span><span>high</span><span>xhigh</span><span>max</span></div>
+            <!-- filled by effortTicksFill() from ST.options.efforts. Typed
+                 out here it was six labels against a seven-stop slider. -->
+            <div class="effticks" id="fEffTicks"></div>
             <div class="efflabel" id="fEffLabel"></div>
           </div>
         </div>

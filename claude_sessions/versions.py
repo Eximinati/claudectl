@@ -1,7 +1,14 @@
-"""What version of Claude Code is installed, what has been released, and
-updating it — or a plugin — to the latest or to a pinned version.
+"""What version of Claude Code — or a plugin, or claudectl itself — is
+installed, what has been released, and updating it.
 
-Four things worth knowing before changing this:
+Five things worth knowing before changing this:
+
+- **claudectl's own update cannot run in claudectl.** pip rewrites the console
+  script (`Scripts/claudectl.exe`) on every upgrade, and Windows holds that file
+  open for as long as it is the running process, so the install dies with a
+  PermissionError. `update_self()` therefore *schedules* the upgrade into a new
+  window that waits for this PID to exit — which is also what makes "update now"
+  and "update automatically on quit" one code path rather than two.
 
 - **There is no official version-list endpoint.** The docs advertise
   `downloads.claude.ai/claude-code-releases/{latest,stable}/manifest.json`;
@@ -28,6 +35,7 @@ Four things worth knowing before changing this:
 import json
 import os
 import re
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -39,7 +47,10 @@ from . import proc
 
 __all__ = ['installed_version', 'install_mode', 'local_versions', 'released',
            'status', 'update_claude', 'plugin_rows', 'update_plugin',
-           'update_marketplaces', 'updates_menu']
+           'update_marketplaces', 'updates_menu',
+           'self_installed', 'self_install_mode', 'self_released',
+           'self_status', 'update_self', 'update_notice',
+           'start_background_check', 'update_on_quit']
 
 #: npm metadata for the published package. The `abbreviated` accept header keeps
 #: this ~100KB instead of ~15MB: the full document carries every version's
@@ -49,9 +60,25 @@ NPM_ACCEPT = 'application/vnd.npm.install-v1+json'
 CACHE_TTL = 3600
 _TIMEOUT = 20
 
+#: claudectl publishes to PyPI from every v* tag (.github/workflows/release.yml),
+#: so PyPI is both the release record AND the thing an update installs from —
+#: unlike Claude Code, whose npm metadata is a stand-in for a missing endpoint.
+SELF_PKG = 'claudectl'
+PYPI_URL = 'https://pypi.org/pypi/%s/json' % SELF_PKG
+#: a day, not an hour: claudectl releases are not hourly, and this check runs
+#: unattended on a background thread rather than when a screen is opened.
+SELF_TTL = 86400
+
 
 def _cache_path():
     return os.path.join(_c.config_dir, 'claudectl-versions.json')
+
+
+def _self_cache_path():
+    """A separate file from _cache_path(), deliberately: released() writes its
+    whole document, so sharing one file would mean one fetch erasing the
+    other's answer."""
+    return os.path.join(_c.config_dir, 'claudectl-self.json')
 
 
 def _ver_key(v):
@@ -167,6 +194,234 @@ def update_claude(target=''):
     args = ['install', target] if target else ['update']
     # a download plus a binary swap; the 120s default is not enough
     return plugins._claude_cli(args, timeout=900)
+
+
+# ── claudectl itself ─────────────────────────────────────────
+
+def _source_version():
+    """The version out of the checkout's pyproject.toml, for a claudectl that is
+    not an installed distribution at all (`python claude-sessions.py`).
+
+    Parsed with a regex rather than tomllib: requires-python is >=3.10 and
+    tomllib landed in 3.11.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        with open(os.path.join(root, 'pyproject.toml'), encoding='utf-8') as f:
+            m = re.search(r'^version\s*=\s*["\']([^"\']+)["\']', f.read(), re.M)
+    except OSError:
+        return ''
+    return m.group(1) if m else ''
+
+
+def _dist():
+    """The installed claudectl distribution — but ONLY when it is the one this
+    process is actually running from.
+
+    A checkout early on sys.path shadows an installed copy: `distribution()`
+    still finds the site-packages dist-info, and believing it would mean
+    reporting the wrong version and pip-upgrading a package the running process
+    is not using. Same class of mistake as trusting a decoded folder name.
+    """
+    try:
+        from importlib.metadata import distribution
+        d = distribution(SELF_PKG)
+    except Exception:
+        return None
+    try:
+        here = os.path.normcase(os.path.dirname(os.path.abspath(__file__)))
+        theirs = os.path.normcase(os.path.abspath(str(d.locate_file(__package__))))
+    except Exception:
+        return d
+    return d if here == theirs else None
+
+
+#: memoised because the banner asks for it twice a second (ui.menu re-polls
+#: banner_fn every 0.5s) and resolving a distribution walks sys.path. Safe to
+#: hold for the process lifetime for the one reason a derived constant usually
+#: is NOT: the installed version cannot change under a running process — an
+#: upgrade replaces this process rather than mutating it.
+_SELF_VER = None
+
+
+def self_installed():
+    """'1.6.0' — the running claudectl's version, or '' when it cannot be told."""
+    global _SELF_VER
+    if _SELF_VER is None:
+        d = _dist()
+        ver = ''
+        if d is not None:
+            try:
+                ver = str(d.version or '')
+            except Exception:
+                ver = ''
+        _SELF_VER = ver or _source_version()
+    return _SELF_VER
+
+
+def self_install_mode():
+    """'pipx' | 'pip' | 'checkout' | '' — which installer owns claudectl.
+
+    The same job install_mode() does for Claude Code, and it exists for the same
+    reason: it decides what an update even means. `pipx upgrade` and
+    `pip install -U` are not interchangeable, and a checkout has to be told to
+    `git pull` rather than have a release installed over the top of it.
+    """
+    d = _dist()
+    if d is None:
+        return 'checkout' if _source_version() else ''
+    try:
+        raw = d.read_text('direct_url.json') or ''
+    except Exception:
+        raw = ''
+    if raw:
+        try:
+            if ((json.loads(raw).get('dir_info') or {}).get('editable')):
+                return 'checkout'                      # pip install -e .
+        except ValueError:
+            pass
+    try:
+        loc = os.path.normcase(str(d.locate_file('')))
+    except Exception:
+        loc = ''
+    home = os.environ.get('PIPX_HOME') or ''
+    if home and loc.startswith(os.path.normcase(os.path.abspath(os.path.expanduser(home)))):
+        return 'pipx'
+    parts = loc.replace('\\', '/').split('/')
+    if 'pipx' in parts and 'venvs' in parts:
+        return 'pipx'
+    return 'pip'
+
+
+def self_released(refresh=False):
+    """{'latest','fetched','error'} for the published claudectl, read from PyPI.
+
+    Daily disk cache, and a failed fetch keeps the cached answer with the error
+    beside it — the same contract as released(), for the same reason: a stale
+    answer with a note beats an empty screen.
+    """
+    cached = jsonstore.load(_self_cache_path(), {})
+    fresh = (isinstance(cached, dict) and cached.get('latest')
+             and time.time() - float(cached.get('fetched') or 0) < SELF_TTL)
+    if fresh and not refresh:
+        return dict(cached, error='')
+    try:
+        req = urllib.request.Request(
+            PYPI_URL, headers={'Accept': 'application/json', 'User-Agent': 'claudectl'})
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+            doc = json.loads(resp.read().decode('utf-8', 'ignore'))
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        keep = dict(cached) if isinstance(cached, dict) else {}
+        keep.setdefault('latest', '')
+        return dict(keep, error=str(e)[:200])
+    out = {'latest': str((doc.get('info') or {}).get('version') or ''),
+           'fetched': time.time()}
+    jsonstore.save(_self_cache_path(), out)
+    return dict(out, error='')
+
+
+def self_status(refresh=False):
+    """"Is claudectl itself current?" in one dict — the payload the banner, the
+    TUI screen and the GUI card all render."""
+    cur = self_installed()
+    rel = self_released(refresh=refresh)
+    latest = rel.get('latest', '')
+    behind = bool(cur and latest and _ver_key(latest) > _ver_key(cur))
+    return {'installed': cur, 'mode': self_install_mode(), 'latest': latest,
+            'update': behind, 'current': bool(cur and latest and not behind),
+            'error': rel.get('error', ''), 'fetched': rel.get('fetched', 0)}
+
+
+def update_notice():
+    """The one-line "claudectl N is out" banner, or ''.
+
+    CACHE ONLY — never a fetch. `ui.menu()` re-polls `banner_fn()` every 0.5
+    seconds, so a network call on this path would be a stall twice a second,
+    which is the same rule `repos.state(refresh=False)` follows.
+    """
+    cached = jsonstore.load(_self_cache_path(), {})
+    latest = str((cached or {}).get('latest') or '')
+    cur = self_installed()
+    if not (latest and cur) or _ver_key(latest) <= _ver_key(cur):
+        return ''
+    mode = (_c.load_settings().get('auto_update') or 'notify')
+    tail = ('installing when you quit' if mode == 'auto'
+            else 'Updates ▸ Update claudectl')
+    return (f"  {_c.C_WARN}claudectl {latest} available{_c.C_RESET}  "
+            f"{_c.C_DIM}(you have {cur} — {tail}){_c.C_RESET}")
+
+
+_bg_started = False
+
+
+def start_background_check():
+    """Refresh the PyPI answer once, on a daemon thread, if today's is stale.
+
+    No re-poll loop (unlike usage.py's): claudectl's published version cannot
+    change in a way this process can act on while it runs, so one TTL-gated call
+    per launch is the whole job. `self_released()` is already TTL-gated, so this
+    is a no-op on every launch inside the day.
+    """
+    global _bg_started
+    import threading
+    if (_c.load_settings().get('auto_update') or 'notify') == 'off':
+        return
+    if _bg_started:
+        return
+    _bg_started = True
+
+    def _work():
+        try:
+            self_released()
+        except Exception:
+            pass          # a version check must never be why claudectl misbehaves
+
+    threading.Thread(target=_work, daemon=True).start()
+
+
+def update_on_quit():
+    """Called at exit: install a pending update when the user asked for that.
+
+    Reads the cache only — the same discipline as update_notice(), and for a
+    stronger reason here: this runs during shutdown, where a hanging socket
+    would be a claudectl that will not close.
+    """
+    if (_c.load_settings().get('auto_update') or 'notify') != 'auto':
+        return False, ''
+    if not update_notice():
+        return False, ''
+    return update_self()
+
+
+def update_self():
+    """(ok, message). Schedules the upgrade into a NEW window that waits for
+    this process to exit before running it.
+
+    It cannot run in-process: pip rewrites the console script on every upgrade
+    and Windows holds that file open while it is the running process. Deferring
+    is also what makes "update now" and "update on quit" the same code path.
+
+    A checkout is reported rather than overwritten, exactly as update_claude()
+    reports an npm install instead of installing the native build over it.
+    """
+    mode = self_install_mode()
+    if mode == 'checkout':
+        return False, 'running from a checkout — update it with `git pull`'
+    if not mode:
+        return False, 'claudectl is not an installed package — nothing to update'
+    upgrade = (['pipx', 'upgrade', SELF_PKG] if mode == 'pipx' else
+               [sys.executable, '-m', 'pip', 'install', '-U', SELF_PKG])
+    # `-m claude_sessions`, not `-c <script>`: spawn_terminal goes through
+    # `cmd /c`, where a script argument carrying newlines or quotes is a quoting
+    # hazard. __main__ dispatches --self-update before it imports anything else,
+    # so the waiting process never holds a lazy import of the package pip is
+    # about to replace.
+    argv = ([sys.executable, '-m', 'claude_sessions', '--self-update',
+             str(os.getpid())] + upgrade)
+    p, err = proc.spawn_terminal(argv, title='claudectl update', keep_open=True)
+    if not p:
+        return False, err or 'could not open a window for the update'
+    return True, 'Updating once claudectl exits — watch the new window'
 
 
 # ── plugins ──────────────────────────────────────
@@ -313,20 +568,58 @@ def _row(st):
     return '%s → %s   (%s)' % (st['installed'], st['target'] or '?', behind)
 
 
+def _self_row(sst):
+    if not sst['installed']:
+        return 'version unknown'
+    if sst['error']:
+        return '%s   (could not reach PyPI: %s)' % (sst['installed'], sst['error'])
+    if sst['update']:
+        return '%s → %s   (update available)' % (sst['installed'], sst['latest'])
+    if sst['current']:
+        return '%s   up to date' % sst['installed']
+    return sst['installed']
+
+
+def _models_row(mst):
+    """One line for the model catalogue: how many, how fresh, or that the
+    picker is running on the bundled floor."""
+    if not mst['live']:
+        return (f"{_c.C_DIM}not fetched — the picker is showing "
+                f"claudectl's bundled list{_c.C_RESET}")
+    age = mst['age']
+    when = ('just now' if age < 90 else
+            f"{int(age // 60)}m ago" if age < 5400 else
+            f"{int(age // 3600)}h ago" if age < 172800 else
+            f"{int(age // 86400)}d ago")
+    return (f"{mst['count']} from Anthropic across {mst['families']} families  "
+            f"{_c.C_DIM}(checked {when}){_c.C_RESET}")
+
+
 def updates_menu():
-    """Versions of Claude Code and of every installed plugin, and updating
-    either. A plugin can only be moved to whatever its marketplace offers, so
-    the version prompt is offered for Claude Code alone."""
+    """Versions of claudectl, of Claude Code and of every installed plugin, and
+    updating any of them. A plugin can only be moved to whatever its marketplace
+    offers, so the version prompt is offered for Claude Code alone."""
     from .ui import menu, flash, text_input, confirm
     from . import config as cfg
+
+    from . import models as _mods
 
     refresh = False
     while True:
         st = status(refresh=refresh)
+        sst = self_status(refresh=refresh)
+        mst = _mods.status()
+        mnotes = _mods.notices()
         refresh = False
         rows = plugin_rows()
         W = 62
-        items = [(_c.C_NAME + 'Claude Code  ' + _c.C_RESET + _row(st), None)]
+        items = [(_c.C_NAME + 'claudectl    ' + _c.C_RESET + _self_row(sst), None)]
+        if sst['mode']:
+            items.append((f"{_c.C_DIM}  installed via {sst['mode']}{_c.C_RESET}", None))
+        if sst['update']:
+            items.append((f"⬆  Update claudectl to {sst['latest']}", '__self__'))
+        items.append((f"{'─' * W}", None))
+        items.append((_c.C_NAME + 'Claude Code  ' + _c.C_RESET + _row(st), None))
         if st['mode'] and st['mode'] != 'native':
             items.append((f"{_c.C_DIM}  installed via {st['mode']}{_c.C_RESET}", None))
         items += [(f"{'─' * W}", None), ('↻  Check for new releases now', '__check__')]
@@ -351,12 +644,25 @@ def updates_menu():
             items.append((f"{_c.C_DIM}(no plugins installed){_c.C_RESET}", None))
         items += [(f"{'─' * W}", None),
                   ('↻  Refresh every marketplace', '__mkt__')]
+        items.append((f"{'─' * W}", None))
+        items.append((_c.C_NAME + 'Models       ' + _c.C_RESET + _models_row(mst), None))
+        for note in mnotes:
+            items.append((f"  {_c.C_WARN}⚠{_c.C_RESET}  {note}", None))
+        items.append(('↻  Refresh the model catalogue now', '__models__'))
 
         sel = menu(items, 'UPDATES  /  ' + os.path.basename(cfg.config_dir))
         if not sel:
             return
-        if sel == '__check__':
+        if sel == '__self__':
+            ok, msg = update_self()
+            flash(msg, ok=ok, secs=4)
+        elif sel == '__check__':
             refresh = True
+        elif sel == '__models__':
+            flash('Asking Anthropic what it offers…', secs=0.4)
+            r = _mods.fetch(refresh=True)
+            n = len(r.get('models') or [])
+            flash(r.get('error') or f'{n} models', ok=not r.get('error'), secs=3)
         elif sel == '__mkt__':
             flash('Refreshing marketplaces…', secs=0.4)
             ok, msg = update_marketplaces()

@@ -10,9 +10,10 @@ exist before the POSIX port rather than after it.
 import os
 import subprocess
 import sys
+import time
 
 __all__ = ['run', 'git', 'pid_alive', 'kill_tree', 'spawn_terminal',
-           'new_console_flags', 'no_window_flags', 'WINDOWS']
+           'wait_and_run', 'new_console_flags', 'no_window_flags', 'WINDOWS']
 
 WINDOWS = os.name == 'nt'
 
@@ -100,6 +101,38 @@ def pid_alive(pid):
         return True          # exists, owned by someone else
     except Exception:
         return None
+
+
+def wait_and_run(pid, argv, timeout=300, poll=0.5, out=print):
+    """Wait for *pid* to exit, then run *argv* and return its exit code.
+
+    This is what lets a program replace its own files: claudectl's upgrade
+    rewrites the console script it is running from, which Windows keeps locked
+    until the process ends. Lives here rather than in versions.py so the waiting
+    process can reach it without importing the package pip is replacing — this
+    module imports only the standard library, nothing from claudectl.
+
+    `pid_alive` returning None means "cannot tell"; that stops the wait rather
+    than hanging on it, and the command's own error is then the honest report.
+    """
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        pid = 0
+    if not argv:
+        return 2
+    out('Waiting for claudectl to exit...')
+    deadline = time.time() + timeout
+    while pid and time.time() < deadline:
+        if pid_alive(pid) is not True:
+            break
+        time.sleep(poll)
+    out('Running: ' + ' '.join(argv))
+    try:
+        return subprocess.call(argv)
+    except Exception as e:
+        out('Failed: %s' % e)
+        return 1
 
 
 def kill_tree(proc):

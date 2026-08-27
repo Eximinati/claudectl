@@ -93,6 +93,12 @@ _DEFAULT_SETTINGS = {
                                    # `claude -p` calls (0 = no cap)
     'ui_mode': 'tui',              # default interface: 'tui' | 'gui' (desktop app)
     'gui_shell': 'auto',          # GUI window: 'auto' | 'qt' | 'edge' | 'browser'
+    #: 'notify' = say so in the banner | 'auto' = also install it on quit |
+    #: 'off' = no outbound check at all. ONE switch on purpose: it gates both the
+    #: PyPI version check and the /v1/models catalogue refresh, because both are
+    #: the same consent (claudectl talking to the network on your behalf) and a
+    #: second switch is a second thing to desync.
+    'auto_update': 'notify',
     # ── GUI appearance ──
     # These MUST be declared here, not just accepted by the POST handler.
     # load_settings() drops any key it does not know, and /api/settings does
@@ -219,16 +225,22 @@ def effective_perm(perm, model='', omniroute=''):
 
 def launch_defaults(enc=''):
     """(model, perm) for a launch with NO options picker — context injection and
-    the GUI's mirror of it. Resolves exactly like launch_options_menu's defaults
-    (project default over account default, an explicit '' winning) so a session
-    started this way is not silently in a different mode from one started
-    through the picker, and drops `auto` where the classifier cannot run.
+    the GUI's mirror of it. Permission resolves project-over-account and drops
+    `auto` where the classifier cannot run.
+
+    The MODEL deliberately ignores the project pin and takes the account
+    default. That pin is only ever whatever the launch picker last saved, and
+    the picker re-saves it on every launch, so one "try Fable on this project"
+    made every later context-inject start on the priciest model — on a path that
+    shows no picker, so nothing displayed the choice and nothing could change
+    it. Permission does NOT get the same treatment: its pin can only be read as
+    a restriction (a project set to `plan` must not silently launch looser), so
+    honouring it there is safe where honouring the model is not.
     """
     s = load_settings()
     proj = (s.get('project_defaults') or {}).get(enc or '') or {}
-    model = proj.get('model', s.get('default_model', ''))
-    perm = proj.get('permission', s.get('default_permission', ''))
-    return model, effective_perm(perm, model)
+    model = s.get('default_model', '')
+    return model, effective_perm(proj.get('permission', s.get('default_permission', '')), model)
 
 
 def perm_note(perm, model='', omniroute=''):
@@ -476,7 +488,14 @@ EFFORT_LABELS = ['default', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'
 #: enforces this — a rejected value is a startup error the user sees instead of
 #: their session)
 EFFORT_LAUNCH_ONLY = {'max', 'ultracode'}
-# Full model ids — claude.exe rejects bare version strings like 'sonnet-4-6'
+# Full model ids — claude.exe rejects bare version strings like 'sonnet-4-6'.
+#
+# This pair is the FLOOR, not the roster. `models()` below answers with the live
+# catalogue when there is one (see models.py) and falls back to exactly this,
+# so an empty cache, a dead network or a logged-out account still fills every
+# picker. Do NOT read these two directly from a picker — read `models()`, or a
+# new model release cannot reach the screen and a pinned one can be silently
+# erased. `test_no_picker_reads_the_bundled_table_directly` enforces that.
 MODELS        = ['', 'claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5', 'claude-fable-5']
 MODEL_LABELS  = ['default', 'haiku-4-5', 'sonnet-5', 'opus-5', 'fable-5']
 # Permission modes, as Claude Code names them. Two entries need explaining:
@@ -583,14 +602,83 @@ def cost_bar(model):
     return '$' * tier
 
 
+def models(*extra):
+    """(ids, labels) for the launch pickers — the live catalogue, then the floor.
+
+    Derived on every call and never cached in a module constant. `MODELS` was
+    precisely the "constant derived from mutable state" this codebase has been
+    bitten by three times, and half its readers import it BY VALUE — rebinding
+    it would reach none of them. The read is cheap: `models.roster()` is a
+    pure disk load and never fetches, so a picker may call this per render.
+
+    `extra` ids are appended when the catalogue does not list them, and that is
+    load-bearing rather than tidiness. The launch picker resolves the saved
+    model to a cursor index and writes `ids[idx]` back on save, so a pin that
+    Anthropic has since retired would resolve to 0 (= account default) and be
+    ERASED on the next save. It stays in the list, and `models.notices()` is
+    what tells the user it is gone.
+    """
+    from . import models as _m
+    try:
+        roster = _m.roster()
+    except Exception:
+        roster = []                    # a catalogue read must never break launch
+    if roster:
+        ids = [''] + [r['id'] for r in roster]
+        labels = ['default'] + [r['label'] for r in roster]
+    else:
+        ids, labels = list(MODELS), list(MODEL_LABELS)
+    for mid in extra:
+        mid = (mid or '').strip()
+        if mid and mid not in ids:
+            ids.append(mid)
+            labels.append(mid[7:] if mid.startswith('claude-') else mid)
+    return ids, labels
+
+
+def model_label(model):
+    """The short label for one id ('claude-sonnet-5' -> 'sonnet-5')."""
+    ids, labels = models(model)
+    return labels[ids.index(model)] if model in ids else (model or 'default')
+
+
+def profile(model):
+    """The curated editorial for a model, matched by id then by FAMILY, or None.
+
+    The API owns the facts (context window, efforts, release date); this table
+    owns cost rank, capability rank, speed and the `best_for` prose, none of
+    which /v1/models returns. Family fallback is what stops the first release
+    of a new generation from landing in the picker with every column blank:
+    `claude-sonnet-6` inherits sonnet's editorial until someone profiles it.
+    """
+    if not model:
+        return None
+    prof = MODEL_PROFILES.get(model)
+    if prof:
+        return prof
+    from . import models as _m
+    fam = _m.family(model)
+    if not fam:
+        return None
+    for mid, p in MODEL_PROFILES.items():
+        if _m.family(mid) == fam:
+            return p
+    return None
+
+
 def cap_bar(model):
     """'▪' capability bar (1-5); '' for account-default/unknown."""
-    prof = MODEL_PROFILES.get(model)
+    prof = profile(model)
     return '▪' * (prof['cap'] if prof else 0)
 
 
 def swe_str(model):
-    """'85%' SWE-bench score, or '—' when unknown/account-default."""
+    """'85%' SWE-bench score, or '—' when unknown/account-default.
+
+    A family-inherited score is deliberately NOT shown: a benchmark number is a
+    measurement of one model, and attributing sonnet-5's 85% to sonnet-6 would
+    be inventing data. Rank and prose generalise across a family; a score does
+    not."""
     prof = MODEL_PROFILES.get(model)
     if not prof or prof.get('swe') is None:
         return '—'
@@ -598,14 +686,20 @@ def swe_str(model):
 
 
 def model_card_rows():
-    """[(model_id, label, cost_bar, cap_bar, best_for, swe_str)] for the roster."""
+    """[(model_id, label, cost_bar, cap_bar, best_for, swe_str)] for the roster.
+
+    A model the catalogue lists but nobody has profiled gets a row with empty
+    bars rather than no row at all — visible-and-unprofiled beats absent, which
+    is the whole reason the live catalogue is worth having.
+    """
     rows = []
-    for mid in MODELS:
-        prof = MODEL_PROFILES.get(mid)
-        if not mid or not prof:
+    ids, labels = models()
+    for mid, label in zip(ids, labels):
+        if not mid:
             continue
-        rows.append((mid, MODEL_LABELS[MODELS.index(mid)],
-                     cost_bar(mid), cap_bar(mid), prof['best_for'], swe_str(mid)))
+        prof = profile(mid)
+        rows.append((mid, label, cost_bar(mid), cap_bar(mid),
+                     (prof or {}).get('best_for', ''), swe_str(mid)))
     return rows
 
 
@@ -615,7 +709,7 @@ def advise(model, effort):
     sub-optimal. Grounded in July-2026 cost/quality data."""
     eff = effort or ''
     ei = EFFORTS.index(eff) if eff in EFFORTS else 0    # 0 default,1 low,2 med,3 high,4 xhigh,5 max
-    if not MODEL_PROFILES.get(model):
+    if not profile(model):
         return ('tip', 'Pick a model — Sonnet 5 · high is the recommended default.')
     if model == 'claude-opus-5' and ei in (1, 2):
         return ('tip', 'Opus is underused at this effort — Sonnet 5 · high gives ~similar quality at ~60% less cost.')
@@ -731,7 +825,7 @@ def frontier_rows():
     rows = []
     for mid, eff in MODEL_EFFORT_FRONTIER:
         _level, note = advise(mid, eff)
-        rows.append((mid, eff, MODEL_LABELS[MODELS.index(mid)],
+        rows.append((mid, eff, model_label(mid),
                      cost_bar(mid), swe_str(mid), note))
     return rows
 
