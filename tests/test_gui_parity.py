@@ -16,6 +16,26 @@ from claude_sessions import gui, gui_api
 from claude_sessions import config as config_mod
 
 
+def _wait_job(base, jid, *states, secs=45):
+    """Poll one job until it reaches any of `states`. Returns its last status.
+
+    A WALL-CLOCK deadline, not a fixed iteration count. Twenty copies of
+    `for _ in range(100): ... time.sleep(0.05)` each budgeted five seconds only
+    if every request is instant — on a cold CI runner the first job test also
+    pays for thread start-up and the first import of the job machinery, and the
+    count silently became a much shorter wait than it reads as. This failed
+    exactly once, on one of six jobs, which is the signature of a budget that is
+    too tight rather than of a bug.
+    """
+    deadline = time.time() + secs
+    st = None
+    while True:
+        _code, st = _req(f'{base}/api/job/{jid}')
+        if st.get('status') in states or time.time() > deadline:
+            return st
+        time.sleep(0.05)
+
+
 def _serve():
     srv = gui.make_server(0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -498,21 +518,13 @@ def test_job_gate_apply_and_reject(monkeypatch, tmp_path):
             assert d['ok'], d
             jid = d['job']
             st = None
-            for _ in range(100):
-                code, st = _req(f'{base}/api/job/{jid}')
-                if st['status'] in ('awaiting', 'done', 'error'):
-                    break
-                time.sleep(0.05)
+            st = _wait_job(base, jid, 'awaiting', 'done', 'error')
             assert st['status'] == 'awaiting', st
             assert 'COMPRESS' in st['gate']['title']
             assert any(l.startswith('+') for l in st['gate']['diff'])
             code, d = _req(f'{base}/api/job/{jid}/decide', {'apply': decision})
             assert d['ok']
-            for _ in range(100):
-                code, st = _req(f'{base}/api/job/{jid}')
-                if st['status'] in ('done', 'error'):
-                    break
-                time.sleep(0.05)
+            st = _wait_job(base, jid, 'done', 'error')
             assert st['status'] == 'done', st
             text = open(md, encoding='utf-8').read()
             if expect_written:
@@ -542,11 +554,7 @@ def test_job_memory_ask(monkeypatch, tmp_path):
                        {'kind': 'memory_ask', 'path': actual, 'enc': enc,
                         'cfgdir': str(sb.cfg), 'question': 'what is main.py?'})
         jid = d['job']
-        for _ in range(100):
-            code, st = _req(f'{base}/api/job/{jid}')
-            if st['status'] in ('done', 'error'):
-                break
-            time.sleep(0.05)
+        st = _wait_job(base, jid, 'done', 'error')
         assert st['status'] == 'done'
         assert 'entrypoint' in str(st.get('result', ''))
     finally:
@@ -568,11 +576,7 @@ def test_job_review(monkeypatch, tmp_path):
                        {'kind': 'review', 'path': actual, 'enc': enc,
                         'cfgdir': str(sb.cfg)})
         jid = d['job']
-        for _ in range(100):
-            code, st = _req(f'{base}/api/job/{jid}')
-            if st['status'] in ('done', 'error'):
-                break
-            time.sleep(0.05)
+        st = _wait_job(base, jid, 'done', 'error')
         assert st['status'] == 'done'
         res = st['result']
         assert res['findings'][0]['file'] == 'f.py'
@@ -597,11 +601,7 @@ def test_job_plan_make_with_council(monkeypatch, tmp_path):
                        {'kind': 'plan_make', 'path': actual, 'enc': enc,
                         'cfgdir': str(sb.cfg), 'task': 'do a thing', 'council': True})
         jid = d['job']
-        for _ in range(100):
-            code, st = _req(f'{base}/api/job/{jid}')
-            if st['status'] in ('done', 'error'):
-                break
-            time.sleep(0.05)
+        st = _wait_job(base, jid, 'done', 'error')
         assert st['status'] == 'done'
         assert seen['called'] == ('do a thing', 'draft plan')
         assert st['result']['plan'] == 'council-optimized plan'
@@ -623,11 +623,7 @@ def test_job_plan_make_without_council_skips_optimizer(monkeypatch, tmp_path):
                        {'kind': 'plan_make', 'path': actual, 'enc': enc,
                         'cfgdir': str(sb.cfg), 'task': 'do a thing'})
         jid = d['job']
-        for _ in range(100):
-            code, st = _req(f'{base}/api/job/{jid}')
-            if st['status'] in ('done', 'error'):
-                break
-            time.sleep(0.05)
+        st = _wait_job(base, jid, 'done', 'error')
         assert st['status'] == 'done'
         assert st['result']['plan'] == 'draft plan'
     finally:
@@ -663,11 +659,7 @@ def test_job_plan_make_surfaces_real_subprocess_error(monkeypatch, tmp_path):
         # Sandbox stubs time.sleep to a no-op, so pace this on a real timer or
         # the loop spins out before the job thread has run at all
         pause = threading.Event()
-        for _ in range(100):
-            code, st = _req(f'{base}/api/job/{jid}')
-            if st['status'] in ('done', 'error'):
-                break
-            pause.wait(0.05)
+        st = _wait_job(base, jid, 'done', 'error')
         assert st['status'] == 'error'
         assert 'exited 1' in st['error']
         assert 'claude-bogus-9 not found' in st['error']
@@ -703,11 +695,7 @@ def test_job_plan_make_council_ignores_stale_omniroute_default(monkeypatch, tmp_
                         'cfgdir': str(sb.cfg), 'task': 'do a thing', 'council': True,
                         'via': 'anthropic'})
         jid = d['job']
-        for _ in range(100):
-            code, st = _req(f'{base}/api/job/{jid}')
-            if st['status'] in ('done', 'error'):
-                break
-            time.sleep(0.05)
+        st = _wait_job(base, jid, 'done', 'error')
         assert st['status'] == 'done'
         assert seen['omni_env'] == {}
     finally:
@@ -737,11 +725,7 @@ def test_job_plan_make_council_uses_omniroute_when_via_selected(monkeypatch, tmp
                         'cfgdir': str(sb.cfg), 'task': 'do a thing', 'council': True,
                         'via': 'omniroute'})
         jid = d['job']
-        for _ in range(100):
-            code, st = _req(f'{base}/api/job/{jid}')
-            if st['status'] in ('done', 'error'):
-                break
-            time.sleep(0.05)
+        st = _wait_job(base, jid, 'done', 'error')
         assert st['status'] == 'done'
         assert seen['omni_env'] == {'ANTHROPIC_BASE_URL': 'http://localhost:20128',
                                      'ANTHROPIC_AUTH_TOKEN': 'secret',
@@ -771,11 +755,7 @@ def test_job_plan_make_forwards_account(monkeypatch, tmp_path):
                         'cfgdir': str(sb.cfg), 'task': 'do a thing',
                         'account': other_acct})
         jid = d['job']
-        for _ in range(100):
-            code, st = _req(f'{base}/api/job/{jid}')
-            if st['status'] in ('done', 'error'):
-                break
-            time.sleep(0.05)
+        st = _wait_job(base, jid, 'done', 'error')
         assert st['status'] == 'done'
         assert captured['env']['CLAUDE_CONFIG_DIR'] == other_acct
     finally:
@@ -798,11 +778,7 @@ def test_job_plan_launch_forwards_account(monkeypatch, tmp_path):
                        {'kind': 'plan_launch', 'path': actual, 'enc': enc,
                         'cfgdir': str(sb.cfg), 'task': 'do a thing', 'account': other_acct})
         jid = d['job']
-        for _ in range(100):
-            code, st = _req(f'{base}/api/job/{jid}')
-            if st['status'] in ('done', 'error'):
-                break
-            time.sleep(0.05)
+        st = _wait_job(base, jid, 'done', 'error')
         assert st['status'] == 'done'
         assert captured['env']['CLAUDE_CONFIG_DIR'] == other_acct
     finally:

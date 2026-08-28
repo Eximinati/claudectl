@@ -237,6 +237,32 @@ def test_the_main_menu_is_built_from_the_table():
     assert {'__mcp__', '__hooks__', '__settings__', '__accounts__'} <= keys
 
 
+# ── stubs that stand in for a stdlib function must accept its real calls ───
+
+def test_a_patched_get_terminal_size_accepts_keyword_arguments():
+    """`lambda *a` is not a stand-in for `shutil.get_terminal_size`.
+
+    Its real signature takes `fallback=` as a KEYWORD, and pytest's own terminal
+    writer calls it that way. One test patched the GLOBAL shutil with a
+    positional-only lambda, so every subsequent report line raised inside
+    pytest: the run printed "679 passed" and then exited 1 with an
+    INTERNALERROR. It only ever failed on CI, because a local TTY run reaches a
+    different branch of the writer — which is exactly why a source-level gate is
+    the right layer for it.
+    """
+    bad = []
+    for d in ('tests', 'tools'):
+        root = os.path.join(ROOT, d)
+        for fn in sorted(os.listdir(root)):
+            if not fn.endswith('.py'):
+                continue
+            src = io.open(os.path.join(root, fn), encoding='utf-8').read()
+            for m in re.finditer(r"get_terminal_size'?\s*,\s*\n?\s*(lambda[^:]*):", src):
+                if '**' not in m.group(1):
+                    bad.append('%s/%s: %s' % (d, fn, m.group(1).strip()))
+    assert not bad, 'get_terminal_size stubs that reject fallback=: %s' % bad
+
+
 # ── the account fan-out ────────────────────────────────────────────────────
 
 def test_the_fan_out_helper_has_callers():

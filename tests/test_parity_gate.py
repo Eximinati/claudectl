@@ -128,8 +128,14 @@ def _at_the_narrowest_supported_terminal(monkeypatch):
     """
     import shutil
     from claude_sessions import render, ui
+    # `**kw` is load-bearing, not defensive. This patches the GLOBAL shutil, so
+    # pytest's own terminal writer calls it too — as
+    # `shutil.get_terminal_size(fallback=(80, 24))`, a KEYWORD argument. A
+    # `lambda *a` rejected it, and the TypeError surfaced as a pytest
+    # INTERNALERROR during reporting: "679 passed" followed by exit 1, only on
+    # CI, because a local TTY run takes a different path through the writer.
     monkeypatch.setattr(shutil, 'get_terminal_size',
-                        lambda *a: os.terminal_size((ui.HELP_MIN_COLS, 35)))
+                        lambda *a, **kw: os.terminal_size((ui.HELP_MIN_COLS, 35)))
     render.invalidate()
 
 

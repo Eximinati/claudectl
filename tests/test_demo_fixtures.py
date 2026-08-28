@@ -32,12 +32,26 @@ def _sources():
 
 def test_no_fixture_mentions_the_home_directory_of_this_machine():
     """Generic on purpose: it catches a leak from whoever regenerates the
-    screenshots, not just from the machine this was written on."""
+    screenshots, not just from the machine this was written on.
+
+    It looks for the home name AS A PATH SEGMENT, and skips comments — the same
+    two rules its sibling below already applies, and for the same reason. A bare
+    word match was matching English prose: on a CI runner `basename('~')` is
+    `runner`, so the comment "reads as a slow runner" failed this test on every
+    Linux and macOS job while passing on Windows, where the account is
+    `runneradmin`.
+    """
     home = os.path.basename(os.path.expanduser('~')).strip()
     if not home or len(home) < 3:
         return                       # nothing distinctive enough to search for
-    bad = ['%s: %r' % (rel, home) for rel, src in _sources()
-           if re.search(r'\b%s\b' % re.escape(home), src)]
+    seg = re.compile(r'[\\/]%s\b|\b%s[\\/]' % (re.escape(home), re.escape(home)))
+    bad = []
+    for rel, src in _sources():
+        for i, line in enumerate(src.splitlines(), 1):
+            if line.lstrip().startswith('#'):
+                continue
+            if seg.search(line):
+                bad.append('%s:%d %r' % (rel, i, home))
     assert not bad, 'screenshot fixtures name a real home directory: %s' % bad
 
 
