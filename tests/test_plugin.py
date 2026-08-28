@@ -61,12 +61,48 @@ def test_the_plugin_name_is_kebab_case():
     assert ' ' not in name
 
 
-def test_the_plugin_version_tracks_the_package():
+#: every file that states the version, and the pattern that carries it.
+#: pyproject.toml is the source; these are copies Claude Code's own formats and
+#: the docs page require literally. A release bumps ALL of them — the plugin
+#: manifest was missed once and the release commit went red on six CI jobs with
+#: the tag already pushed.
+VERSION_COPIES = (
+    ('plugin/.claude-plugin/plugin.json', r'"version":\s*"([^"]+)"'),
+    ('.claude-plugin/marketplace.json',   r'"version":\s*"([^"]+)"'),
+    ('docs/index.md',                     r'"softwareVersion":\s*"([^"]+)"'),
+)
+
+
+def _package_version():
     src = io.open(os.path.join(ROOT, 'pyproject.toml'), encoding='utf-8').read()
-    ver = src.split('version = "', 1)[1].split('"', 1)[0]
+    return src.split('version = "', 1)[1].split('"', 1)[0]
+
+
+def test_the_plugin_version_tracks_the_package():
+    ver = _package_version()
     assert _json(MANIFEST)['version'] == ver, \
         'plugin.json and pyproject.toml disagree about the version'
     assert _json(MARKET)['plugins'][0]['version'] == ver
+
+
+def test_every_file_that_states_the_version_agrees_with_pyproject():
+    """The gate covered two of four copies.
+
+    `docs/index.md` carries the version in its JSON-LD and nothing checked it,
+    so it sat at 1.6.0 through a 1.7.0 release. A copy no test names is a copy
+    that rots; this names them all in one tuple.
+    """
+    import re
+    ver = _package_version()
+    bad = []
+    for rel, pat in VERSION_COPIES:
+        path = os.path.join(ROOT, rel.replace('/', os.sep))
+        m = re.search(pat, io.open(path, encoding='utf-8').read())
+        if not m:
+            bad.append('%s: no version found (pattern moved?)' % rel)
+        elif m.group(1) != ver:
+            bad.append('%s: %s != %s' % (rel, m.group(1), ver))
+    assert not bad, 'files disagreeing with pyproject.toml: %s' % bad
 
 
 # ── contents ─────────────────────────────────────────────────
