@@ -58,19 +58,40 @@ markdown_extensions:
   - toc:
       permalink: true
 
+# Grouped into sections (navigation.sections is on above) rather than a flat list:
+# the README used to be the manual and the site a set of include-stubs, so twelve
+# flat entries were enough. Now the detail lives here, and a reader has to be able
+# to find one feature without scrolling one giant page.
 nav:
-  - Home: index.md
-  - Install: install.md
-  - Usage: usage.md
-  - Features: features.md
-  - Token economy: token-economy.md
-  - Reference: reference.md
-  - API reference: api.md
-  - Troubleshooting: troubleshooting.md
-  - FAQ: faq.md
-  - Compare: compare.md
-  - Changelog: changelog.md
-  - Credits: credits.md
+  - Getting started:
+      - Home: index.md
+      - Install: install.md
+      - Usage: usage.md
+  - Features:
+      - Overview: features.md
+      - Sessions & search: sessions.md
+      - Project memory: memory.md
+      - Architecture graph: graph.md
+      - Plan → Execute & OmniRoute: plan-execute.md
+      - Multiple accounts: accounts.md
+      - MCP servers: mcp.md
+      - Agents & skills: agents.md
+      - Hooks: hooks.md
+      - Status line, failover & checkpoints: statusline.md
+      - Desktop GUI: gui.md
+  - Guides:
+      - Token economy: token-economy.md
+      - Project health & auto-fixes: health.md
+      - Installing the agent library: agent-library.md
+  - Reference:
+      - Files, layout & encoding: reference.md
+      - API reference: api.md
+  - About:
+      - FAQ: faq.md
+      - Compare: compare.md
+      - Troubleshooting: troubleshooting.md
+      - Changelog: changelog.md
+      - Credits: credits.md
 
 extra:
   social:

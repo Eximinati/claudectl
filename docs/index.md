@@ -78,7 +78,21 @@ minimum tokens for the maximum relevant context:
 ![Architecture graph](graph-real.gif){ width="820" }
 
 A self-contained interactive HTML view of your project's real dependency structure, opened
-straight from the session browser.
+straight from the session browser. [More →](graph.md)
+
+## Find what you need
+
+| | |
+|---|---|
+| [Install](install.md) | pipx, pip, checkout, the Claude Code plugin, GUI setup |
+| [Usage](usage.md) | every screen, every key binding, the command line |
+| [Features](features.md) | one page per area — the whole surface at a glance |
+| [Project memory](memory.md) · [Architecture graph](graph.md) · [Plan → Execute](plan-execute.md) | the three things nothing else does |
+| [Multiple accounts](accounts.md) · [MCP servers](mcp.md) · [Agents & skills](agents.md) · [Hooks](hooks.md) | Claude Code integration |
+| [Desktop GUI](gui.md) · [Status line & failover](statusline.md) | the two interfaces and what runs under them |
+| [Token economy](token-economy.md) · [Project health](health.md) | spend less, break less |
+| [Reference](reference.md) · [API reference](api.md) | where everything is stored, and every HTTP route |
+| [FAQ](faq.md) · [Compare](compare.md) · [Troubleshooting](troubleshooting.md) | honest answers, including what it does *not* do |
 
 ## Terminal or desktop, same engine
 

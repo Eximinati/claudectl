@@ -42,21 +42,55 @@ def _doc_pages():
     return out
 
 
-def test_every_snippet_marker_a_page_pulls_in_exists_in_the_readme():
-    """A page is `--8<-- "README.md:<section>"`. Rename the marker in README and
-    the page renders EMPTY — no error, no broken link, nothing for --strict to
-    catch. This is the staleness gate that replaces a generator."""
-    readme = _read(os.path.join(ROOT, 'README.md'))
-    wanted = set()
+def test_every_snippet_a_page_pulls_in_resolves():
+    """A page including `--8<-- "FILE:section"` renders EMPTY when the marker
+    moves — no error, no broken link, nothing for --strict to catch.
+
+    This used to assert the source was always README.md, back when the README WAS
+    the site and every page was a nine-line include stub. That direction is
+    inverted now (the pages hold the content and the README points at them), so
+    the gate is stated against whatever file an include actually names —
+    today only docs/changelog.md, pulling the root CHANGELOG.md."""
     for rel in _doc_pages():
-        for src, section in re.findall(r'--8<--\s+"([^":]+):([\w-]+)"',
+        for src, section in re.findall(r'--8<--\s+"([^":]+)(?::([\w-]+))?"',
                                        _read(os.path.join(DOCS, rel))):
-            assert src == 'README.md', '%s pulls from %s' % (rel, src)
-            wanted.add(section)
-    assert wanted, 'no snippet includes found — pages stopped reusing the README'
-    for section in sorted(wanted):
-        assert '[start:%s]' % section in readme, 'missing start marker: %s' % section
-        assert '[end:%s]' % section in readme, 'missing end marker: %s' % section
+            path = os.path.join(ROOT, src.replace('/', os.sep))
+            assert os.path.isfile(path), '%s includes missing %s' % (rel, src)
+            if section:
+                text = _read(path)
+                assert '[start:%s]' % section in text, \
+                    '%s wants %s:%s — no start marker' % (rel, src, section)
+                assert '[end:%s]' % section in text, \
+                    '%s wants %s:%s — no end marker' % (rel, src, section)
+
+
+# The H2s that moved out to their own pages. A reader who lands on the repo should
+# see the pitch; the manual is the site's job.
+MOVED_OUT = ('## Features', '## Install', '## Usage', '## Reference',
+             '## Troubleshooting')
+
+
+def test_the_readme_stays_a_pitch_and_does_not_grow_back_into_a_manual():
+    """It was 907 lines — Features + Install + Usage + Reference alone were 78% of
+    it, and someone evaluating the repo had to scroll a manual to find out what it
+    was. Nothing stops that creeping back one section at a time, which is what this
+    counts."""
+    readme = _read(os.path.join(ROOT, 'README.md'))
+    lines = len(readme.splitlines())
+    assert lines < 200, 'README is %d lines — the manual is moving back in' % lines
+    back = [h for h in MOVED_OUT if h in readme]
+    assert not back, 'these belong on the docs site, not the README: %s' % back
+
+
+def test_every_docs_page_the_readme_links_to_exists():
+    """The README is now a map. Absolute site URLs are invisible to
+    `mkdocs build --strict`, so a page renamed here 404s in production with
+    nothing failing anywhere."""
+    readme = _read(os.path.join(ROOT, 'README.md'))
+    slugs = set(re.findall(re.escape(SITE_URL) + r'([\w-]+)/', readme))
+    assert slugs, 'the README stopped pointing at the docs site'
+    missing = [s for s in sorted(slugs) if s + '.md' not in _doc_pages()]
+    assert not missing, 'README links at missing pages: %s' % missing
 
 
 def test_no_internal_dev_note_sits_inside_the_docs_dir():

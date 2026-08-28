@@ -102,7 +102,10 @@ def test_statusline_via_the_console_script_path_stays_light():
 
 
 def _docs():
-    for rel in ('README.md', os.path.join('plugin', 'README.md')):
+    # docs/llms.txt is the crawler-facing index of the site and carried a stale
+    # "Not on PyPI yet" for a whole release, because this list was README-only.
+    for rel in ('README.md', os.path.join('plugin', 'README.md'),
+                os.path.join('docs', 'llms.txt'), os.path.join('docs', 'install.md')):
         p = os.path.join(ROOT, rel)
         if os.path.isfile(p):
             yield rel, open(p, encoding='utf-8').read()
