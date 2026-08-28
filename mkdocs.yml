@@ -74,6 +74,7 @@ nav:
       - Architecture graph: graph.md
       - Plan → Execute & OmniRoute: plan-execute.md
       - Multiple accounts: accounts.md
+      - Context hand-off: context-handoff.md
       - MCP servers: mcp.md
       - Agents & skills: agents.md
       - Hooks: hooks.md

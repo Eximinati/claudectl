@@ -88,6 +88,7 @@ straight from the session browser. [More →](graph.md)
 | [Usage](usage.md) | every screen, every key binding, the command line |
 | [Features](features.md) | one page per area — the whole surface at a glance |
 | [Project memory](memory.md) · [Architecture graph](graph.md) · [Plan → Execute](plan-execute.md) | the three things nothing else does |
+| [Context hand-off](context-handoff.md) | resume a full session in a new one — or under another account, when one runs out |
 | [Multiple accounts](accounts.md) · [MCP servers](mcp.md) · [Agents & skills](agents.md) · [Hooks](hooks.md) | Claude Code integration |
 | [Desktop GUI](gui.md) · [Status line & failover](statusline.md) | the two interfaces and what runs under them |
 | [Token economy](token-economy.md) · [Project health](health.md) | spend less, break less |

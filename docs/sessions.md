@@ -23,6 +23,8 @@ across the lot.
 - **Tags** — tag sessions (`t`); tags show inline and are searchable
 - **Changed files** — list the files a session edited/created, derived from its tool calls (`F`)
 
+- **Context hand-off** (`⇧K`) — start a *new* session seeded with any prior session's transcript, from any account. See [Context hand-off](context-handoff.md).
+
 The full key map for these actions is on the [Usage](usage.md#key-bindings) page.
 
 ## Usage analytics

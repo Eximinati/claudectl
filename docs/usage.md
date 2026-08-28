@@ -77,7 +77,7 @@ menu. See [Global CLAUDE.md](reference.md#global-claudemd).
 | g | Pick project agents (library checklist → `.claude/agents/`) |
 | n | Architecture graph + project memory screen (then `o` open graph · `m` build memory · `a` ask · `r` rebuild) |
 | w | Workspace status (provenance & freshness) |
-| ⇧K | New chat seeded with context from another session (any account) |
+| ⇧K | New chat seeded with context from another session, any account ([hand-off](context-handoff.md)) |
 | ⇧W | Context weight audit — token cost of everything auto-loaded per turn |
 | ⇧C | Compress CLAUDE.md with AI (cut per-turn tokens) |
 | ⇧X | Plan → Execute (plan on one model, execute on another) |

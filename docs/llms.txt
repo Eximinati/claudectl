@@ -23,6 +23,7 @@ Install with `pipx install claudectl`, or clone the repository and run it.
 - [Architecture graph](https://babarmuhammad.github.io/claudectl/graph/): the interactive, expandable dependency graph rendered as self-contained HTML.
 - [Plan to Execute and OmniRoute](https://babarmuhammad.github.io/claudectl/plan-execute/): plan on an accurate model, execute on a cheap or free one; OmniRoute setup and troubleshooting.
 - [Multiple accounts](https://babarmuhammad.github.io/claudectl/accounts/): running two or more Claude accounts, per-launch account selection, cross-account context injection.
+- [Context hand-off](https://babarmuhammad.github.io/claudectl/context-handoff/): starting a new session seeded with a previous session's transcript, optionally under a different account — for when the context window fills up or an account hits its rate limit.
 - [MCP servers](https://babarmuhammad.github.io/claudectl/mcp/): add, remove and inspect MCP servers; connection state; tool documentation.
 - [Agents and skills](https://babarmuhammad.github.io/claudectl/agents/): the agent library, per-project subagent selection, adaptive suggestions, the skills manager.
 - [Hooks](https://babarmuhammad.github.io/claudectl/hooks/): 19 Claude Code hook templates plus AI-generated hooks.

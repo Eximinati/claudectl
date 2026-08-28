@@ -36,6 +36,11 @@ Everything claudectl does, grouped. Each card is a page.
     Two or more Claude accounts side by side, one row per project, cross-account context
     injection and account-accurate memory.
 
+- **[Context hand-off](context-handoff.md)**
+
+    Start a fresh session seeded with a previous one's transcript — under any account. For
+    when the context window fills up, or an account hits its limit mid-task.
+
 - **[MCP servers](mcp.md)**
 
     Add, remove and inspect MCP servers, see which ones are actually connected, and document
