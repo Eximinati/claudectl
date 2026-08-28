@@ -539,19 +539,20 @@ def _same_version(cur, avail, sha=''):
     return False
 
 
-def update_plugin(key):
+def update_plugin(key, cfgdir=None):
     """`claude plugin update <key> -y`. There is no version target: the
     marketplace entry decides what latest is, and -y is required off a TTY."""
     key = (key or '').strip()
     if not key:
         return False, 'No plugin given'
-    return plugins._claude_cli(['plugin', 'update', key, '-y'], timeout=600)
+    return plugins._claude_cli(['plugin', 'update', key, '-y'], timeout=600,
+                               cfgdir=cfgdir)
 
 
-def update_marketplaces(name=''):
+def update_marketplaces(name='', cfgdir=None):
     """Refresh marketplace metadata — what makes an `available` version move."""
     args = ['plugin', 'marketplace', 'update'] + ([name] if name else [])
-    return plugins._claude_cli(args, timeout=600)
+    return plugins._claude_cli(args, timeout=600, cfgdir=cfgdir)
 
 
 # ── the screen ───────────────────────────────────────────────

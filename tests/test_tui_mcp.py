@@ -28,7 +28,7 @@ def test_add_stdio_server_argv(monkeypatch, tmp_path):
     monkeypatch.setattr(mcp_mod, 'get_claude_exe', lambda: r'C:\fake.exe')
     calls = []
     fake_run(monkeypatch, calls)
-    monkeypatch.setattr(mcp_mod, 'get_mcp_status', lambda: [])
+    monkeypatch.setattr(mcp_mod, 'get_mcp_status', lambda *a: [])
     # Add: name -> transport(stdio, first) -> command -> scope(local, first)
     # -> env (blank)
     keys = flat(ENTER,                            # Add MCP server (first selectable)
@@ -50,7 +50,7 @@ def test_add_stdio_server_argv(monkeypatch, tmp_path):
 def test_add_http_server_with_header(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(mcp_mod, 'get_claude_exe', lambda: r'C:\fake.exe')
-    monkeypatch.setattr(mcp_mod, 'get_mcp_status', lambda: [])
+    monkeypatch.setattr(mcp_mod, 'get_mcp_status', lambda *a: [])
     calls = []
     fake_run(monkeypatch, calls)
     keys = flat(ENTER,                             # Add MCP server (first selectable)
@@ -71,7 +71,7 @@ def test_add_http_server_with_header(monkeypatch, tmp_path):
 def test_remove_server_argv(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     monkeypatch.setattr(mcp_mod, 'get_claude_exe', lambda: r'C:\fake.exe')
-    monkeypatch.setattr(mcp_mod, 'get_mcp_status', lambda: [('foo', 'ok')])
+    monkeypatch.setattr(mcp_mod, 'get_mcp_status', lambda *a: [('foo', 'ok')])
     calls = []
     fake_run(monkeypatch, calls)
     # open detail of 'foo' (first srv row), get is called, then d -> scope -> confirm yes

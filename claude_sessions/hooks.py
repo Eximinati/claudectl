@@ -11,6 +11,9 @@ import os
 import re
 import sys
 
+# waiver: `settings_path` below stays the cfgdir=None answer on purpose —
+# see settings_path_for. Nine tests monkeypatch that attribute, and every
+# account-aware caller passes a cfgdir instead of relying on it.
 from .config import W, config_dir
 from .ui import menu, text_input, flash, pause, confirm, _cls
 from . import config as _c
@@ -296,6 +299,13 @@ TEMPLATES = {
 }
 
 
+#: the two blocks a hook can live in. A reader that walks only 'hooks' makes a
+#: hook disabled in one surface VANISH from the other, which is worse than
+#: showing it: the user disables it in the TUI and the GUI offers to install it
+#: again.
+HOOK_STATE_KEYS = ('hooks', 'hooks_disabled')
+
+
 def _memory_hook_command():
     import sys
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'recall_hook.py')
@@ -543,10 +553,24 @@ def _hook_label(entry, event=None):
     return (snippet[:44] + '…') if len(snippet) > 45 else (snippet or '(empty)')
 
 
-def hooks_menu(scope=None):
+def _pick_targets(prompt):
+    """Which accounts an install acts on. All of them unless the user says
+    otherwise — what you provision is a property of YOU, not of whichever
+    account happened to be active. One account configured: no question to ask."""
+    accts = account_dirs()
+    if len(accts) < 2:
+        return accts
+    pick = menu([(f"All {len(accts)} accounts", '*'),
+                 *[(n, d) for n, d in accts]], prompt)
+    if pick is None:
+        return []
+    return accts if pick == '*' else [(n, d) for n, d in accts if d == pick]
+
+
+def hooks_menu(scope=None, cfgdir=None):
     """List configured hooks; insert templates; toggle/remove."""
     while True:
-        s = _load()
+        s = _load(cfgdir)
         hooks = s.get('hooks', {})
         disabled = s.get('hooks_disabled', {})
         items = []
@@ -570,37 +594,56 @@ def hooks_menu(scope=None):
                   ('✨  AI-generate a hook (Claude)', '__ai__'),
                   ('🧹  Remove broken/legacy hooks', '__purge__'),
                   ('📝  Edit settings.json', '__edit__')]
+        if len(account_dirs()) > 1:
+            items.append(('👤  Show another account', '__acct__'))
 
-        sel = menu(items, f"HOOKS  /  {os.path.basename(config_dir)}")
+        path = settings_path_for(cfgdir)
+        sel = menu(items, f"HOOKS  /  {os.path.basename(os.path.dirname(path))}")
         if not sel:
             return
         if sel == '__edit__':
             from .config import open_in_editor
-            if not os.path.exists(settings_path):
-                _save(_load())
-            open_in_editor(settings_path)
+            if not os.path.exists(path):
+                _save(_load(cfgdir), cfgdir)
+            open_in_editor(path)
+        elif sel == '__acct__':
+            pick = menu([(n, d) for n, d in account_dirs()], "SHOW ACCOUNT")
+            if pick:
+                cfgdir = pick
         elif sel == '__tpl__':
-            _add_template()
+            _add_template(cfgdir)
         elif sel == '__ai__':
-            _ai_hook()
+            _ai_hook(cfgdir)
         elif sel == '__purge__':
-            _purge_legacy()
+            _purge_legacy(cfgdir)
         elif sel.startswith(('on:', 'off:')):
-            _toggle_or_remove(sel)
+            _toggle_or_remove(sel, cfgdir)
 
 
-def _add_template():
+def _add_template(cfgdir=None):
     pick = menu([(f"{k}  —  {v['desc']}", k) for k, v in TEMPLATES.items()],
                 "HOOK TEMPLATES")
     if not pick:
         return
     tpl = TEMPLATES[pick]
-    s = _load()
-    s.setdefault('hooks', {}).setdefault(tpl['event'], []).append(tpl['entry'])
-    if _save(s):
-        flash(f"Added {pick}")
-    else:
-        flash("Write failed", ok=False, secs=1.4)
+    targets = [(None, cfgdir)] if cfgdir else _pick_targets(f"INSTALL {pick} INTO")
+    done = []
+    for name, d in targets:
+        s = _load(d)
+        block = s.setdefault('hooks', {}).setdefault(tpl['event'], [])
+        want = _cmd_keys(tpl['entry'])
+        # the disabled block counts: re-adding a hook the user turned OFF, as a
+        # second enabled copy beside it, is the duplicate the GUI guard exists for
+        if any(_cmd_keys(e) == want for k in HOOK_STATE_KEYS
+               for e in ((s.get(k) or {}).get(tpl['event']) or [])):
+            continue
+        block.append(tpl['entry'])
+        if _save(s, d):
+            done.append(name or 'this account')
+    if not targets:
+        return
+    flash(f"Added {pick} to {', '.join(done)}" if done
+          else f"{pick} was already installed", ok=bool(done), secs=1.6)
 
 
 def _is_broken(cmd):
@@ -617,12 +660,12 @@ def _is_broken(cmd):
     return False
 
 
-def _purge_legacy():
+def _purge_legacy(cfgdir=None):
     """Remove hook entries whose commands are known to error (old PowerShell
     blocks / unguarded formatters). Re-add the fixed templates afterwards."""
-    s = _load()
+    s = _load(cfgdir)
     removed = 0
-    for key in ('hooks', 'hooks_disabled'):
+    for key in HOOK_STATE_KEYS:
         block = s.get(key, {})
         for event in list(block):
             kept = []
@@ -644,11 +687,11 @@ def _purge_legacy():
         return
     if not confirm(f"Remove {removed} broken/legacy hook(s)?", danger=True):
         return
-    flash(f"Removed {removed} broken hook(s) — re-add from templates" if _save(s)
+    flash(f"Removed {removed} broken hook(s) — re-add from templates" if _save(s, cfgdir)
           else "Write failed", ok=bool(removed), secs=2)
 
 
-def _ai_hook():
+def _ai_hook(cfgdir=None):
     """Describe a hook in plain language; Claude returns a validated hook spec
     (event + matcher + command) which you preview and confirm before it's saved."""
     desc = text_input("Describe the hook (when it fires + what it does):")
@@ -700,34 +743,59 @@ def _ai_hook():
     entry = {'hooks': [{'type': 'command', 'command': command}]}
     if matcher:
         entry['matcher'] = matcher
-    s = _load()
+    s = _load(cfgdir)
     s.setdefault('hooks', {}).setdefault(event, []).append(entry)
-    ok = _save(s)
+    ok = _save(s, cfgdir)
     flash("Hook added" if ok else "Write failed", ok=ok, secs=1.4)
 
 
-def _toggle_or_remove(sel):
+def _move(s, event, idx, src_key, dst_key):
+    """Pop entry `idx` of `event` out of `src_key`; append it to `dst_key` when
+    one is given. Returns the entry, or None when the index does not exist."""
+    src = s.get(src_key, {})
+    entries = src.get(event, [])
+    if not isinstance(entries, list) or idx >= len(entries):
+        return None
+    entry = entries.pop(idx)
+    if not entries:
+        src.pop(event, None)
+    if dst_key:
+        s.setdefault(dst_key, {}).setdefault(event, []).append(entry)
+    return entry
+
+
+def set_hook_enabled(event, index, enabled, cfgdir=None):
+    """Move one hook between `hooks` and `hooks_disabled`. Returns True when it
+    moved. The pure half of the TUI's toggle, so the GUI does not need a second
+    implementation of the move."""
+    s = _load(cfgdir)
+    src, dst = ('hooks_disabled', 'hooks') if enabled else ('hooks', 'hooks_disabled')
+    if _move(s, event, int(index), src, dst) is None:
+        return False
+    return _save(s, cfgdir)
+
+
+def remove_hook(event, index, enabled=True, cfgdir=None):
+    """Delete one hook outright, from either state block."""
+    s = _load(cfgdir)
+    key = 'hooks' if enabled else 'hooks_disabled'
+    if _move(s, event, int(index), key, None) is None:
+        return False
+    return _save(s, cfgdir)
+
+
+def _toggle_or_remove(sel, cfgdir=None):
     state, event, idx = sel.split(':')
     idx = int(idx)
     act = menu([('Toggle enabled/disabled', 'toggle'),
                 ('Remove', 'remove'), ('Cancel', 'cancel')], "HOOK")
     if act not in ('toggle', 'remove'):
         return
-    s = _load()
-    src_key = 'hooks' if state == 'on' else 'hooks_disabled'
-    dst_key = 'hooks_disabled' if state == 'on' else 'hooks'
-    src = s.get(src_key, {})
-    entries = src.get(event, [])
-    if idx >= len(entries):
-        return
-    entry = entries.pop(idx)
-    if not entries:
-        src.pop(event, None)
     if act == 'toggle':
-        s.setdefault(dst_key, {}).setdefault(event, []).append(entry)
-        flash("Toggled")
-    else:
-        if not confirm("Remove this hook?", danger=True):
-            return  # don't persist the pop
-        flash("Hook removed")
-    _save(s)
+        flash("Toggled" if set_hook_enabled(event, idx, state == 'off', cfgdir)
+              else "Write failed")
+        return
+    if not confirm("Remove this hook?", danger=True):
+        return
+    flash("Hook removed" if remove_hook(event, idx, state == 'on', cfgdir)
+          else "Write failed")

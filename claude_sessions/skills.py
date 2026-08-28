@@ -147,7 +147,7 @@ def delete_skill(skill_dir):
         return False
 
 
-def install_from_git(repo_url, project_path, exec_model=''):
+def install_from_git(repo_url, project_path, exec_model='', cfgdir=None):
     """Clone a skill+agents bundle from a git repo and install it the way
     its own README documents (e.g. fable-foreman —
     github.com/olsenbrands/fable-foreman, MIT, Jordan Olsen): skills/<name>/
@@ -183,7 +183,7 @@ def install_from_git(repo_url, project_path, exec_model=''):
         # more importantly, what it does not promise.
         skills_src = os.path.join(tmp, 'skills')
         agents_src = os.path.join(tmp, 'agents')
-        agents_dest_dir = os.path.join(_c.config_dir, 'agents')
+        agents_dest_dir = os.path.join(_c.resolve_config_dir(cfgdir), 'agents')
         plan, skill_dirs, agent_files = [], [], []
         if os.path.isdir(skills_src):
             for name in sorted(os.listdir(skills_src)):

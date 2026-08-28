@@ -143,7 +143,14 @@ def test_no_page_can_paint_over_the_one_you_are_on():
     assert len(writes) == 2, f'{len(writes)} direct #content writes — must go through paint()'
     # and the router has to take its token before it starts fetching
     assert 'const nav=paintNow(LOADING);' in PAGE
-    assert '}[id])(nav);' in PAGE, 'drawPage does not thread the nav token'
+    # the renderer map collapsed into the NAV tuple, so pin the PROPERTY —
+    # drawPage hands its token to whatever it dispatches to — rather than the
+    # shape of the dispatch, which is what made this line need editing.
+    router = PAGE[PAGE.index('async function drawPage(id){'):]
+    router = router[:router.index('\n}')]
+    assert 'const nav=paintNow(LOADING);' in router
+    assert '(nav)' in router.split('paintNow(LOADING);', 1)[1], (
+        'drawPage does not thread the nav token into the renderer')
 
 
 def test_the_theme_gallery_does_not_apply_on_hover():

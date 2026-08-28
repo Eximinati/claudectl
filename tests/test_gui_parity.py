@@ -142,10 +142,10 @@ def test_usage_projects_and_daily_and_search(monkeypatch, tmp_path):
 # ── managers ─────────────────────────────────────────────────
 
 def test_hooks_template_and_remove(monkeypatch, tmp_path):
+    # no extra settings_path patch: Sandbox already points it at cfg/settings.json,
+    # and an install now fans out to every account — which in the sandbox is that
+    # same one file. Redirecting only the cfgdir=None reader splits the two apart.
     sb = Sandbox(monkeypatch, tmp_path)
-    from claude_sessions import hooks as hooks_mod
-    hooks_file = tmp_path / 'hook-settings.json'
-    monkeypatch.setattr(hooks_mod, 'settings_path', str(hooks_file))
     srv, base = _serve()
     try:
         code, d = _req(base + '/api/hooks')
@@ -1053,9 +1053,10 @@ def test_gui_project_resume_is_one_click_with_inline_tune(monkeypatch, tmp_path)
 
 
 def test_hook_template_installed_flag(monkeypatch, tmp_path):
+    # no extra settings_path patch: Sandbox already points it at cfg/settings.json,
+    # and an install now fans out to every account — which in the sandbox is that
+    # same one file. Redirecting only the cfgdir=None reader splits the two apart.
     sb = Sandbox(monkeypatch, tmp_path)
-    from claude_sessions import hooks as hooks_mod
-    monkeypatch.setattr(hooks_mod, 'settings_path', str(tmp_path / 'hook-settings.json'))
     srv, base = _serve()
     try:
         code, d = _req(base + '/api/hooks')

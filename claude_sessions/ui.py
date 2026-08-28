@@ -137,7 +137,7 @@ def flash(msg, ok=True, secs=0.8):
     render.invalidate()
 
 
-def run_with_progress(args, crumbs, label, timeout=120, cwd=None):
+def run_with_progress(args, crumbs, label, timeout=120, cwd=None, env=None):
     """Run a subprocess while showing an animated progress bar; ESC cancels.
     Returns (stdout: str | None, cancelled: bool) — stdout None on
     cancel/timeout/launch failure.
@@ -152,13 +152,18 @@ def run_with_progress(args, crumbs, label, timeout=120, cwd=None):
     Same idiom memory._claude_stdin() already used for exactly this reason
     — this makes it apply to every run_with_progress[_stdin] caller at
     once (agents.py AI-gen, mcp.py MCP analysis, plan_execute.py, …)
-    instead of requiring each call site to remember to check."""
+    instead of requiring each call site to remember to check.
+
+    env: full environment dict for the subprocess (e.g. CLAUDE_CONFIG_DIR
+    pointing at a non-default account). None = inherit. Its sibling
+    run_with_progress_stdin already had this; the gap meant every `claude mcp`
+    call ran against whichever account claudectl inherited."""
     import subprocess
     from . import memory
     if getattr(memory._tls, 'silent', False):
         from .gui_api import _run_cancellable, JobCancelled
         try:
-            return _run_cancellable(args, cwd=cwd, timeout=timeout), False
+            return _run_cancellable(args, cwd=cwd, env=env, timeout=timeout), False
         except JobCancelled:
             raise                # a user cancel must mark the job 'cancelled',
                                  # not degrade into a generic failure
@@ -169,7 +174,7 @@ def run_with_progress(args, crumbs, label, timeout=120, cwd=None):
     try:
         proc = subprocess.Popen(
             args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, encoding='utf-8', errors='ignore', cwd=cwd,
+            text=True, encoding='utf-8', errors='ignore', cwd=cwd, env=env,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except Exception:
         return None, False
@@ -912,6 +917,19 @@ def _automode_menu():
             flash(str(msg), ok=ok, secs=2)
 
 
+#: the settings rows that are a pick from a fixed list. Keyed by the SETTINGS
+#: KEY, which is also the row id — the old scheme wrote `s[f'default_{sel}']`,
+#: so the id and the key it wrote were never the same string.
+def _default_pickers(models, model_labels):
+    return {
+        'default_effort':         (EFFORTS, EFFORT_LABELS),
+        'default_model':          (models, model_labels),
+        'default_permission':     (PERMS, PERM_LABELS),
+        'default_max_thinking':   (THINKING_CAPS, THINKING_LABELS),
+        'default_subagent_model': (models, model_labels),
+    }
+
+
 def settings_menu():
     """Edit ~/.claude/claudectl.json interactively."""
     while True:
@@ -937,17 +955,22 @@ def settings_menu():
                      if v == s.get('extract_model', '')), 'default')
         theme = s.get('theme', 'default')
         items = [
+            # every id here IS the settings key it writes. It was not: 'claude',
+            # 'config_dir', 'headless_budget' and five hidden `default_<id>`
+            # rewrites meant no test could join this screen to the GUI's list of
+            # the same settings, and four of them turned out to have no GUI
+            # control at all.
             (f"Editor      :  {editor_now}", 'editor'),
-            (f"claude.exe  :  {claude_now}", 'claude'),
-            (f"Config dir  :  {cfg_now}   {C_DIM}(CLAUDE_CONFIG_DIR / account){C_RESET}", 'config_dir'),
-            (f"Effort      :  {eff}   {C_DIM}(preselected in launch options){C_RESET}", 'effort'),
-            (f"Model       :  {mod}   {C_DIM}(preselected in launch options){C_RESET}", 'model'),
-            (f"Permissions :  {perm}   {C_DIM}({_c.PERM_PROFILES.get(_pv, '--permission-mode')}){C_RESET}", 'permission'),
-            (f"Think cap   :  {think}   {C_DIM}(MAX_THINKING_TOKENS — save tokens){C_RESET}", 'max_thinking'),
-            (f"Subagent mdl:  {submod}   {C_DIM}(CLAUDE_CODE_SUBAGENT_MODEL){C_RESET}", 'subagent_model'),
+            (f"claude.exe  :  {claude_now}", 'claude_exe'),
+            (f"Config dir  :  {cfg_now}   {C_DIM}(CLAUDE_CONFIG_DIR / account){C_RESET}", 'claude_config_dir'),
+            (f"Effort      :  {eff}   {C_DIM}(preselected in launch options){C_RESET}", 'default_effort'),
+            (f"Model       :  {mod}   {C_DIM}(preselected in launch options){C_RESET}", 'default_model'),
+            (f"Permissions :  {perm}   {C_DIM}({_c.PERM_PROFILES.get(_pv, '--permission-mode')}){C_RESET}", 'default_permission'),
+            (f"Think cap   :  {think}   {C_DIM}(MAX_THINKING_TOKENS — save tokens){C_RESET}", 'default_max_thinking'),
+            (f"Subagent mdl:  {submod}   {C_DIM}(CLAUDE_CODE_SUBAGENT_MODEL){C_RESET}", 'default_subagent_model'),
             (f"Economy mdl :  {xmod}   {C_DIM}(claudectl's own memory/gen calls — cuts cost){C_RESET}", 'extract_model'),
             (f"Auto mode   :  {_automode_label()}   {C_DIM}(classifier config, per account){C_RESET}", 'automode'),
-            (f"Budget cap  :  {_budget_label(s)}   {C_DIM}(--max-budget-usd on claudectl's own calls){C_RESET}", 'headless_budget'),
+            (f"Budget cap  :  {_budget_label(s)}   {C_DIM}(--max-budget-usd on claudectl's own calls){C_RESET}", 'headless_budget_usd'),
             (f"Theme       :  {theme}", 'theme'),
             (f"Interface   :  {s.get('ui_mode', 'tui').upper()}   {C_DIM}(TUI here / GUI in browser — or run --gui){C_RESET}", 'ui_mode'),
             (f"Failover    :  {_failover_label(s)}   {C_DIM}(retry a dead model instead of hanging){C_RESET}", 'failover'),
@@ -968,7 +991,7 @@ def settings_menu():
                     s['editor'] = v
                     save_settings(s)
                     flash("Saved")
-        elif sel == 'claude':
+        elif sel == 'claude_exe':
             v = text_input("claude.exe path (blank = auto-detect):", default=s['claude_exe'])
             if v is not None:
                 if v and not os.path.exists(v):
@@ -977,7 +1000,7 @@ def settings_menu():
                     s['claude_exe'] = v
                     save_settings(s)
                     flash("Saved")
-        elif sel == 'config_dir':
+        elif sel == 'claude_config_dir':
             v = text_input("CLAUDE_CONFIG_DIR (blank = default ~/.claude):",
                            default=s['claude_config_dir'])
             if v is not None:
@@ -990,7 +1013,7 @@ def settings_menu():
                     flash("Saved — restart claudectl to apply", secs=1.6)
         elif sel == 'automode':
             _automode_menu()
-        elif sel == 'headless_budget':
+        elif sel == 'headless_budget_usd':
             v = text_input("Max $ per claudectl headless call (0 = no cap):",
                            default=str(s.get('headless_budget_usd') or 0))
             if v is not None:
@@ -1022,18 +1045,12 @@ def settings_menu():
                 save_settings(s)
                 flash(f"Default interface: {pick.upper()} — applies next start "
                       f"(--tui/--gui always override)", secs=2.2)
-        elif sel in ('effort', 'model', 'permission', 'max_thinking', 'subagent_model'):
-            values, labels = {
-                'effort':     (EFFORTS, EFFORT_LABELS),
-                'model':      (MODELS, MODEL_LABELS),
-                'permission': (PERMS, PERM_LABELS),
-                'max_thinking':   (THINKING_CAPS, THINKING_LABELS),
-                'subagent_model': (MODELS, MODEL_LABELS),
-            }[sel]
+        elif sel in _default_pickers(MODELS, MODEL_LABELS):
+            values, labels = _default_pickers(MODELS, MODEL_LABELS)[sel]
             pick = menu([(l, v if v else '__default__') for l, v in zip(labels, values)],
-                        f"DEFAULT {sel.upper()}")
+                        f"{sel.replace('_', ' ').upper()}")
             if pick is not None:
-                s[f'default_{sel}'] = '' if pick == '__default__' else pick
+                s[sel] = '' if pick == '__default__' else pick
                 save_settings(s)
                 flash("Saved")
         elif sel == 'extract_model':

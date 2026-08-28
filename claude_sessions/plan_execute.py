@@ -391,6 +391,8 @@ def build_exec_launch(project_path, proj_folder, task, exec_model, omni_env=None
 
     Returns (None, None) if claude.exe can't be found.
     """
+    # waiver: config_dir is the baseline the chosen account is compared against —
+    # 'is this the active one?' is exactly what it should answer.
     from .config import get_claude_exe, config_dir
     from .sessions import load_add_dirs, read_extra_paths
     from .system_prompt import merged_system_prompt
@@ -504,6 +506,8 @@ def run(project_path, proj_folder, project_name, plan=None, per_step=False, shou
     per_step: confirm each step before executing.
     should_cancel: zero-arg callable checked before exec launch."""
     from .ui import text_input, pager, flash, _cls, menu, confirm
+    # waiver: the account picker below lists all_config_dirs and marks which row
+    # is the ACTIVE one — that comparison is what config_dir is for here.
     from .config import load_settings, EFFORTS, EFFORT_LABELS, all_config_dirs, config_dir
     from . import diffview
 

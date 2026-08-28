@@ -3,6 +3,9 @@ import json
 import time
 import re
 
+# waiver: session DISCOVERY walks all_config_dirs (see account_folders_for);
+# these two are the active account, which is what the last-session and
+# single-account helpers below legitimately mean.
 from .config import BAD_PREFIXES, BAD_CONTAINS, last_session_file, projects_dir, config_dir
 from . import config as _c
 from . import transcripts as _t

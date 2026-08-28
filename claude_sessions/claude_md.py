@@ -10,7 +10,8 @@ from itertools import islice
 
 from .config import (W, _AUTOGEN_START, _AUTOGEN_END, _SESSIONS_START, _SESSIONS_END,
                      _AI_MARKER, _MEMORY_START, _MEMORY_END)
-from .config import get_claude_exe, open_in_editor, config_dir
+from .config import get_claude_exe, open_in_editor
+from . import config as _cfg
 from . import config as _c
 from .repos import _git      # pins encoding='utf-8' — see repos._git docstring
 from .sessions import get_session_info, get_session_rich_summary, read_extra_paths, format_age
@@ -90,8 +91,13 @@ def _preserve_block(final, existing, start=_MEMORY_START, end=_MEMORY_END):
 def resolve_memory_files(project_path):
     """Which CLAUDE.md files load for a project, broadest→narrowest, with
     @import references resolved one level. Returns [(label, path, exists, imports)]."""
-    candidates = [
-        ('user',          os.path.join(config_dir, 'CLAUDE.md')),
+    # every account's global file, not just the active one: the same project
+    # opened under another account loads a different `user` CLAUDE.md, and a
+    # map that shows one of them is a map of the wrong session.
+    accounts = _cfg.all_config_dirs()
+    candidates = [('user' if len(accounts) == 1 else 'user (%s)' % name,
+                   _cfg.global_claude_md_for(d)) for name, d in accounts]
+    candidates += [
         ('project',       os.path.join(project_path, 'CLAUDE.md')),
         ('project/.claude', os.path.join(project_path, '.claude', 'CLAUDE.md')),
         ('local',         os.path.join(project_path, 'CLAUDE.local.md')),

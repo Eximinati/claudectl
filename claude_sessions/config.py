@@ -144,6 +144,26 @@ _DEFAULT_SETTINGS = {
 }
 
 
+#: settings the GUI's generic key loop must NOT accept straight off the wire.
+#: Two reasons, and every name here has one: it is clamped or typed by an
+#: explicit sanitizer (two owners for one key is how a sanitizer gets bypassed),
+#: or it is state claudectl writes for itself and no form should post.
+#: `gui._SETTING_KEYS` is `_DEFAULT_SETTINGS` minus this — derived, so a new
+#: setting is reachable from the GUI the moment it is declared, instead of
+#: needing a second table nobody remembers to edit.
+INTERNAL_SETTINGS = frozenset({
+    '_unknown',                      # the carry-through bucket, not a setting
+    'accounts', 'project_defaults', 'cost_table',
+    'perm_default_migrated',
+    'ui_mode',                       # handled first, validated against two values
+    'omniroute_api_key',             # write-only: never echoed back to be resubmitted
+    'failover_models', 'launch_fallback_models',  # list sanitizers
+    'nav_collapsed', 'side_w', 'nav_h',           # geometry clamps
+    'headless_budget_usd',                        # float clamp
+    'memory_budget',                 # owned by /api/memory/toggles
+})
+
+
 def _norm_model(m):
     """Migrate legacy bare model strings ('sonnet-4-6') to full ids."""
     if m and not m.startswith('claude-'):
@@ -323,6 +343,16 @@ last_session_file = os.path.join(projects_dir, 'last-session.json')
 global_claude_md  = os.path.join(config_dir, 'CLAUDE.md')
 
 
+def global_claude_md_for(cfgdir=None):
+    """The global CLAUDE.md of ONE account — the active one when cfgdir is None.
+
+    Same shape as hooks.settings_path_for, and for the same reason: the module
+    attribute stays the cfgdir=None answer because the test harness redirects
+    writes by monkeypatching it.
+    """
+    return os.path.join(cfgdir, 'CLAUDE.md') if cfgdir else global_claude_md
+
+
 def all_config_dirs():
     """[(name, dir)] for every known account (default first), deduped by
     resolved path — so session discovery can see sessions from every account,
@@ -341,6 +371,39 @@ def all_config_dirs():
         seen.add(rp)
         out.append((name, d))
     return out
+
+
+def account_env(cfgdir=None):
+    """Environment for a `claude` invocation that must act on ONE account.
+
+    `CLAUDE_CONFIG_DIR` is Claude Code's own account selector and it is honoured
+    by the management subcommands too (`claude plugin …`, `claude mcp …`), not
+    only by a session — verified against `plugin marketplace list`, which reads a
+    different account's `known_marketplaces.json` per value.
+
+    Popping `ANTHROPIC_API_KEY` is the non-obvious half: a key set in the
+    environment shadows the account login, so the CLI would authenticate as the
+    key's owner no matter which config dir it read.
+    """
+    env = os.environ.copy()
+    env['CLAUDE_CONFIG_DIR'] = resolve_config_dir(cfgdir)
+    env.pop('ANTHROPIC_API_KEY', None)
+    return env
+
+
+def resolve_config_dir(cfgdir=None):
+    """Expand a config dir. `cfgdir=None` is the caller saying "whichever
+    account is active", which is what every pre-fan-out call site meant.
+
+    Same shape as hooks.settings_path_for: the `config_dir` module attribute
+    stays the None answer rather than being recomputed here, because it is the
+    attribute the test harness monkeypatches to redirect every path into a tmp
+    dir. Reading it through the module rather than by value is what makes an
+    account switch — and that monkeypatch — actually move.
+    """
+    if cfgdir:
+        return os.path.expanduser(os.path.expandvars(cfgdir))
+    return config_dir
 
 
 # ── executable discovery ────────────────────────────────────

@@ -18,9 +18,13 @@ def flat(*parts):
 
 
 def _point_settings(monkeypatch, tmp_path):
-    sp = str(tmp_path / 'settings.json')
-    monkeypatch.setattr(hooks, 'settings_path', sp)
-    return sp
+    """The settings.json the Sandbox already redirected hooks at.
+
+    This used to point somewhere else again, which split the cfgdir=None reader
+    from the account fan-out every writer now uses: an install landed in the
+    sandbox config dir while the assertion read the override.
+    """
+    return hooks.settings_path
 
 
 def test_add_template(monkeypatch, tmp_path):
@@ -299,9 +303,6 @@ def test_installed_state_survives_a_real_install(monkeypatch, tmp_path):
     """End to end, the way the user hit it: install a template, ask the API for
     the template list, and the row must come back installed."""
     sb = Sandbox(monkeypatch, tmp_path)
-    # hooks.settings_path is bound at import from config.config_dir, so the
-    # Sandbox does not reach it — without this the test reads and WRITES the
-    # real ~/.claude/settings.json.
     _point_settings(monkeypatch, tmp_path)
     from claude_sessions import gui_api
     for key in ('reinject-after-compact', 'block-rm-rf', 'learn-on-session-end'):

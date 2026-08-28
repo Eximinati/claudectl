@@ -146,7 +146,7 @@ def test_no_target_updates_and_a_target_installs(monkeypatch, tmp_path):
     _exe(monkeypatch)
     seen = []
     monkeypatch.setattr(plugins, '_claude_cli',
-                        lambda args, timeout=120: (seen.append(args) or (True, 'ok')))
+                        lambda args, timeout=120, **kw: (seen.append(args) or (True, 'ok')))
     v.update_claude('')
     v.update_claude('2.1.240')
     assert seen == [['update'], ['install', '2.1.240']]
@@ -157,7 +157,7 @@ def test_stable_and_latest_are_valid_targets(monkeypatch, tmp_path):
     _exe(monkeypatch)
     seen = []
     monkeypatch.setattr(plugins, '_claude_cli',
-                        lambda args, timeout=120: (seen.append(args) or (True, 'ok')))
+                        lambda args, timeout=120, **kw: (seen.append(args) or (True, 'ok')))
     assert v.update_claude('stable')[0]
     assert seen[-1] == ['install', 'stable']
 
@@ -304,7 +304,7 @@ def test_updating_a_plugin_accepts_no_tty(monkeypatch, tmp_path):
     Sandbox(monkeypatch, tmp_path)
     seen = []
     monkeypatch.setattr(plugins, '_claude_cli',
-                        lambda args, timeout=120: (seen.append(args) or (True, 'ok')))
+                        lambda args, timeout=120, **kw: (seen.append(args) or (True, 'ok')))
     v.update_plugin('demo@mkt')
     assert seen == [['plugin', 'update', 'demo@mkt', '-y']]
     assert v.update_plugin('')[0] is False
@@ -314,7 +314,7 @@ def test_refreshing_marketplaces_can_name_one_or_all(monkeypatch, tmp_path):
     Sandbox(monkeypatch, tmp_path)
     seen = []
     monkeypatch.setattr(plugins, '_claude_cli',
-                        lambda args, timeout=120: (seen.append(args) or (True, '')))
+                        lambda args, timeout=120, **kw: (seen.append(args) or (True, '')))
     v.update_marketplaces()
     v.update_marketplaces('mkt')
     assert seen == [['plugin', 'marketplace', 'update'],

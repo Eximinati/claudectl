@@ -3,7 +3,7 @@ import subprocess
 import threading
 import time
 
-from .config import W, global_claude_md, get_claude_exe, open_in_editor
+from .config import W, get_claude_exe, open_in_editor
 from .sessions import get_session_info
 from .ui import (menu, _cls, pause, run_with_progress, text_input,
                  confirm, flash, paths_menu, pager)
@@ -13,8 +13,12 @@ from . import render
 
 # ── MCP status ────────────────────────────────────────────────
 
-def get_mcp_status():
-    """Run 'claude mcp list', return list of (name, status) tuples."""
+def get_mcp_status(cfgdir=None):
+    """Run 'claude mcp list', return list of (name, status) tuples.
+
+    cfgdir names the account: `claude mcp` honours CLAUDE_CONFIG_DIR, and
+    without it the list came from whichever account claudectl inherited while
+    every other MCP surface resolved the active one."""
     claude_exe = get_claude_exe()
     if not claude_exe:
         return []
@@ -23,7 +27,7 @@ def get_mcp_status():
                 [claude_exe, 'mcp', 'list'],
                 capture_output=True, text=True,
                 encoding='utf-8', errors='ignore', timeout=10,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL, env=_c.account_env(cfgdir),
                 # getattr, not a bare reference: the constant does not exist on
                 # POSIX, and the bare form raised AttributeError inside the
                 # try/except that returns [] — so every MCP server silently
@@ -104,16 +108,29 @@ def analyze_mcp_tools(mcp_name):
     return (out or '').strip()
 
 
-def update_global_claude_md_mcp(mcp_name, tools_doc):
-    """Write/update MCP section in global CLAUDE.md using per-MCP sentinels."""
+#: what an empty global CLAUDE.md starts as, so the TUI and the GUI create the
+#: same file rather than two slightly different ones.
+GLOBAL_MD_STUB = ('# Global Claude Context\n'
+                  '<!-- This file is read by Claude in every session -->\n\n')
+
+
+def update_global_claude_md_mcp(mcp_name, tools_doc, cfgdir=None):
+    """Write/update MCP section in global CLAUDE.md using per-MCP sentinels.
+
+    Atomic, because Claude Code reads this file every session: a plain
+    open(...,'w') that dies partway leaves a half-written file and breaks the
+    user's whole session, not just claudectl. The existing gate only walks
+    writers NAMED settings, so it never looked here.
+    """
+    path      = _c.global_claude_md_for(cfgdir)
     start_tag = f'<!-- MCP:{mcp_name}:START -->'
     end_tag   = f'<!-- MCP:{mcp_name}:END -->'
     section   = f"{start_tag}\n## MCP: {mcp_name}\n{tools_doc}\n{end_tag}\n"
 
     existing = ''
-    if os.path.exists(global_claude_md):
+    if os.path.exists(path):
         try:
-            existing = open(global_claude_md, encoding='utf-8', errors='ignore').read()
+            existing = open(path, encoding='utf-8', errors='ignore').read()
         except Exception:
             pass
 
@@ -126,17 +143,13 @@ def update_global_claude_md_mcp(mcp_name, tools_doc):
     else:
         final = '# Global Claude Context\n<!-- Edit freely — MCP sections auto-updated -->\n\n' + section
 
-    try:
-        with open(global_claude_md, 'w', encoding='utf-8') as f:
-            f.write(final)
-        return True
-    except Exception:
-        return False
+    return _c.write_atomic(path, final)
 
 
 def global_claude_md_menu():
     """Sub-menu: pick MCP to analyze, or edit global CLAUDE.md."""
     from . import config as _c
+    global_claude_md = _c.global_claude_md_for()
     mcp_items = []
     for name, status in mcp_servers:
         icon = _status_icon(status)
@@ -149,8 +162,7 @@ def global_claude_md_menu():
             return
         if sel == '__edit__':
             if not os.path.exists(global_claude_md):
-                with open(global_claude_md, 'w', encoding='utf-8') as f:
-                    f.write('# Global Claude Context\n<!-- This file is read by Claude in every session -->\n\n')
+                _c.write_atomic(global_claude_md, GLOBAL_MD_STUB)
             open_in_editor(global_claude_md)
             return
         if sel.startswith('mcp:'):
@@ -178,18 +190,35 @@ MCP_SCOPES     = ['local', 'user', 'project']
 MCP_TRANSPORTS = ['stdio', 'http', 'sse']
 
 
-def _mcp_run(args, label, crumbs=('CLAUDECTL', 'MCP')):
+def mcp_cli(args, cfgdir=None, timeout=60):
+    """`claude mcp <args>` against ONE account, no TUI. (ok, output).
+
+    The GUI's counterpart to _mcp_run — same account addressing, without the
+    progress screen a request thread cannot draw.
+    """
+    from . import proc
+    exe = get_claude_exe()
+    if not exe:
+        return False, 'claude.exe not found'
+    r = proc.run([exe, 'mcp', *args], env=_c.account_env(cfgdir), timeout=timeout)
+    if r is None:
+        return False, 'could not run claude'
+    return r.returncode == 0, ((r.stdout or '') + (r.stderr or '')).strip()
+
+
+def _mcp_run(args, label, crumbs=('CLAUDECTL', 'MCP'), cfgdir=None):
     """Run `claude mcp <args>` with progress. Returns (stdout, cancelled)."""
     claude = get_claude_exe()
     if not claude:
         return None, False
-    return run_with_progress([claude, 'mcp', *args], crumbs, label, timeout=60)
+    return run_with_progress([claude, 'mcp', *args], crumbs, label, timeout=60,
+                             env=_c.account_env(cfgdir))
 
 
-def _list_servers():
+def _list_servers(cfgdir=None):
     """Parsed server rows: [(name, status, raw_line)]."""
     rows = []
-    for name, status in get_mcp_status():
+    for name, status in get_mcp_status(cfgdir):
         rows.append((name, status))
     return rows
 

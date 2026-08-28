@@ -987,15 +987,12 @@ def connections_screen(project_path, proj_folder, project_name):
             try:
                 from .config import load_settings, save_settings
                 from .paths import encode_component
-                from . import hooks as hooks_mod
+                from . import memhub
                 s = load_settings()
                 enc = encode_component(os.path.abspath(project_path))
-                proj = s.setdefault('project_defaults', {}).setdefault(enc, {})
-                new_state = not proj.get('memory_hook', s.get('memory_prompt_hook', False))
-                proj['memory_hook'] = new_state
-                save_settings(s)
-                if new_state and not hooks_mod.memory_hook_installed():
-                    hooks_mod.install_memory_hook()
+                proj = (s.get('project_defaults') or {}).get(enc) or {}
+                cur = proj.get('memory_hook', s.get('memory_prompt_hook', False))
+                new_state = memhub.set_prompt_hook(enc, not cur)
                 flash(f"Per-prompt memory hook {'ENABLED' if new_state else 'disabled'} "
                       f"for this project", ok=new_state, secs=1.8)
             except Exception as e:

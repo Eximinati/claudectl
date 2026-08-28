@@ -3,6 +3,8 @@
 import os
 import json
 
+# waiver: the stats cache is per account by design (its numbers are that
+# account's sessions), and the multi-account roll-up walks all_config_dirs.
 from .config import (COST_PER_MTOK, CACHE_READ_MULT, CACHE_WRITE_MULT,
                      load_settings, projects_dir, config_dir,
                      C_RESET, C_DIM, C_BOLD, C_TITLE)

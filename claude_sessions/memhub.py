@@ -119,15 +119,10 @@ def hub_screen(project_path, proj_folder, project_name):
         elif ch == 'W':
             _toggle_worklog(project_path, st, flash)
         elif ch == 'u':
-            from .config import load_settings, save_settings
-            s = load_settings()
-            s['memory_rules'] = not s.get('memory_rules', True)
-            save_settings(s)
-            if s['memory_rules'] and st['entities']:
-                from .memrules import sync_rules
-                sync_rules(project_path, proj_folder, st['mem'])
-            flash(f"Path-scoped rules {'enabled' if s['memory_rules'] else 'disabled'}",
-                  ok=s['memory_rules'], secs=1.4)
+            on = set_memory_rules(not st['rules_on'], project_path, proj_folder,
+                                  st['mem'] if st['entities'] else None)
+            flash(f"Path-scoped rules {'enabled' if on else 'disabled'}",
+                  ok=on, secs=1.4)
         elif ch == 'g':
             from . import connections
             g = connections.build_hierarchy(project_path, proj_folder)
@@ -148,30 +143,61 @@ def hub_screen(project_path, proj_folder, project_name):
             memory_map_menu(project_path, project_name)
 
 
-def _toggle_hook(project_path, st, flash):
+# ── the three memory flags: ONE writer each ──────────────────
+# The toggle is stored PER PROJECT while the hook that serves it is installed
+# PER ACCOUNT, so installing into only the active account made the toggle
+# promise something the other accounts could not deliver: the same project
+# opened under another login reported the feature on while nothing ran. Every
+# install below therefore fans out across accounts.
+
+def set_prompt_hook(enc, on):
+    """Per-project recall hook flag. Returns the resulting state."""
     from .config import load_settings, save_settings
     from . import hooks as hooks_mod
     s = load_settings()
-    proj = s.setdefault('project_defaults', {}).setdefault(st['enc'], {})
-    new_state = not st['hook_on']
-    proj['memory_hook'] = new_state
+    s.setdefault('project_defaults', {}).setdefault(enc, {})['memory_hook'] = bool(on)
     save_settings(s)
-    if new_state and not hooks_mod.memory_hook_installed():
-        hooks_mod.install_memory_hook()
+    if on:
+        hooks_mod.across_accounts(hooks_mod.install_memory_hook)
+    return bool(on)
+
+
+def set_worklog(enc, on):
+    """Per-project recent-work (claude-mem style) flag. Returns the state."""
+    from .config import load_settings, save_settings
+    from . import hooks as hooks_mod
+    s = load_settings()
+    s.setdefault('project_defaults', {}).setdefault(enc, {})['worklog'] = bool(on)
+    save_settings(s)
+    if on:
+        hooks_mod.across_accounts(hooks_mod.install_worklog_hook)
+    return bool(on)
+
+
+def set_memory_rules(on, project_path=None, proj_folder=None, mem=None):
+    """Global path-scoped-rules flag. Turning it on also syncs the rules, which
+    is what makes the setting visible in the very next session."""
+    from .config import load_settings, save_settings
+    s = load_settings()
+    s['memory_rules'] = bool(on)
+    save_settings(s)
+    if on and project_path and proj_folder:
+        from .memrules import sync_rules
+        sync_rules(project_path, proj_folder,
+                   mem if mem is not None else memory.load_memory(project_path, proj_folder))
+    return bool(on)
+
+
+def _toggle_hook(project_path, st, flash):
+    new_state = set_prompt_hook(st['enc'], not st['hook_on'])
     flash(f"Per-prompt hook {'ENABLED' if new_state else 'disabled'} for this project",
           ok=new_state, secs=1.6)
 
 
 def _toggle_worklog(project_path, st, flash):
     """Toggle recent-work memory (claude-mem style) for this project."""
-    from .config import load_settings, save_settings
-    from . import hooks as hooks_mod
-    s = load_settings()
-    proj = s.setdefault('project_defaults', {}).setdefault(st['enc'], {})
-    new_state = not proj.get('worklog', False)
-    proj['worklog'] = new_state
-    save_settings(s)
-    if new_state:
-        hooks_mod.install_worklog_hook()
+    from .config import load_settings
+    proj = (load_settings().get('project_defaults') or {}).get(st['enc']) or {}
+    new_state = set_worklog(st['enc'], not proj.get('worklog', False))
     flash(f"Recent-work memory {'ENABLED' if new_state else 'disabled'} for this project",
           ok=new_state, secs=1.6)

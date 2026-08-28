@@ -8,7 +8,7 @@ tools, model) followed by the system-prompt body.
 import os
 import re
 
-from .config import W, get_claude_exe, open_in_editor, config_dir
+from .config import W, get_claude_exe, open_in_editor
 from .ui import (menu, text_input, flash, pause, confirm, multiselect,
                  run_with_progress, pager, _cls)
 from . import config as _c
@@ -20,8 +20,10 @@ KNOWN_TOOLS = ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
                'WebFetch', 'WebSearch', 'Task', 'TodoWrite']
 
 
-def user_agents_dir():
-    return os.path.join(config_dir, 'agents')
+def user_agents_dir(cfgdir=None):
+    """`config_dir` used to be imported by value here: single-account AND
+    frozen at import, so an account switch never moved it. Resolve per call."""
+    return os.path.join(_c.resolve_config_dir(cfgdir), 'agents')
 
 
 def project_agents_dir(project_path):

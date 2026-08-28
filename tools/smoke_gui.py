@@ -688,7 +688,9 @@ def main():
         # had never been rendered by this tool.
         pg.evaluate("openProject(ST.projects[0])")
         pg.wait_for_timeout(700)
-        for t in ('sessions', 'memory', 'worktrees', 'tools'):
+        # Derived, like the page list two blocks up. This walked a hardcoded
+        # 4-of-9 while carrying a comment about exactly this rot.
+        for t in pg.evaluate('TABS.map(t => t[0])'):
             before = len(errs)
             pg.evaluate(f"TAB='{t}';go('project')")
             pg.wait_for_timeout(600)
@@ -704,6 +706,50 @@ def main():
         check('a submodule is nested and labelled',
               'core' in txt and 'submodule' in txt and 'submodules' in txt, txt[:200])
         check('a worktree still shows its session', 'refactor' in txt, txt[:200])
+
+        print('\n— controls, not read-outs —')
+        # A toggle you can only READ is the class no route-coverage test can
+        # see, because the failure is not an unused route — it is no route at
+        # all. So: the memory flags must be real checkboxes.
+        pg.evaluate("TAB='memory';go('project')")
+        pg.wait_for_timeout(900)
+        for cid in ('memHook', 'memRules', 'wlOn', 'autoMem'):
+            kind = pg.evaluate(
+                f"(()=>{{const e=document.querySelector('#{cid}');"
+                f"return e?e.type:'missing';}})()")
+            check(f'#{cid} is a checkbox', kind == 'checkbox', kind)
+        btype = pg.evaluate(
+            "(()=>{const e=document.querySelector('#memBudget');return e?e.type:'missing';})()")
+        check('#memBudget is a number input', btype == 'number', btype)
+
+        pg.evaluate("go('settings')")
+        pg.wait_for_timeout(900)
+        # every settings key the server accepts must resolve to a LIVE control.
+        # `editor`, `claude_exe`, `claude_config_dir` and `headless_budget_usd`
+        # round-tripped through the API with nothing on the page to set them.
+        for cid in ('sEditor', 'sClaudeExe', 'sCfgDir', 'sBudget'):
+            ok = pg.evaluate(
+                f"(()=>{{const e=document.querySelector('#{cid}');"
+                f"return !!e && !e.disabled && e.offsetParent!==null;}})()")
+            check(f'#{cid} is a live, enabled control', ok)
+
+        pg.evaluate("go('helpp')")
+        pg.wait_for_timeout(700)
+        rows = pg.evaluate("document.querySelectorAll('[data-help-row]').length")
+        want = pg.evaluate('NAV.length + TABS.length')
+        check('the help page is generated from the inventory', rows == want,
+              f'{rows} rows vs {want} pages+tabs')
+        keys = pg.evaluate(
+            "document.querySelector('#content').innerText.includes('Terminal UI keys')")
+        check('the help page renders the TUI key table', keys)
+
+        pg.evaluate("go('hooks')")
+        pg.wait_for_timeout(900)
+        boxes = pg.evaluate(
+            "document.querySelectorAll('#content .hrow input[type=checkbox]').length")
+        rows = pg.evaluate("document.querySelectorAll('#content .hrow').length")
+        check('every hook row can be enabled or disabled', rows == 0 or boxes == rows,
+              f'{boxes} controls on {rows} rows')
 
         pg.evaluate("go('home')")
         pg.wait_for_timeout(500)
@@ -838,7 +884,8 @@ def main():
     # wrong indentation closed the `with` block around it — and it reported
     # "FAILURES: none" every time. A floor on the number of checks executed is
     # the cheapest thing that would have caught it.
-    FLOOR = 40
+    # And a floor that never moves stops being a floor: it rises with the suite.
+    FLOOR = 85
     if len(ran) < FLOOR:
         fails.append(f'only {len(ran)} checks ran, expected >= {FLOOR} — '
                      'part of this suite is not executing')

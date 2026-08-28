@@ -15,6 +15,7 @@ a handler sees them; a missing or malformed one is a 400.
 | Route | Handler | What it does |
 |---|---|---|
 | `/api/accounts` | `api_accounts_get` | — |
+| `/api/accounts/sync` | `api_accounts_sync` | The per-account provisioning diff — read-only, nothing is written. |
 | `/api/add-dirs` | `api_add_dirs_get` | — |
 | `/api/agents/library` | `api_agents_library` | — |
 | `/api/agents/read` | `api_agent_read` | — |
@@ -35,13 +36,15 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/deny` | `api_deny_scan` | — |
 | `/api/disk` | `api_disk` | — |
 | `/api/extra-paths` | `api_extra_paths_get` | — |
+| `/api/global-claude-md` | `api_global_claude_md` | The account-global CLAUDE.md Claude reads in every session. |
 | `/api/graph-lite` | `api_graph_lite` | Compact project shape for the ambient motion layer. |
 | `/api/health` | `api_health` | Project health — 229 lines of checks that were a README headline and had |
-| `/api/hooks` | `api_hooks_get` | — |
+| `/api/hooks` | `api_hooks_get` | Every hook in ONE account, enabled and disabled alike. |
 | `/api/inject/sessions` | `api_inject_sessions` | — |
 | `/api/lessons` | `api_lessons_get` | — |
 | `/api/loop-md` | `api_loop_md_get` | — |
 | `/api/mcp` | `api_mcp_get` | — |
+| `/api/mcp/detail` | `api_mcp_detail` | `claude mcp get <name>` — the detail the TUI shows and the GUI did not. |
 | `/api/memory-map` | `api_memory_map` | — |
 | `/api/memory/active` | `api_memory_active` | Project paths whose memory is being refreshed right now (scan-lock held) |
 | `/api/memory/auto` | `api_memory_auto_get` | Per-project auto-memory state for the management UI. |
@@ -53,7 +56,7 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/output-styles` | `api_output_styles` | — |
 | `/api/path-complete` | `api_path_complete` | Live folder auto-completion for the open-project modal: same pure |
 | `/api/plan/last` | `api_plan_last` | Read back <project>/.claudectl/plan-latest.md, split into the task |
-| `/api/plugins` | `api_plugins` | Marketplaces, installed plugins, and what each one ships. |
+| `/api/plugins` | `api_plugins` | Marketplaces, installed plugins, and what each one ships — for ONE |
 | `/api/plugins/provenance` | `api_provenance` | {kind: {name: plugin_key}} — which rows in the skill/agent/hook managers |
 | `/api/prompt-history` | `api_prompt_history` | — |
 | `/api/recall-preview` | `api_recall_preview` | — |
@@ -98,25 +101,29 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/deny/apply` | `api_deny_apply` | — |
 | `/api/disk/gc` | `api_disk_gc` | — |
 | `/api/extra-paths` | `api_extra_paths_set` | — |
+| `/api/global-claude-md` | `api_global_claude_md_save` | Atomic, because Claude Code reads this file every session. |
 | `/api/health/allowlist` | `api_health_allowlist` | — |
 | `/api/hooks/purge` | `api_hooks_purge` | — |
 | `/api/hooks/remove` | `api_hooks_remove` | — |
 | `/api/hooks/template` | `api_hooks_template` | — |
+| `/api/hooks/toggle` | `api_hooks_toggle` | Enable or disable one hook, without deleting it. |
 | `/api/inject/launch` | `api_inject_launch` | Write the context file and launch a new session in a new console |
 | `/api/job` | `api_job_start` | — |
 | `/api/launch` | `_api_launch` | — |
 | `/api/lessons` | `api_lessons_post` | — |
 | `/api/loop-md` | `api_loop_md_set` | — |
-| `/api/mcp/add` | `api_mcp_add` | — |
+| `/api/mcp/add` | `api_mcp_add` | Mirrors mcp._mcp_add_with_extras: -e env vars for stdio, -H headers for |
 | `/api/mcp/remove` | `api_mcp_remove` | — |
 | `/api/memory/auto` | `api_memory_auto_set` | Toggle a project's auto-memory opt-in (and optionally the interval). |
 | `/api/memory/autoscan` | `api_memory_autoscan` | Called each time a project is opened. Kick off an in-process memory |
+| `/api/memory/toggles` | `api_memory_toggles` | The two memory flags the GUI could only print, plus the recall budget. |
 | `/api/open-editor` | `api_open_editor` | — |
 | `/api/open-path` | `api_open_path` | Resolve a typed folder into a launchable project — validate it's an |
 | `/api/output-style/delete` | `api_output_style_delete` | — |
 | `/api/output-style/save` | `api_output_style_save` | — |
 | `/api/output-style/select` | `api_output_style_select` | — |
 | `/api/plan/edit` | `api_plan_edit` | — |
+| `/api/plugins/install` | `api_plugin_install` | Install into every account by default, each behind the review gate. |
 | `/api/plugins/marketplace/add` | `api_plugin_marketplace_add` | — |
 | `/api/plugins/marketplace/remove` | `api_plugin_marketplace_remove` | — |
 | `/api/plugins/remove` | `api_plugin_remove` | — |
@@ -129,10 +136,11 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/settings` | `_api_settings` | — |
 | `/api/skills/create` | `api_skill_create` | — |
 | `/api/skills/install` | `api_skill_install` | — |
+| `/api/skills/library` | `api_skills_library` | Copy a template or project skill into the user's own library. |
 | `/api/skills/remove` | `api_skill_remove` | — |
 | `/api/statusline` | `api_statusline_set` | `cfgdir` targets one account; omitting it means every account, which is |
 | `/api/system-prompt` | `api_system_prompt_set` | — |
-| `/api/worklog` | `api_worklog_set` | — |
+| `/api/worklog` | `api_worklog_set` | Per-project recent-work memory on/off. |
 | `/api/worktree/merge` | `api_worktree_merge` | Merge a worktree branch, behind the standard approval gate. |
 
 ## Job routes

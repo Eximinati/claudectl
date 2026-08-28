@@ -10,7 +10,7 @@ import os
 import subprocess
 
 from . import config as _c
-from .ui import menu, text_input, flash, confirm, _cls, pause
+from .ui import menu, text_input, flash, confirm, _cls, pause, pager
 from . import render
 
 
@@ -47,14 +47,46 @@ def accounts_menu():
                           f'acct:{name}'))
         items += [(f"{'─' * _c.W}", None),
                   ('＋  Add account', '__add__'),
+                  ('⇄  Sync accounts  (level every account up)', '__sync__'),
                   ('Back', 'back')]
         sel = menu(items, "CLAUDE ACCOUNTS")
         if not sel or sel == 'back':
             return
         if sel == '__add__':
             _add_account(s)
+        elif sel == '__sync__':
+            _sync_accounts()
         elif sel.startswith('acct:'):
             _account_actions(s, sel[5:])
+
+
+def _sync_accounts():
+    """Show the per-account diff, then copy the missing items in.
+
+    The diff is shown BEFORE anything is written: what reaches four more
+    accounts here is hooks and plugins, which run code every turn.
+    """
+    from . import provision
+    d = provision.diff()
+    lines = provision.report(d)
+    if d['clean']:
+        pager(('CLAUDECTL', 'ACCOUNTS', 'SYNC'), lines, hint='ESC back')
+        return
+    key = pager(('CLAUDECTL', 'ACCOUNTS', 'SYNC'), lines,
+                hint='a  apply to every account', extra_keys=('a',))
+    if key != 'a':
+        return
+    if not confirm('Copy the missing items into every account?', danger=True):
+        return
+
+    def review(name, marketplace):
+        from . import plugins
+        return plugins.review_plugin(name, marketplace)
+
+    done = provision.apply(d, review=review)
+    out = ['  %s  %-12s %-12s %s' % ('OK ' if ok else 'ERR', acct, kind, detail)
+           for acct, kind, detail, ok in done] or ['  Nothing to do.']
+    pager(('CLAUDECTL', 'ACCOUNTS', 'SYNC'), out, hint='ESC back')
 
 
 def _add_account(s):
@@ -121,11 +153,10 @@ def _account_actions(s, name):
         flash(f"Removed '{name}' (its config dir on disk is untouched)", secs=1.8)
 
 
+#: alias — the implementation moved to config.py so the GUI can install a
+#: plugin into one account without importing the TUI (accounts.py imports ui).
 def _env_for(d):
-    env = os.environ.copy()
-    env['CLAUDE_CONFIG_DIR'] = _resolved(d)
-    env.pop('ANTHROPIC_API_KEY', None)   # a set key would shadow the account login
-    return env
+    return _c.account_env(_resolved(d))   # '' means the DEFAULT account, not the active one
 
 
 def _login(d):

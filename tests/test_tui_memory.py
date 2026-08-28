@@ -75,7 +75,6 @@ def test_session_agents_roundtrip(tmp_path):
 
 def test_resolve_memory_files(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
-    monkeypatch.setattr(claude_md, 'config_dir', str(sb.cfg))
     proj = tmp_path / 'proj'
     proj.mkdir()
     (sb.cfg / 'CLAUDE.md').write_text('user mem', encoding='utf-8')
@@ -125,7 +124,6 @@ def test_valid_claude_md():
 
 def test_memory_map_menu_opens_editor(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
-    monkeypatch.setattr(claude_md, 'config_dir', str(sb.cfg))
     proj = tmp_path / 'proj'
     proj.mkdir()
     (proj / 'CLAUDE.md').write_text('hello', encoding='utf-8')

@@ -66,7 +66,7 @@ ACTIONS = [
     ('C', 'compress',       'more', '/api/job',          'Compress CLAUDE.md with AI'),
     ('p', 'extra PATH',     'more', '/api/extra-paths',  'Extra PATH entries'),
     ('x', 'add-dirs',       'more', '/api/add-dirs',     'Add directories (--add-dir)'),
-    ('!', 'set up project', 'more', '',                  'One-key setup: CLAUDE.md+memory'),  # the GUI has both halves, scaffold then memory build, but never chained into one action
+    ('!', 'set up project', 'more', '/api/job',          'One-key setup: CLAUDE.md+memory'),
     # ── the discovery surface itself. Listing `/` inside the palette it opens
     #    would be a loop, so it carries no blurb; `?` is a real destination.
     ('/', 'actions',        'meta', '',                  ''),   # opens the palette below

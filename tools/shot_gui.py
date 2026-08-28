@@ -285,7 +285,7 @@ def main():
         print(chr(10) + '— project tabs —')
         pg.evaluate("openProject(ST.projects[0])")
         pg.wait_for_timeout(800)
-        for tab in ('sessions', 'memory', 'tools'):
+        for tab in pg.evaluate('TABS.map(t => t[0])'):   # derived, not a 3-of-9 copy
             pg.evaluate(f"TAB='{tab}';go('project')")
             pg.wait_for_timeout(800)
             audit_page(pg, 'tab ' + tab)

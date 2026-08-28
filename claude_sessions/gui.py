@@ -28,6 +28,7 @@ from urllib.parse import urlparse, parse_qs
 
 from . import config as _c
 from . import themes as _themes
+from . import session_menu as _session_menu
 from .config import (load_settings, save_settings,
                      EFFORTS, PERMS, PERM_LABELS,
                      THINKING_CAPS, THINKING_LABELS)
@@ -78,7 +79,12 @@ def list_projects():
                     'last_active': format_age(g['mtime']).strip(),
                     'accounts': [names.get(d, os.path.basename(d)) for d in dirs],
                     'primary_cfgdir': dirs[0],
-                    'auto_memory': bool((pd.get(enc) or {}).get('auto_memory'))})
+                    'auto_memory': bool((pd.get(enc) or {}).get('auto_memory')),
+                    # the TUI's `!` badge condition, verbatim (session_menu.py):
+                    # two isfile() per project, negligible beside find_actual_path
+                    'set_up': (os.path.isfile(os.path.join(g['path'], 'CLAUDE.md'))
+                               or os.path.isfile(os.path.join(
+                                   g['path'], '.claudectl', 'memory', 'graph.json')))})
     out.sort(key=lambda r: r['mtime'], reverse=True)
     return out
 
@@ -177,6 +183,11 @@ def state_payload():
                      'max_thinking': s.get('default_max_thinking', ''),
                      'subagent_model': s.get('default_subagent_model', '')},
         'ui_mode': s.get('ui_mode', 'tui'),
+        'editor': s.get('editor', ''),
+        'claude_exe': s.get('claude_exe', ''),
+        'claude_config_dir': s.get('claude_config_dir', ''),
+        'headless_budget_usd': s.get('headless_budget_usd', 0),
+        'memory_budget': s.get('memory_budget', 600),
         'gui_shell': s.get('gui_shell', 'auto'),
         'auto_update': s.get('auto_update', 'notify'),
         'plan_model': s.get('plan_model', ''),
@@ -212,6 +223,10 @@ def state_payload():
         'skins': {n: dict(v) for n, v in _themes.SKINS.items()},
         'worlds': {n: dict(v) for n, v in _themes.WORLDS.items()},
         'classic_skins': list(_themes.CLASSIC_SKINS),
+        # the terminal UI's own key list, shipped so the GUI help page and
+        # ui._session_key_lines are two renderings of ONE list instead of two
+        # hand-typed tables that drift (the GUI's already had).
+        'tui_keys': [list(r) for r in _session_menu.key_rows()],
     }
 
 
@@ -556,31 +571,39 @@ def _api_rename(q, body):
     return {'ok': True}
 
 
-_SETTING_KEYS = (
-    'default_effort', 'default_model', 'default_permission',
-    'default_max_thinking', 'default_subagent_model',
-    'extract_model', 'review_model', 'review_min_confidence',
-    # 'motion' replaced theme_motion/_scope/_bg/_intensity; the old keys are
-    # read for back-compat (_motion_level) but never written again, so they age
-    # out of settings.json
-    'gui_shell', 'theme', 'motion', 'skin', 'stage', 'world', 'surface',
-    'auto_update',
-    # NOTE: nav_collapsed and side_w are deliberately NOT here — they are
-    # clamped/typed explicitly below, and two owners for one key is how a
-    # sanitizer gets bypassed.
-    'otel_enabled', 'otel_endpoint', 'otel_protocol', 'otel_headers',
-    'editor', 'claude_exe',
-    'plan_model', 'exec_model', 'omniroute_base_url',
-    'omniroute_exec_model', 'failover_port', 'failover_quiet')
+#: DERIVED from the one canonical registry, minus the keys with an explicit
+#: owner. A sixth hand-maintained table would be a copy of _DEFAULT_SETTINGS
+#: that falls behind it — `claude_config_dir` and the paths were accepted here
+#: and had no control for exactly that reason.
+_SETTING_KEYS = tuple(sorted(set(_c._DEFAULT_SETTINGS) - _c.INTERNAL_SETTINGS))
+
+#: settings that name a file or directory: refused when they do not exist, the
+#: way the TUI refuses them (ui.py), so a save cannot silently pin something
+#: broken and leave every launch failing with no clue why.
+_PATH_SETTINGS = {'editor': 'file', 'claude_exe': 'file',
+                  'claude_config_dir': 'dir'}
 
 
 def _api_settings(q, body):
+    from .gui_api import BadRequest
     s = load_settings()
     if body.get('ui_mode') in ('tui', 'gui'):
         s['ui_mode'] = body['ui_mode']
+    for k, kind in _PATH_SETTINGS.items():
+        v = os.path.expanduser(os.path.expandvars(str(body.get(k) or '').strip()))
+        if v and not (os.path.isfile(v) if kind == 'file' else os.path.isdir(v)):
+            raise BadRequest('%s: no such %s — %s' % (k, kind, v[:120]))
     for k in _SETTING_KEYS:
         if k in body:
             s[k] = body[k]
+    # a dollar cap on claudectl's own headless calls: its own owner because it
+    # is the one float, and an unclamped one silently disables the cap
+    if 'headless_budget_usd' in body:
+        try:
+            s['headless_budget_usd'] = max(0.0, min(1000.0,
+                                                    float(body['headless_budget_usd'] or 0)))
+        except (TypeError, ValueError):
+            raise BadRequest('headless_budget_usd must be a number')
     # failover_models is user input that a detached daemon reads back —
     # sanitize at this trust boundary rather than in the daemon.
     if 'failover_models' in body:

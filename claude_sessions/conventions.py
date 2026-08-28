@@ -86,10 +86,11 @@ def build_block():
     return '\n'.join(lines)
 
 
-def sync_to_global():
+def sync_to_global(cfgdir=None):
     """Write/replace the CONVENTIONS block in ~/.claude/CLAUDE.md. Only that
     block is touched. Returns True if written. Gated by conventions_to_global."""
-    from .config import load_settings, _CONV_START, _CONV_END, global_claude_md
+    from .config import load_settings, _CONV_START, _CONV_END, global_claude_md_for
+    global_claude_md = global_claude_md_for(cfgdir)
     if not load_settings().get('conventions_to_global', True):
         return False
     block_body = build_block()
@@ -117,11 +118,8 @@ def sync_to_global():
             new = section
     if new == old:
         return True
-    try:
-        os.makedirs(os.path.dirname(global_claude_md), exist_ok=True)
-        with open(global_claude_md, 'w', encoding='utf-8') as f:
-            f.write(new)
-        return True
-    except Exception:
-        _c.log.exception('conventions: global write failed')
+    os.makedirs(os.path.dirname(global_claude_md), exist_ok=True)
+    if not _c.write_atomic(global_claude_md, new):
+        _c.log.error('conventions: global write failed')
         return False
+    return True

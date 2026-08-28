@@ -3,7 +3,9 @@ import sys
 import atexit
 import subprocess
 
-from .config import projects_dir, choice_file, global_claude_md, config_dir, all_config_dirs
+# waiver: config_dir here is the ACTIVE account for the whole TUI run, resolved
+# once at startup on purpose — a launch must not change account mid-screen.
+from .config import projects_dir, choice_file, config_dir, all_config_dirs
 from .config import C_RESET, C_STAR, C_DIM, C_TITLE, C_BOLD, C_NAME
 from .config import get_claude_exe, load_settings, save_settings
 from .paths import find_actual_path
@@ -75,6 +77,27 @@ def _bg_scan_cli(project_path, proj_folder):
         memory.clear_scan_lock(project_path)
 
 
+#: the main menu's own rows, hoisted to module scope so a test can read them.
+#: [(label, key, gui_route)] — a blank route means the row has no GUI
+#: counterpart, and `test_every_main_menu_row_has_a_gui_counterpart` requires a
+#: comment on the line saying why. Same idiom session_menu.ACTIONS already uses;
+#: this is a hoist of the list that was already there, not a second copy of it.
+MAIN_ACTIONS = [
+    ('📂  Open new project by path…',        '__open_path__',        '/api/state'),
+    ('🔍  Search all sessions',              '__search_all__',       '/api/search-index'),
+    ('⚙  Usage stats',                       '__usage_stats__',      '/api/usage/daily'),
+    ('⚙  MCP servers',                       '__mcp__',              '/api/mcp'),
+    ('⚙  Agents',                            '__agents__',           '/api/agents/library'),
+    ('⚙  Skills',                            '__skills__',           '/api/skills'),
+    ('⚙  Hooks',                             '__hooks__',            '/api/hooks'),
+    ('⚙  Updates (Claude Code + plugins)',   '__updates__',          '/api/versions'),
+    ('⚙  Global CLAUDE.md  /  MCP Analysis', '__global_claude_md__', '/api/global-claude-md'),
+    ('⚙  Accounts (switch / run 2 at once)', '__accounts__',         '/api/accounts'),
+    ('⚙  Settings',                          '__settings__',         '/api/settings'),
+    ('?  Help',                              '__help__',             ''),   # the GUI's help page is generated in the browser from NAV_GROUPS/TABS — there is nothing for it to fetch
+]
+
+
 def run():
     # `claudectl workspace status` — scriptable, no TUI
     if sys.argv[1:3] == ['workspace', 'status']:
@@ -90,6 +113,11 @@ def run():
     if len(sys.argv) >= 2 and sys.argv[1] == 'statusline':
         from .statusline import main as _sl
         sys.exit(_sl(sys.argv[2:]))
+    # `claudectl sync-accounts [--yes|--dry-run]` — level every account up to
+    # what the user has actually provisioned. Shows the diff before writing.
+    if len(sys.argv) >= 2 and sys.argv[1] == 'sync-accounts':
+        from .provision import main as _sync
+        sys.exit(_sync(sys.argv[2:]))
     # `claudectl review [--staged|--branch BASE] [--min-confidence N] [path]`
     if len(sys.argv) >= 2 and sys.argv[1] == 'review':
         from .review import review_cli
@@ -256,21 +284,8 @@ def run():
     else:
         full_items = project_items
 
-    full_items = full_items + [
-        (f"{'─' * W}", None),
-        ('📂  Open new project by path…', '__open_path__'),
-        ('🔍  Search all sessions', '__search_all__'),
-        ('⚙  Usage stats', '__usage_stats__'),
-        ('⚙  MCP servers', '__mcp__'),
-        ('⚙  Agents', '__agents__'),
-        ('⚙  Skills', '__skills__'),
-        ('⚙  Hooks', '__hooks__'),
-        ('⚙  Updates (Claude Code + plugins)', '__updates__'),
-        ('⚙  Global CLAUDE.md  /  MCP Analysis', '__global_claude_md__'),
-        ('⚙  Accounts (switch / run 2 at once)', '__accounts__'),
-        ('⚙  Settings', '__settings__'),
-        ('?  Help', '__help__'),
-    ]
+    full_items = full_items + [(f"{'─' * W}", None)] + \
+        [(label, key) for label, key, _route in MAIN_ACTIONS]
 
     # ── main loop ─────────────────────────────────────────────────
 

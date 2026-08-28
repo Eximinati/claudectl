@@ -182,35 +182,40 @@ def summary(cfg_dir=None):
 # format moved — which it already has once — and would then corrupt the state of
 # the tool claudectl exists to support.
 
-def _claude_cli(args, timeout=120):
-    import subprocess
+def _claude_cli(args, timeout=120, cfgdir=None):
+    """Run `claude <args>` against ONE account.
+
+    The env is the whole point. Without it the CLI lands on whatever
+    CLAUDE_CONFIG_DIR claudectl inherited — normally unset, i.e. the default
+    account — while every reader in this module resolves `cfgdir`. Read and
+    write then named different accounts: with claudectl switched to another
+    account the Plugins page listed that account's plugins and Install wrote
+    into default.
+    """
+    from . import proc
     exe = _c.get_claude_exe()
     if not exe:
         return False, 'claude.exe not found'
-    try:
-        from .proc import no_window_flags
-        r = subprocess.run([exe] + args, capture_output=True, text=True,
-                           encoding='utf-8', errors='ignore',
-                           timeout=timeout, creationflags=no_window_flags)
-    except Exception as e:
-        return False, f'{e}'
+    r = proc.run([exe] + list(args), env=_c.account_env(cfgdir), timeout=timeout)
+    if r is None:
+        return False, 'could not run claude'
     out = ((r.stdout or '') + (r.stderr or '')).strip()
     return r.returncode == 0, out[:400]
 
 
-def add_marketplace(source):
+def add_marketplace(source, cfgdir=None):
     """`claude plugin marketplace add <repo|url|path>`."""
     source = (source or '').strip()
     if not source:
         return False, 'No source given'
-    return _claude_cli(['plugin', 'marketplace', 'add', source])
+    return _claude_cli(['plugin', 'marketplace', 'add', source], cfgdir=cfgdir)
 
 
-def remove_marketplace(name):
-    return _claude_cli(['plugin', 'marketplace', 'remove', name])
+def remove_marketplace(name, cfgdir=None):
+    return _claude_cli(['plugin', 'marketplace', 'remove', name], cfgdir=cfgdir)
 
 
-def install_plugin(name, marketplace=''):
+def install_plugin(name, marketplace='', cfgdir=None):
     """Install, after the same review gate third-party skills go through.
 
     A plugin ships agents and hooks straight into the auto-discovery surfaces,
@@ -219,11 +224,11 @@ def install_plugin(name, marketplace=''):
     contents are reviewable before anything is installed from them.
     """
     spec = f'{name}@{marketplace}' if marketplace else name
-    return _claude_cli(['plugin', 'install', spec])
+    return _claude_cli(['plugin', 'install', spec], cfgdir=cfgdir)
 
 
-def remove_plugin(key):
-    return _claude_cli(['plugin', 'uninstall', key])
+def remove_plugin(key, cfgdir=None):
+    return _claude_cli(['plugin', 'uninstall', key], cfgdir=cfgdir)
 
 
 def review_plugin(name, marketplace, cfg_dir=None):

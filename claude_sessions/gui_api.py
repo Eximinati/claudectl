@@ -780,6 +780,12 @@ def _wiring():
     return {'accounts': rows, 'ok': ok, 'total': len(rows)}
 
 
+def _last_message(st):
+    msgs = st.get('messages') or []
+    last = msgs[-1] if msgs else ''
+    return (last.get('text', '') if isinstance(last, dict) else str(last))[:160]
+
+
 def api_dashboard(q, body):
     """Home-screen aggregate: today/week usage, live jobs, MCP status,
     cross-account recent sessions, failover proxy state. Cached _DASH_TTL
@@ -817,8 +823,11 @@ def api_dashboard(q, body):
                      'started': st.get('started', 0),
                      'ended': st.get('ended', 0),
                      'error': (st.get('error') or '')[:200],
-                     # last line of chatter: what it was doing when it stopped
-                     'last': (st.get('messages') or [''])[-1][:160]})
+                     # last line of chatter: what it was doing when it stopped.
+                     # Every producer appends {'ok','text'}, so indexing the
+                     # entry as a string raised TypeError the moment a job had
+                     # said anything at all.
+                     'last': _last_message(st)})
     jobs.sort(key=lambda j: (j['status'] not in ('awaiting', 'running'),
                              -(j['ended'] or j['started'])))
 
@@ -891,15 +900,16 @@ def api_graph_lite(q, body):
     path = q.get('path', '')
     enc = q.get('enc', '')
     cfgdir = q.get('cfgdir') or _c.config_dir
+    refresh = q.get('refresh') in ('1', 'true', 'yes')
     key = (path, enc, cfgdir)
     now = time.monotonic()
     hit = _glite_cache.get(key)
-    if hit and now - hit[0] < _GLITE_TTL:
+    if hit and not refresh and now - hit[0] < _GLITE_TTL:
         return hit[1]
 
     proj_folder = _folder(cfgdir, enc) if enc else None
     try:
-        g = connections.build_hierarchy(path, proj_folder)
+        g = connections.build_hierarchy(path, proj_folder, force=refresh)
     except Exception:
         g = {'nodes': [], 'dep_edges': [], 'meta': {}}
 
@@ -967,6 +977,15 @@ def api_graph_lite(q, body):
     counts = (g.get('meta') or {}).get('counts') or {}
     out = {'modules': modules, 'edges': edges, 'memory': mem,
            'files': counts.get('files', 0), 'repos': counts.get('repos', 0),
+           # dirs/deps/truncated and the top repos come from the same dict the
+           # motion feed already had in hand — the TUI architecture screen shows
+           # them and the GUI showed none of them, with this whole endpoint
+           # having no consumer at all.
+           'dirs': counts.get('dirs', 0), 'deps': counts.get('deps', 0),
+           'truncated': bool((g.get('meta') or {}).get('truncated')),
+           'top_repos': [{'label': n.get('label', ''),
+                          'files': n.get('total_files', 0), 'deps': n.get('rank', 0)}
+                         for n in connections.top_repos(g, 8)],
            'languages': (g.get('meta') or {}).get('languages') or {},
            'generated_at': int(now_s)}
     _glite_cache[key] = (now, out)
@@ -979,19 +998,44 @@ def api_graph_lite(q, body):
 # ── managers: hooks / agents / mcp / accounts ────────────────
 
 def api_hooks_get(q, body):
+    """Every hook in ONE account, enabled and disabled alike.
+
+    Walking only `hooks` made a hook disabled in the TUI vanish here — and then
+    offered its template as uninstalled, so the GUI would happily create an
+    enabled duplicate beside the disabled one.
+    """
     from . import hooks
-    d = hooks._load()
+    cfgdir = q.get('cfgdir')
+    d = hooks._load(cfgdir)
     out = []
-    for event, block in (d.get('hooks') or {}).items():
-        for i, entry in enumerate(block if isinstance(block, list) else []):
-            out.append({'event': event, 'index': i,
-                        'label': hooks._hook_label(entry, event),
-                        'matcher': entry.get('matcher', '')})
-    active = {h['label'] for h in out}
+    for key in hooks.HOOK_STATE_KEYS:
+        for event, block in (d.get(key) or {}).items():
+            for i, entry in enumerate(block if isinstance(block, list) else []):
+                out.append({'event': event, 'index': i,
+                            'enabled': key == 'hooks',
+                            'label': hooks._hook_label(entry, event),
+                            'matcher': entry.get('matcher', '')})
+    # per-account view, the shape statusline.per_account() already uses for
+    # exactly this question: which accounts are missing what.
+    per = [(n, dd, hooks._load(dd)) for n, dd in hooks.account_dirs()]
     return {'hooks': out,
+            'settings_path': hooks.settings_path_for(cfgdir),
+            'accounts': [{'name': n, 'dir': dd,
+                          'count': sum(len(b or []) for b in (a.get('hooks') or {}).values())}
+                         for n, dd, a in per],
             'templates': [{'key': k, 'desc': v.get('desc', ''),
-                           'installed': k in active}
+                           'installed': _template_installed(hooks, d, v),
+                           'missing': [n for n, _dd, a in per
+                                       if not _template_installed(hooks, a, v)]}
                           for k, v in hooks.TEMPLATES.items()]}
+
+
+def _template_installed(hooks, d, tpl):
+    """True when this template's hook exists in EITHER state block."""
+    want = hooks._cmd_keys(tpl['entry'])
+    return any(hooks._cmd_keys(e) == want
+               for key in hooks.HOOK_STATE_KEYS
+               for e in ((d.get(key) or {}).get(tpl['event']) or []))
 
 
 def api_hooks_template(q, body):
@@ -999,52 +1043,73 @@ def api_hooks_template(q, body):
     t = hooks.TEMPLATES.get(body['key'])
     if not t:
         return {'ok': False, 'error': 'unknown template'}
-    d = hooks._load()
-    hooks_d = d.setdefault('hooks', {})
-    block = hooks_d.setdefault(t['event'], [])
-    # Installing the same template twice is never what anyone means, and it is
-    # exactly what a row stuck on "Install" invites you to do. Two copies of a
-    # guard fire the same block twice; two copies of a memory hook inject the
-    # context twice. Comparison is interpreter-independent (see _cmd_keys), so
-    # a hook installed from the GUI is recognised by the console and vice versa.
-    want = hooks._cmd_keys(t['entry'])
-    if any(hooks._cmd_keys(e) == want for e in block):
-        return {'ok': True, 'message': f'{body["key"]} is already installed',
-                'already': True}
-    block.append(t['entry'])
-    hooks._save(d)
-    return {'ok': True}
+    targets = _hook_targets(hooks, body)
+    done = []
+    for name, cfgdir in targets:
+        d = hooks._load(cfgdir)
+        # Installing the same template twice is never what anyone means, and it
+        # is exactly what a row stuck on "Install" invites you to do. Two copies
+        # of a guard fire the same block twice; two copies of a memory hook
+        # inject the context twice. The disabled block counts too — otherwise a
+        # hook the user turned OFF is silently re-added, enabled, beside it.
+        if _template_installed(hooks, d, t):
+            continue
+        d.setdefault('hooks', {}).setdefault(t['event'], []).append(t['entry'])
+        hooks._save(d, cfgdir)
+        done.append(name)
+    if not done:
+        return {'ok': True, 'already': True,
+                'message': f'{body["key"]} is already installed'}
+    return {'ok': True, 'accounts': done}
+
+
+def api_hooks_toggle(q, body):
+    """Enable or disable one hook, without deleting it."""
+    from . import hooks
+    ok = hooks.set_hook_enabled(body['event'], body['index'],
+                                bool(body.get('enabled')), body.get('cfgdir'))
+    return {'ok': ok, 'error': '' if ok else 'not found'}
 
 
 def api_hooks_remove(q, body):
     from . import hooks
-    d = hooks._load()
-    block = (d.get('hooks') or {}).get(body['event'])
-    i = int(body['index'])
-    if not isinstance(block, list) or i >= len(block):
-        return {'ok': False, 'error': 'not found'}
-    block.pop(i)
-    if not block:
-        d['hooks'].pop(body['event'], None)
-    hooks._save(d)
-    return {'ok': True}
+    ok = hooks.remove_hook(body['event'], body['index'],
+                           body.get('enabled', True) is not False,
+                           body.get('cfgdir'))
+    return {'ok': ok, 'error': '' if ok else 'not found'}
 
 
 def api_hooks_purge(q, body):
     from . import hooks
-    d = hooks._load()
     removed = 0
-    for event in list((d.get('hooks') or {})):
-        block = d['hooks'][event]
-        keep = [e for e in block
-                if not any(hooks._is_broken(c) for c in hooks._entry_commands(e))]
-        removed += len(block) - len(keep)
-        if keep:
-            d['hooks'][event] = keep
-        else:
-            d['hooks'].pop(event)
-    hooks._save(d)
+    for _name, cfgdir in _hook_targets(hooks, body):
+        d = hooks._load(cfgdir)
+        for key in hooks.HOOK_STATE_KEYS:
+            for event in list((d.get(key) or {})):
+                block = d[key][event]
+                keep = [e for e in block
+                        if not any(hooks._is_broken(c) for c in hooks._entry_commands(e))]
+                removed += len(block) - len(keep)
+                if keep:
+                    d[key][event] = keep
+                else:
+                    d[key].pop(event)
+        hooks._save(d, cfgdir)
     return {'ok': True, 'removed': removed}
+
+
+def _hook_targets(hooks, body):
+    """Which accounts an install/purge acts on. Default: ALL of them.
+
+    What the user provisions is a property of THEM, not of whichever account
+    happened to be active — measured across five accounts, the default one had
+    18 hooks and the other four had none.
+    """
+    if body.get('cfgdir'):
+        return [(body.get('account') or body['cfgdir'], body['cfgdir'])]
+    if body.get('scope') == 'active':
+        return [('active', None)]
+    return hooks.account_dirs()
 
 
 def api_agents_library(q, body):
@@ -1064,7 +1129,14 @@ def api_agents_library(q, body):
         for n, desc, model, path in list_agents(d):
             mine.append({'name': n, 'desc': (desc or '')[:140], 'model': model,
                          'path': path, 'scope': scope})
-    return {'categories': cats, 'own': mine}
+    from .agents import KNOWN_TOOLS
+    from .config import models
+    vals, labels = models()
+    return {'categories': cats, 'own': mine,
+            # api_agent_create already accepted `tools` and `model`; the form
+            # simply never had anything to offer for them.
+            'known_tools': list(KNOWN_TOOLS),
+            'models': [{'id': v, 'label': l} for v, l in zip(vals, labels)]}
 
 
 def api_agent_read(q, body):
@@ -1168,7 +1240,7 @@ def api_conventions(q, body):
 
 def api_conventions_sync(q, body):
     from . import conventions
-    ok = conventions.sync_to_global()
+    ok = conventions.sync_to_global((body or {}).get('cfgdir'))
     return {'ok': bool(ok)}
 
 
@@ -1225,16 +1297,34 @@ def api_worklog_get(q, body):
 
 
 def api_worklog_set(q, body):
+    """Per-project recent-work memory on/off."""
+    from . import hooks, memhub
+    on = memhub.set_worklog(body.get('enc', ''), body.get('on'))
+    return {'ok': True, 'on': on,
+            'installed': hooks.across_accounts(hooks.worklog_hook_installed)}
+
+
+def api_memory_toggles(q, body):
+    """The two memory flags the GUI could only print, plus the recall budget."""
     from .config import load_settings, save_settings
-    from . import hooks
+    from . import hooks, memhub
     enc = body.get('enc', '')
-    on = bool(body.get('on'))
+    if 'hook' in body:
+        memhub.set_prompt_hook(enc, body['hook'])
+    if 'rules' in body:
+        memhub.set_memory_rules(body['rules'], body.get('path'),
+                                _folder(body.get('cfgdir'), enc) if enc else None)
+    if 'budget' in body:
+        s = load_settings()
+        s['memory_budget'] = max(0, min(20000, int(body['budget'] or 0)))
+        save_settings(s)
     s = load_settings()
-    s.setdefault('project_defaults', {}).setdefault(enc, {})['worklog'] = on
-    save_settings(s)
-    if on:
-        hooks.install_worklog_hook()     # ensure the global hook exists
-    return {'ok': True, 'on': on, 'installed': hooks.worklog_hook_installed()}
+    proj = (s.get('project_defaults') or {}).get(enc) or {}
+    return {'ok': True,
+            'hook_on': bool(proj.get('memory_hook', s.get('memory_prompt_hook', False))),
+            'rules_on': bool(s.get('memory_rules', True)),
+            'budget': s.get('memory_budget', 600),
+            'installed': hooks.across_accounts(hooks.memory_hook_installed)}
 
 
 def api_skills_get(q, body):
@@ -1278,44 +1368,77 @@ def api_skill_create(q, body):
     return {'ok': ok, 'dir': skill_dir}
 
 
+def api_global_claude_md(q, body):
+    """The account-global CLAUDE.md Claude reads in every session."""
+    from .mcp import GLOBAL_MD_STUB
+    path = _c.global_claude_md_for(q.get('cfgdir'))
+    exists = os.path.isfile(path)
+    text = open(path, encoding='utf-8', errors='ignore').read() if exists else GLOBAL_MD_STUB
+    return {'path': path, 'text': text, 'exists': exists,
+            'accounts': [{'name': n, 'dir': d} for n, d in _c.all_config_dirs()]}
+
+
+def api_global_claude_md_save(q, body):
+    """Atomic, because Claude Code reads this file every session."""
+    path = _c.global_claude_md_for(body.get('cfgdir'))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    ok = _c.write_atomic(path, body.get('text', ''))
+    return {'ok': ok, 'path': path}
+
+
 def api_mcp_get(q, body):
     from .mcp import get_mcp_status
-    return {'servers': [{'name': n, 'status': s} for n, s in get_mcp_status()]}
+    return {'servers': [{'name': n, 'status': s}
+                        for n, s in get_mcp_status(q.get('cfgdir'))]}
+
+
+def api_skills_library(q, body):
+    """Copy a template or project skill into the user's own library."""
+    from .skills import save_to_library
+    dest = save_to_library(body['dir'])
+    return {'ok': bool(dest), 'dir': dest,
+            'error': '' if dest else 'not a skill folder'}
+
+
+def api_mcp_detail(q, body):
+    """`claude mcp get <name>` — the detail the TUI shows and the GUI did not."""
+    from .mcp import mcp_cli
+    ok, out = mcp_cli(['get', q['name']], q.get('cfgdir'), timeout=30)
+    return {'ok': ok, 'name': q['name'], 'text': out}
 
 
 def api_mcp_remove(q, body):
-    from .config import get_claude_exe
-    import subprocess
-    exe = get_claude_exe()
-    if not exe:
-        return {'ok': False, 'error': 'claude.exe not found'}
-    from .proc import no_window_flags
-    p = subprocess.run([exe, 'mcp', 'remove', body['name'],
-                        '-s', body.get('scope', 'local')],
-                       capture_output=True, text=True,
-                       encoding='utf-8', errors='ignore', timeout=30,
-                       creationflags=no_window_flags)
-    return {'ok': p.returncode == 0, 'error': (p.stderr or '').strip()}
+    from .mcp import mcp_cli
+    ok, out = mcp_cli(['remove', body['name'], '-s', body.get('scope', 'local')],
+                      body.get('cfgdir'), timeout=30)
+    return {'ok': ok, 'error': '' if ok else out}
 
 
 def api_mcp_add(q, body):
-    from .config import get_claude_exe
-    import subprocess
-    exe = get_claude_exe()
-    if not exe:
-        return {'ok': False, 'error': 'claude.exe not found'}
-    args = [exe, 'mcp', 'add', body['name']]
+    """Mirrors mcp._mcp_add_with_extras: -e env vars for stdio, -H headers for
+    http/sse. The GUI dropped both, so a server needing a token could be added
+    from the TUI and not from here."""
+    from .mcp import mcp_cli
+    args = ['add', body['name']]
     if body.get('transport') in ('sse', 'http'):
         args += ['--transport', body['transport'], body['url']]
+        for h in _lines(body.get('headers')):
+            args += ['-H', h]
     else:
+        for kv in _lines(body.get('env')):
+            args += ['-e', kv]
         args += ['--', *str(body.get('command', '')).split()]
     if body.get('scope'):
-        args[3:3] = ['-s', body['scope']]
-    from .proc import no_window_flags
-    p = subprocess.run(args, capture_output=True, text=True,
-                       encoding='utf-8', errors='ignore', timeout=60,
-                       creationflags=no_window_flags)
-    return {'ok': p.returncode == 0, 'error': (p.stderr or '').strip()}
+        args[2:2] = ['-s', body['scope']]
+    ok, out = mcp_cli(args, body.get('cfgdir'))
+    return {'ok': ok, 'error': '' if ok else out}
+
+
+def _lines(v):
+    """A textarea or a list of strings -> the non-blank entries."""
+    if isinstance(v, str):
+        v = v.splitlines()
+    return [x.strip() for x in (v or []) if str(x).strip()]
 
 
 def api_accounts_get(q, body):
@@ -1359,6 +1482,14 @@ def api_accounts_post(q, body):
     return {'ok': True}
 
 
+def api_accounts_sync(q, body):
+    """The per-account provisioning diff — read-only, nothing is written."""
+    from . import provision
+    d = provision.diff()
+    return {'clean': d['clean'], 'accounts': d['accounts'],
+            'report': provision.report(d)}
+
+
 def api_accounts_terminal(q, body):
     """login / parallel — spawn a terminal for the account (argv-list form)."""
     import subprocess
@@ -1391,6 +1522,7 @@ def api_memory_state(q, body):
             'n_pending': len(st['pending']),
             'n_unscanned': n_unscanned,
             'hook_on': st['hook_on'], 'rules_on': st['rules_on'],
+            'budget': (st['settings'] or {}).get('memory_budget', 600),
             'est': st['est']}
 
 
@@ -1877,11 +2009,15 @@ def api_job_start(q, body):
     elif kind == 'mcp_analyze':
         from .mcp import analyze_mcp_tools, update_global_claude_md_mcp
         mcp_name = body.get('name', '')
+        cfgdir = body.get('cfgdir')
         def _an():
             doc = analyze_mcp_tools(mcp_name)
             if not doc:
                 raise RuntimeError('No output from Claude — MCP may need authentication')
-            return {'written': update_global_claude_md_mcp(mcp_name, doc)}
+            # the doc rides back in the result: analyze used to write it into a
+            # file the GUI had no way to open, so it showed nothing at all
+            return {'written': update_global_claude_md_mcp(mcp_name, doc, cfgdir),
+                    'doc': doc}
         jid = start_job(f'Analyzing MCP {mcp_name}', _an)
     elif kind == 'agent_ai':
         from .agents import _new_agent_ai
@@ -1908,6 +2044,36 @@ def api_job_start(q, body):
             d = skills.write_skill_raw(proj, sk_name, content)
             return {'ok': bool(d), 'dir': d}
         jid = start_job(f'Generating skill {skills._slug(sk_name)}', _skill)
+    elif kind == 'sync_accounts':
+        from . import provision, plugins as plugins_mod
+        kinds = tuple(body.get('kinds') or provision.KINDS)
+        def _sync():
+            d = provision.diff()
+            if d['clean']:
+                return {'clean': True, 'done': []}
+            job = getattr(_JOBCTX, 'job', None)
+            def _note(acct, k, detail, ok):
+                if job is not None:
+                    job['messages'].append({'ok': ok, 'text': f'{acct}: {k} {detail}'})
+            # every plugin goes through the same review gate the single-account
+            # install uses: four more accounts is four more exposures
+            done = provision.apply(d, kinds=kinds, progress=_note,
+                                   review=plugins_mod.review_plugin)
+            return {'clean': False,
+                    'done': [{'account': a, 'kind': k, 'detail': t, 'ok': o}
+                             for a, k, t, o in done]}
+        jid = start_job('Syncing accounts', _sync)
+    elif kind == 'project_setup':
+        # the TUI's one-key `!`: scaffold CLAUDE.md, then build memory (which
+        # syncs the path-scoped rules on its way through)
+        from .claude_md import scaffold_claude_md
+        from .memory import refresh_memory
+        def _setup():
+            wrote = scaffold_claude_md(path, folder)
+            mem = _memfn(refresh_memory, path, folder, name)
+            return {'claude_md': bool(wrote),
+                    'entities': len((mem or {}).get('entities', []))}
+        jid = start_job(f'Setting up {name}', _setup)
     elif kind == 'review':
         from .review import run_review
         staged = bool(body.get('staged'))
@@ -1960,6 +2126,9 @@ def api_job_start(q, body):
         jid = start_job(f'Writing plan ({model}){" + council" if council else ""}', _make)
     elif kind == 'plan_launch':
         from .plan_execute import build_exec_launch, write_plan_file
+        # waiver: compared against the account picked for execution, to decide
+        # whether a cfgdir override is needed. The ACTIVE account is the right
+        # baseline for that comparison.
         from .config import load_settings, omniroute_env, config_dir
         from . import omniroute, ui
         task = body.get('task', '')
@@ -2331,9 +2500,32 @@ def api_plan_edit(q, body):
 # ── plugins & worktrees ──────────────────────────────────────
 
 def api_plugins(q, body):
-    """Marketplaces, installed plugins, and what each one ships."""
+    """Marketplaces, installed plugins, and what each one ships — for ONE
+    account, plus which OTHER accounts have each of them.
+
+    The per-account half is the point: a plugin the user installed is a property
+    of THEM, and this page reported only whichever account was active, so four
+    of five accounts having nothing was invisible from here.
+    """
     from . import plugins
-    return plugins.summary()
+    cfgdir = q.get('cfgdir')
+    out = plugins.summary(cfgdir)
+    per = [(n, d, plugins.summary(d)) for n, d in _c.all_config_dirs()]
+    out['accounts'] = [{'name': n, 'dir': d,
+                        'plugins': len(a['plugins']),
+                        'marketplaces': len(a['marketplaces'])}
+                       for n, d, a in per]
+    have_p, have_m = {}, {}
+    for n, _d, a in per:
+        for pl in a['plugins']:
+            have_p.setdefault(pl['key'], []).append(n)
+        for m in a['marketplaces']:
+            have_m.setdefault(m['name'], []).append(n)
+    for pl in out['plugins']:
+        pl['on_accounts'] = have_p.get(pl['key'], [])
+    for m in out['marketplaces']:
+        m['on_accounts'] = have_m.get(m['name'], [])
+    return out
 
 
 def api_versions(q, body):
@@ -2370,21 +2562,58 @@ def api_provenance(q, body):
     return {'provenance': plugins.provenance_index()}
 
 
+def _plugin_targets(body):
+    """Which accounts a plugin/marketplace mutation acts on.
+
+    ADDING defaults to every account — what you install is a property of you.
+    REMOVING defaults to the one account named, because deleting from four
+    accounts you did not name is not a fan-out, it is a surprise.
+    """
+    b = body or {}
+    if b.get('cfgdir'):
+        return [(b.get('account') or b['cfgdir'], b['cfgdir'])]
+    return _c.all_config_dirs() if b.get('scope') == 'all' else [('active', None)]
+
+
 def api_plugin_marketplace_add(q, body):
     from . import plugins
-    ok, msg = plugins.add_marketplace((body or {}).get('source', ''))
-    return {'ok': ok, 'message': msg}
+    b = body or {}
+    targets = _c.all_config_dirs() if b.get('scope', 'all') == 'all' \
+        else _plugin_targets(b)
+    done, errs = [], []
+    for name, d in targets:
+        ok, msg = plugins.add_marketplace(b.get('source', ''), cfgdir=d)
+        (done if ok else errs).append('%s: %s' % (name, msg) if not ok else name)
+    return {'ok': bool(done), 'accounts': done,
+            'message': ('Added to ' + ', '.join(done) if done else '')
+                       + ('  —  failed ' + '; '.join(errs) if errs else '')}
 
 
 def api_plugin_marketplace_remove(q, body):
     from . import plugins
-    ok, msg = plugins.remove_marketplace((body or {}).get('name', ''))
+    b = body or {}
+    ok, msg = plugins.remove_marketplace(b.get('name', ''), cfgdir=b.get('cfgdir'))
     return {'ok': ok, 'message': msg}
+
+
+def api_plugin_install(q, body):
+    """Install into every account by default, each behind the review gate."""
+    from . import plugins
+    b = body or {}
+    name, mkt = b.get('name', ''), b.get('marketplace', '')
+    done, errs = [], []
+    for acct, d in _plugin_targets(dict(b, scope=b.get('scope', 'all'))):
+        ok, msg = plugins.install_plugin(name, mkt, cfgdir=d)
+        (done if ok else errs).append(acct if ok else '%s: %s' % (acct, msg))
+    return {'ok': bool(done), 'accounts': done,
+            'message': ('Installed into ' + ', '.join(done) if done else '')
+                       + ('  —  failed ' + '; '.join(errs) if errs else '')}
 
 
 def api_plugin_remove(q, body):
     from . import plugins
-    ok, msg = plugins.remove_plugin((body or {}).get('key', ''))
+    b = body or {}
+    ok, msg = plugins.remove_plugin(b.get('key', ''), cfgdir=b.get('cfgdir'))
     return {'ok': ok, 'message': msg}
 
 
@@ -2590,7 +2819,10 @@ GET_ROUTES = {
     '/api/skills/read': api_skill_read,
     '/api/worklog': api_worklog_get,
     '/api/mcp': api_mcp_get,
+    '/api/global-claude-md': api_global_claude_md,
+    '/api/mcp/detail': api_mcp_detail,
     '/api/accounts': api_accounts_get,
+    '/api/accounts/sync': api_accounts_sync,
     '/api/memory/state': api_memory_state,
     '/api/memory/progress': api_memory_progress,
     '/api/memory/active': api_memory_active,
@@ -2635,6 +2867,7 @@ POST_ROUTES = {
     '/api/plugins/marketplace/add': api_plugin_marketplace_add,
     '/api/plugins/marketplace/remove': api_plugin_marketplace_remove,
     '/api/plugins/remove': api_plugin_remove,
+    '/api/plugins/install': api_plugin_install,
     '/api/worktree/merge': api_worktree_merge,
     '/api/statusline': api_statusline_set,
     '/api/output-style/select': api_output_style_select,
@@ -2642,6 +2875,7 @@ POST_ROUTES = {
     '/api/output-style/delete': api_output_style_delete,
     '/api/hooks/template': api_hooks_template,
     '/api/hooks/remove': api_hooks_remove,
+    '/api/hooks/toggle': api_hooks_toggle,
     '/api/hooks/purge': api_hooks_purge,
     '/api/agents/create': api_agent_create,
     '/api/agents/delete': api_agent_delete,
@@ -2650,7 +2884,10 @@ POST_ROUTES = {
     '/api/skills/remove': api_skill_remove,
     '/api/skills/create': api_skill_create,
     '/api/worklog': api_worklog_set,
+    '/api/memory/toggles': api_memory_toggles,
     '/api/mcp/add': api_mcp_add,
+    '/api/global-claude-md': api_global_claude_md_save,
+    '/api/skills/library': api_skills_library,
     '/api/mcp/remove': api_mcp_remove,
     '/api/accounts/action': api_accounts_post,
     '/api/accounts/terminal': api_accounts_terminal,
@@ -2672,5 +2909,5 @@ POST_ROUTES = {
     '/api/loop-md': api_loop_md_set,
     '/api/inject/launch': api_inject_launch,
     '/api/job': api_job_start,
-    '/api/plan/edit': api_plan_edit,
+    '/api/plan/edit': api_plan_edit,   # TUI-only by design: a terminal cannot free-text-edit a plan, so it needs structured Edit/Delete/Insert/Move. The GUI's plan editor is a <textarea> that does all four natively.
 }
