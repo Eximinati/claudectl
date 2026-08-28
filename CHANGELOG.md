@@ -5,10 +5,69 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-No release has been tagged yet, and the package is not on PyPI. Everything below is the
-work leading to the first tagged release; `pyproject.toml` currently reads `1.6.0`.
-
 ## [Unreleased]
+
+## [1.7.0] - 2026-08-28
+
+### Added
+
+- **What you provision now reaches every account, not just the default one.** Hooks,
+  plugins, marketplaces, user agents and the global `CLAUDE.md` were all written into
+  whichever config directory happened to be active when the module was imported — in
+  practice the default account. Measured across five configured logins, the default had
+  18 hooks, 3 marketplaces, 3 plugins and a global `CLAUDE.md`; the other four had none of
+  it. The status line was the only feature that ever reached all of them, because it was
+  the only one with a real fan-out; that fan-out is now the rule rather than the exception.
+- `claudectl sync-accounts` levels every account up to the union of them all, on the
+  command line, on the GUI's Accounts page and in the TUI accounts menu. It shows the
+  per-account diff **before** writing anything, only ever adds (an account keeps whatever
+  the others lack, because nothing can tell a deliberate choice from a gap), routes every
+  plugin install through the same review gate a single-account install uses, and reports
+  nothing to do when re-run.
+- The Plugins page says which accounts have each plugin and marketplace, and offers to
+  install one into the accounts that do not. Adding a marketplace registers it everywhere;
+  removing acts only on the account on screen.
+- **Nineteen functions that existed only in the terminal UI now have a surface in the
+  GUI**: the editor / `claude.exe` / config-dir paths and the headless budget cap; disabled
+  hooks, an enable/disable control and an *Edit settings.json* button; the per-prompt
+  recall hook, path-scoped rules and the recall budget, which the GUI had been printing
+  read-only; the global `CLAUDE.md` viewer and editor; `claude mcp get` detail and MCP tool
+  docs, which the analyze job used to write into a file the GUI could not open; env vars
+  and headers when adding an MCP server; the one-key project setup the terminal offers as
+  `!`; the architecture stats card, which revives an endpoint that had no consumer at all;
+  tools and model when creating an agent; copying a skill into your library; and a Help
+  page generated from the navigation and the terminal's own key table instead of retyped.
+- Cross-project conventions, `loop.md` at both project and account scope, Claude Code's own
+  per-project record and output-style previews — four endpoints that had no control in
+  either surface — are reachable.
+
+### Fixed
+
+- `claude plugin …` and `claude mcp …` ran with no environment, so they acted on whatever
+  account the process inherited while every reader resolved the configured one: with
+  claudectl switched to another account, the Plugins page listed that account's plugins and
+  *Install* wrote into the default. Both now name an account explicitly.
+- `mcp.update_global_claude_md_mcp` and the conventions sync wrote a file Claude Code reads
+  every session with a plain `open(..., 'w')`. A write that dies partway broke the whole
+  session, not just claudectl. Both are atomic now.
+- A hook disabled in the terminal vanished from the GUI, which then offered its template as
+  uninstalled and created an enabled duplicate beside the disabled one.
+- The job list on the dashboard raised as soon as any job had said anything: every producer
+  appends a `{ok, text}` record and the reader indexed it as a string.
+- The per-project recall toggle promised a hook that only one account had installed.
+
+### Changed
+
+- The GUI's accepted-settings list is derived from the settings registry minus an explicit
+  internal set, rather than being a sixth hand-maintained copy that had already fallen
+  behind it; the terminal's settings rows are named after the settings they write, so the
+  two screens can be compared by a test instead of by hand.
+- New parity gates, each watched failing under mutation: every route the SPA never calls
+  must carry a written reason, a POST route must be reached with `post(`, a value rendered
+  as on/off must be one the page can send back, the main menu's rows must name a GUI
+  counterpart, and the account fan-out helper must have callers. The browser smoke tool
+  walks the page and tab lists derived from the app instead of a hardcoded subset, and its
+  floor rose from 40 checks to 85.
 
 ### Fixed
 
