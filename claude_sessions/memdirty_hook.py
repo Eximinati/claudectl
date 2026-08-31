@@ -31,16 +31,25 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Claude Code captures stdout as a PIPE, so CPython picks the locale codepage
 # (cp1252 on Windows) and any non-ASCII path either mojibakes or raises.
-sys.stdout.reconfigure(encoding='utf-8')
+#
+# Guarded because `sys.stdout` is None in a windowed process (pythonw with no
+# console), and a hook must degrade to "no pretty output" rather than die at
+# import. Every hook in this package now does this for the same reason.
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+except (AttributeError, ValueError, OSError):
+    pass
 
-DIRTY_LOG = 'dirty.log'
 #: a session that rewrites a thousand files should not grow an unbounded log —
 #: past this the sweep is cheaper than the list, and it is only a hint anyway
 MAX_LINES = 2000
 
 
 def dirty_log_path(cwd):
-    return os.path.join(cwd, '.claudectl', 'memory', DIRTY_LOG)
+    """Where this hook appends. `memory` OWNS the path — a hook is an entry
+    point, so nothing in the package may import one as a library."""
+    from claude_sessions.memory import dirty_log_path as _p
+    return _p(cwd)
 
 
 def record(cwd, path):

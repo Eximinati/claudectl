@@ -194,12 +194,18 @@ def audit_items(project_path, proj_folder, settings=None):
         for e in (hooks_mod._load().get('hooks', {}) or {}).get('SessionStart', []):
             for h in e.get('hooks', []) if isinstance(e, dict) else []:
                 cmd = h.get('command', '')
+                # the rule TEXT, not the hook module: importing an entry point
+                # runs its stdout setup in this process, which is None in a
+                # windowed one — and the bare `except` below turned that into a
+                # silently under-reported audit
                 if 'minimalcode_hook.py' in cmd:
-                    from .minimalcode_hook import _RULE
-                    add('hook minimal-code (SessionStart)', tokens_estimate(_RULE))
+                    from .hookrules import MINIMAL_CODE
+                    add('hook minimal-code (SessionStart)',
+                        tokens_estimate(MINIMAL_CODE))
                 elif 'concise_hook.py' in cmd:
-                    from .concise_hook import _RULE
-                    add('hook concise-output (SessionStart)', tokens_estimate(_RULE))
+                    from .hookrules import CONCISE
+                    add('hook concise-output (SessionStart)',
+                        tokens_estimate(CONCISE))
                 elif cmd:
                     add(f'hook SessionStart: {cmd[:40]}', None,
                         warnings=['injection size unknown'])

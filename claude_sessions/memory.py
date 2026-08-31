@@ -672,14 +672,26 @@ def refresh_on_open(project_path, encoded=None):
     return st.get('memory_auto_refresh') == 'open'
 
 
+#: sidecar the stale-on-edit hook appends to. Owned HERE, not in the hook: a
+#: hook script is an entry point, and it reconfigures stdout at import because
+#: Claude Code hands it a pipe. Importing one as a library ran that line in a
+#: process that has no stdout at all — a windowed pythonw, i.e. the GUI — and
+#: `AttributeError: 'NoneType' object has no attribute 'reconfigure'` took down
+#: the whole auto-memory cycle. The dependency now points the other way.
+DIRTY_LOG = 'dirty.log'
+
+
+def dirty_log_path(project_path):
+    return os.path.join(os.path.abspath(project_path or ''), MEM_SUBDIR, DIRTY_LOG)
+
+
 def drain_dirty(project_path):
     """Paths the stale-on-edit hook recorded since the last cycle, and clear it.
 
     Read-and-remove, like `recall.fold_hits`: the log is a hint that work is
     owed, and a hint consumed twice is a wasted call. Returns a set of absolute
     paths (empty when the hook is not installed, which is the normal case)."""
-    from .memdirty_hook import dirty_log_path
-    p = dirty_log_path(os.path.abspath(project_path or ''))
+    p = dirty_log_path(project_path)
     out = set()
     try:
         if not os.path.isfile(p):
@@ -699,10 +711,9 @@ def has_dirty(project_path):
     """True if the edit hook recorded anything — checked WITHOUT draining, so a
     staleness probe never eats the signal a refresh still needs."""
     try:
-        from .memdirty_hook import dirty_log_path
-        p = dirty_log_path(os.path.abspath(project_path or ''))
+        p = dirty_log_path(project_path)
         return os.path.isfile(p) and os.path.getsize(p) > 0
-    except Exception:
+    except OSError:
         return False
 
 

@@ -30,7 +30,12 @@ import sys
 
 # Claude Code captures stdout as a PIPE — cp1252 on Windows — so a non-ASCII
 # character in an agent's description would mojibake or raise, losing the hook.
-sys.stdout.reconfigure(encoding='utf-8')
+# Guarded: `sys.stdout` is None in a windowed process (pythonw with no
+# console). A hook must degrade to plain output, never die at import.
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+except (AttributeError, ValueError, OSError):
+    pass
 
 INDEX_NAME = '.claudectl-agents.json'
 
