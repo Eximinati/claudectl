@@ -101,10 +101,21 @@ def pytest_configure(config):
 # guard the CHOKE POINT instead.
 
 def _real_user_files():
-    """Files a test must never modify: every account's settings.json, Claude
-    Code's own `.claude.json`, and claudectl's real `claudectl.json`."""
+    """Files a test must never modify: every account's settings.json and
+    claudectl's real `claudectl.json` — the files claudectl itself WRITES, so a
+    change to one during a test is a leak worth restoring.
+
+    Claude Code's own `.claude.json` is deliberately NOT here. claudectl only
+    ever reads it (`clientstate` is read-only by design), so a change to it
+    during a test is by definition another program's — and this fixture's
+    remedy is to overwrite the file with its pre-test bytes, which would roll
+    back the live session that legitimately wrote it. Running the suite inside
+    an active Claude Code session hit that twice. `test_nothing_writes_claude_code_state`
+    below is the stronger and concurrency-proof replacement: it proves the
+    absence of a writer instead of watching for one.
+    """
     home = os.path.expanduser('~')
-    out = [os.path.join(home, '.claude.json')]
+    out = []
     for d in glob.glob(os.path.join(home, '.claude*')):
         if os.path.isdir(d):
             out.append(os.path.join(d, 'settings.json'))

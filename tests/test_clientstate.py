@@ -380,3 +380,39 @@ def test_fallback_model_is_a_chain_not_a_string(tmp_path):
     ccsettings.write('fallbackModel', 'claude-sonnet-5, claude-haiku-4-5', str(acct))
     assert ccsettings.read(str(acct))['fallbackModel'] == \
         ['claude-sonnet-5', 'claude-haiku-4-5']
+
+
+def test_nothing_writes_claude_code_state():
+    """`.claude.json`, the daemon roster and the teams directory belong to
+    Claude Code. claudectl reads them and must never write one.
+
+    A static gate, not a runtime snapshot: the conftest fixture that used to
+    watch `.claude.json` could not tell a test's write from the live Claude Code
+    session's, and its remedy — restoring the pre-test bytes — would roll that
+    session's own state back. Proving there is no writer is both stronger and
+    immune to what else is running on the machine. Same discipline as
+    `checkpoints.test_nothing_here_writes`.
+    """
+    import inspect
+    from claude_sessions import clientstate
+    src = inspect.getsource(clientstate)
+    for w in ("'w'", '"w"', 'os.remove', 'os.unlink', 'os.rename',
+              'shutil.copy', 'shutil.move', 'shutil.rmtree'):
+        assert w not in src, f'clientstate must not write: found {w!r}'
+    # the one write it IS allowed is its own cache, through the atomic helper
+    assert src.count('write_json_atomic') <= 1
+
+
+def test_a_corrupt_claude_json_is_not_quarantined(monkeypatch, tmp_path):
+    """Moving a file aside is right for a file claudectl owns — the next write
+    would destroy the evidence. `.claude.json` is Claude Code's and is rewritten
+    constantly, so an unparseable read most likely caught a live write in
+    flight; renaming it out from under a running session is far worse than
+    reading it again next tick."""
+    from claude_sessions import clientstate, jsonstore
+    p = tmp_path / '.claude.json'
+    p.write_text('{"projects": {"a": ', encoding='utf-8')      # truncated
+    monkeypatch.setattr(clientstate, '_path', lambda name, cfgdir=None: str(p))
+    assert clientstate.client_json() == {}
+    assert p.is_file(), 'the live file was moved aside'
+    assert not list(tmp_path.glob('*.corrupt-*'))

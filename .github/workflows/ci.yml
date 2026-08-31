@@ -109,9 +109,15 @@ jobs:
         run: |
           $exe = if ($IsWindows -eq $false) { '.wheeltest/bin/claudectl' }
                  else { '.wheeltest\Scripts\claudectl.exe' }
-          $help = & $exe --help
+          # Out-String: `& exe` yields an ARRAY of lines, and on an array
+          # `-notmatch` is the FILTER operator — it returns every line that does
+          # not match, which for multi-line help is a non-empty (truthy) array.
+          # The check therefore threw no matter what the command printed; it had
+          # never run before the release that added it.
+          $help = (& $exe --help | Out-String)
           if ($LASTEXITCODE -ne 0) { throw 'claudectl --help failed' }
           if ($help -notmatch 'USAGE' -or $help -notmatch 'COMMANDS') {
+            Write-Host $help
             throw 'claudectl --help printed no usage'
           }
           $ver = (& $exe --version).Trim()

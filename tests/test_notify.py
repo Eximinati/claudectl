@@ -22,9 +22,20 @@ from claude_sessions import config, notify, proc
 
 @pytest.fixture
 def sent(monkeypatch, tmp_path):
-    """Capture what would have been spawned."""
+    """Capture what would have been spawned.
+
+    `notify-send` is pinned as present because otherwise these tests assert a
+    property of the HOST rather than of claudectl: on Linux with no notifier
+    installed — a headless CI runner, for instance — `command()` correctly
+    returns None, `send()` returns False before it ever reaches Popen, and the
+    'a long job notifies' tests below fail for a reason that has nothing to do
+    with the behaviour they describe. The real per-platform argv builder still
+    runs (Windows and macOS never consult `which`), and the three tests at the
+    bottom of this file cover each branch of it directly."""
+    import shutil
     Sandbox(monkeypatch, tmp_path)
     monkeypatch.delenv('CLAUDECTL_NO_NOTIFY', raising=False)
+    monkeypatch.setattr(shutil, 'which', lambda n: '/usr/bin/notify-send')
     calls = []
     monkeypatch.setattr(notify.subprocess, 'Popen',
                         lambda argv, **kw: calls.append(argv))
@@ -107,6 +118,30 @@ def test_linux_uses_notify_send_when_present(monkeypatch):
     assert notify.command('a', 'b')[0] == 'notify-send'
     monkeypatch.setattr(shutil, 'which', lambda n: None)
     assert notify.command('a', 'b') is None       # no notifier: silence, not a crash
+
+
+def test_a_machine_with_no_notifier_is_silent_not_broken(monkeypatch, tmp_path):
+    """The headless case — a Linux CI runner, a server, a stripped container.
+    `job_finished` reports that nothing was raised, and nothing raises.
+
+    Asserted deliberately because it used to be asserted by ACCIDENT, in the
+    other direction: the 'a long job notifies' tests stubbed Popen but not the
+    command builder, so on a host without notify-send they failed on a property
+    of the machine rather than of claudectl."""
+    import shutil
+    Sandbox(monkeypatch, tmp_path)
+    monkeypatch.delenv('CLAUDECTL_NO_NOTIFY', raising=False)
+    monkeypatch.setattr(proc, 'WINDOWS', False)
+    monkeypatch.setattr(sys, 'platform', 'linux')
+    monkeypatch.setattr(shutil, 'which', lambda n: None)
+
+    def _boom(*a, **kw):
+        raise AssertionError('spawned a notifier that does not exist')
+
+    monkeypatch.setattr(notify.subprocess, 'Popen', _boom)
+    assert notify.enabled() is True
+    assert notify.send('Memory updated', 'x') is False
+    assert notify.job_finished('Building memory', 'done', 90) is False
 
 
 def test_a_quoted_title_cannot_close_the_applescript_string(monkeypatch):
