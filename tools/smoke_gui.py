@@ -707,6 +707,27 @@ def main():
               'core' in txt and 'submodule' in txt and 'submodules' in txt, txt[:200])
         check('a worktree still shows its session', 'refactor' in txt, txt[:200])
 
+        print('\n— hidden projects leave the sidebar and can come back —')
+        # The reveal button only exists while something IS hidden, so the branch
+        # that draws it is unreachable from every other check in this file.
+        # stays on whatever page is open — the sidebar is global, and go('home')
+        # here would drop CUR out from under the project checks that follow
+        pg.evaluate("ST.projects[1].hidden=true;drawProjects()")
+        pg.wait_for_timeout(300)
+        rows = pg.evaluate("document.querySelectorAll('#plist .proj').length")
+        shown = pg.evaluate(
+            "(()=>{const b=document.querySelector('#bHidden');"
+            "return !!b && b.offsetParent!==null;})()")
+        check('a hidden project is out of the list, with a way back', rows == 1 and shown,
+              f'{rows} rows, reveal button {shown}')
+        pg.evaluate("document.querySelector('#bHidden').click()")
+        pg.wait_for_timeout(300)
+        rows = pg.evaluate("document.querySelectorAll('#plist .proj').length")
+        tagged = pg.evaluate(
+            "document.querySelectorAll('#plist .proj .tag').length > 0")
+        check('revealing shows it again, marked', rows == 2 and tagged, rows)
+        pg.evaluate("ST.projects[1].hidden=false;SHOW_HIDDEN=false;drawProjects()")
+
         print('\n— controls, not read-outs —')
         # A toggle you can only READ is the class no route-coverage test can
         # see, because the failure is not an unused route — it is no route at

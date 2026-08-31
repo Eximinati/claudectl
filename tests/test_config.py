@@ -27,6 +27,21 @@ def test_settings_roundtrip(monkeypatch, tmp_path):
     assert s2['project_defaults']['D--repos']['effort'] == 'low'
 
 
+def test_a_settings_dict_never_shares_a_default_with_the_next_one(monkeypatch, tmp_path):
+    """`dict(_DEFAULT_SETTINGS)` is shallow, so two loads of a file that names
+    no `project_defaults` used to hand out the SAME dict — and every writer of
+    one does `s.setdefault('project_defaults', {})[enc] = …`, mutating the
+    module default. One project's pins then appeared in the next load, in a
+    process (the GUI, a long TUI run) that never re-imports the module."""
+    monkeypatch.setattr(config, 'settings_file', str(tmp_path / 'nope.json'))
+    a = config.load_settings()
+    a['project_defaults']['X--proj'] = {'hidden': True}
+    a['cost_table']['x'] = 1
+    b = config.load_settings()
+    assert b['project_defaults'] == {} and b['cost_table'] == {}
+    assert config._DEFAULT_SETTINGS['project_defaults'] == {}
+
+
 def test_load_settings_ignores_unknown_keys(monkeypatch, tmp_path):
     f = tmp_path / 'claudectl.json'
     f.write_text(json.dumps({'editor': 'x', 'evil_key': 1}), encoding='utf-8')

@@ -66,6 +66,9 @@
     </div>
     <div class="search"><input id="q" placeholder="Filter projects…"></div>
     <button class="btn sm openp" id="bOpenPath">＋ Open project by path…</button>
+    <!-- only appears once something IS hidden: an always-on row would be a
+         permanent reminder of a list the user asked not to see -->
+    <button class="btn sm openp" id="bHidden" style="display:none"></button>
     <div class="plist" id="plist"></div>
     <div class="hgrip" id="hgrip" role="separator" aria-orientation="horizontal"
          tabindex="0" title="Drag to resize · double-click to reset"></div>
@@ -88,6 +91,7 @@
       <span class="membadge" id="membadge" style="display:none"></span>
       <span class="sp"></span>
       <span id="pactions" style="display:none">
+        <button class="btn" id="bHide">Hide</button>
         <button class="btn" id="bTerm">Terminal</button>
         <button class="btn" id="bCont">Continue</button>
         <button class="btn pri" id="bNew">New session</button>

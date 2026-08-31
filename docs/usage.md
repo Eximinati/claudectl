@@ -16,7 +16,7 @@ used.
 - Quick-resume items appear at the top (★ = most recent session, ☆ = older sessions). These are the 5 most recently used sessions across all projects; selecting one resumes that exact session without navigating into the project's list.
 - All other projects follow, sorted by recency — type to filter live
 - The MCP status footer shows connected MCP servers once the background check completes
-- Bottom menu: **🔍 Search all sessions**, **⚙ Usage stats**, **⚙ MCP servers**, **⚙ Agents**, **⚙ Hooks**, **⚙ Global CLAUDE.md**, **⚙ Settings**, **? Help**
+- Bottom menu: **🔍 Search all sessions**, **📦 Hide / restore projects**, **⚙ Usage stats**, **⚙ MCP servers**, **⚙ Agents**, **⚙ Hooks**, **⚙ Global CLAUDE.md**, **⚙ Settings**, **? Help**
 
 ## Built-in screens
 
@@ -29,6 +29,13 @@ estimated API-equivalent cost, parsed from local transcripts. ENTER drills into 
 rows. Costs are estimates at published API rates — useful as a value/consumption gauge if
 you're on a subscription plan. First scan shows progress and can be stopped with ESC
 (partial results); later opens are instant thanks to a persistent cache.
+
+**📦 Hide / restore projects** — takes a project out of the project list and out of the GUI
+sidebar, for the folders you never want to launch from again. ENTER toggles the row under
+the cursor. It is a view flag, not an archive: nothing on disk moves, the project's
+sessions stay resumable, and restoring is one keypress. The main screen says how many rows
+are being filtered; in the GUI a project page has a **Hide** button and the sidebar grows a
+**Show N hidden projects** button while any are hidden.
 
 **⚙ Global CLAUDE.md / MCP Analysis** — lists all connected MCP servers; select one to run
 Claude with a prompt that calls the MCP's `tools/list` endpoint and formats the result as
@@ -127,6 +134,8 @@ session. Project agents picked with `g` are shown read-only here.
 | Command | What it does |
 |---------|--------------|
 | `claudectl` | Open the TUI (or the GUI, if `ui_mode` is set to `gui`) |
+| `claudectl --help` | Every command, what the tool does, and where its state lives |
+| `claudectl --version` | The installed claudectl version |
 | `claudectl --gui` / `--tui` | Force one interface for this run, ignoring the setting |
 | `claudectl workspace status` | Freshness report for the repo in the current directory |
 | `claudectl recall "<topic>"` | Print the task-relevant subgraph of this project's memory |

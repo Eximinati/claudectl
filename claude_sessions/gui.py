@@ -68,7 +68,9 @@ def list_projects():
         g = groups.setdefault(enc, {'path': actual, 'dirs': set(), 'mtime': mtime})
         g['dirs'].add(acct_dir)
         g['mtime'] = max(g['mtime'], mtime)
-    pd = load_settings().get('project_defaults') or {}
+    _s = load_settings()
+    pd = _s.get('project_defaults') or {}
+    hidden = _c.hidden_projects(_s)
     from .sessions import format_age
     out = []
     for enc, g in groups.items():
@@ -80,6 +82,9 @@ def list_projects():
                     'accounts': [names.get(d, os.path.basename(d)) for d in dirs],
                     'primary_cfgdir': dirs[0],
                     'auto_memory': bool((pd.get(enc) or {}).get('auto_memory')),
+                    # archived out of the lists, not off the disk — the sidebar
+                    # filters on this and the TUI reads the same flag
+                    'hidden': enc in hidden,
                     # the TUI's `!` badge condition, verbatim (session_menu.py):
                     # two isfile() per project, negligible beside find_actual_path
                     'set_up': (os.path.isfile(os.path.join(g['path'], 'CLAUDE.md'))

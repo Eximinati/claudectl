@@ -127,6 +127,7 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/plugins/marketplace/add` | `api_plugin_marketplace_add` | — |
 | `/api/plugins/marketplace/remove` | `api_plugin_marketplace_remove` | — |
 | `/api/plugins/remove` | `api_plugin_remove` | — |
+| `/api/project/hide` | `api_project_hide` | Archive a project out of the project lists, or bring it back. |
 | `/api/rename` | `_api_rename` | — |
 | `/api/session/archive` | `api_session_archive` | — |
 | `/api/session/delete` | `api_session_delete` | — |

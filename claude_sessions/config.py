@@ -174,7 +174,14 @@ def _norm_model(m):
 def load_settings():
     """Read ~/.claude/claudectl.json, merged over defaults. Never raises."""
     from . import jsonstore     # lazy: jsonstore imports this module
-    s = dict(_DEFAULT_SETTINGS)
+    # dict(_DEFAULT_SETTINGS) is a SHALLOW copy, so every load of a file with no
+    # `project_defaults` key handed out the same dict object — and the callers
+    # that write one (`s.setdefault('project_defaults', {})[enc] = …`) mutated
+    # the default itself. In a long-lived process that is one project's pins
+    # leaking into the next load; in the suite it was one test's hidden project
+    # appearing in another's settings.
+    s = {k: (dict(v) if isinstance(v, dict) else list(v) if isinstance(v, list) else v)
+         for k, v in _DEFAULT_SETTINGS.items()}
     data = jsonstore.load(settings_file, expect=dict)
     s.update({k: v for k, v in data.items() if k in _DEFAULT_SETTINGS})
     # Keys this version does not know are carried, not dropped. save_settings
@@ -261,6 +268,22 @@ def launch_defaults(enc=''):
     proj = (s.get('project_defaults') or {}).get(enc or '') or {}
     model = s.get('default_model', '')
     return model, effective_perm(proj.get('permission', s.get('default_permission', '')), model)
+
+
+def hidden_projects(s=None):
+    """Encoded names the user archived out of the project lists.
+
+    A view flag on the project defaults already keyed by encoded name — nothing
+    on disk moves, so a hidden project's sessions stay exactly where Claude Code
+    put them and un-hiding is free."""
+    pd = (s or load_settings()).get('project_defaults') or {}
+    return {enc for enc, d in pd.items() if isinstance(d, dict) and d.get('hidden')}
+
+
+def set_project_hidden(enc, hidden=True):
+    s = load_settings()
+    s.setdefault('project_defaults', {}).setdefault(enc, {})['hidden'] = bool(hidden)
+    return save_settings(s)
 
 
 def perm_note(perm, model='', omniroute=''):

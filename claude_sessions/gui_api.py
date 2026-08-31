@@ -1608,6 +1608,17 @@ def api_memory_auto_set(q, body):
     return {'ok': True}
 
 
+def api_project_hide(q, body):
+    """Archive a project out of the project lists, or bring it back.
+
+    View-only: no file moves, so the sessions of a hidden project stay resumable
+    and un-hiding costs one settings write. The GUI sidebar and the TUI project
+    menu both read the same flag."""
+    from .config import set_project_hidden
+    set_project_hidden(body['enc'], bool(body.get('hidden', True)))
+    return {'ok': True}
+
+
 def api_lessons_get(q, body):
     from .memory import load_memory
     mem = load_memory(q['path'], _folder(q.get('cfgdir'), q['enc']))
@@ -2864,6 +2875,7 @@ POST_ROUTES = {
     '/api/session/tags': api_tags_set,
     '/api/memory/autoscan': api_memory_autoscan,
     '/api/memory/auto': api_memory_auto_set,
+    '/api/project/hide': api_project_hide,
     '/api/plugins/marketplace/add': api_plugin_marketplace_add,
     '/api/plugins/marketplace/remove': api_plugin_marketplace_remove,
     '/api/plugins/remove': api_plugin_remove,

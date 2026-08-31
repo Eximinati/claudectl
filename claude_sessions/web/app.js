@@ -763,8 +763,9 @@ function miniSpark(vals){
 function drawProjects(){
   const q=($('#q').value||'').toLowerCase();
   const box=$('#plist');if(!box)return;
-  const list=ST.projects.filter(p=>!q
-    ||p.name.toLowerCase().includes(q)||p.path.toLowerCase().includes(q));
+  const list=ST.projects.filter(p=>(SHOW_HIDDEN||!p.hidden)&&(!q
+    ||p.name.toLowerCase().includes(q)||p.path.toLowerCase().includes(q)));
+  drawHiddenToggle();
   MO.patch(box,list,p=>p.encoded,p=>{
     // Account chips are flex:none, so with three of them they claimed the whole
     // row and the project NAME shrank to a single character ("Claude" rendered
@@ -783,7 +784,8 @@ function drawProjects(){
     const amk=(p.auto_memory||active)
       ?`<span class="amk${active?' pip':''}" title="${active?'memory updating now':'auto-memory on'}">${ic('refresh')}</span>`:'';
     const last=p.last_active?` <span style="opacity:.7">· ${esc(p.last_active)} ago</span>`:'';
-    return `<div class="nm"><span class="pn" title="${esc(p.name)}">${esc(p.name)}</span>${tags}${amk}</div>`
+    const hid=p.hidden?' <span class="tag" title="hidden from the project list">hidden</span>':'';
+    return `<div class="nm"><span class="pn" title="${esc(p.name)}">${esc(p.name)}</span>${hid}${tags}${amk}</div>`
       +`<div class="pt"><span class="pp">${esc(p.path)}${last}</span>`
       +`${miniSpark(PROJ_SPARK[p.encoded])}</div>`;
   },p=>'proj lift'+(CUR&&PAGE_==='project'&&CUR.encoded===p.encoded?' sel':''));
@@ -793,6 +795,30 @@ function drawProjects(){
       const p=ST.projects.find(x=>x.encoded===row.__mokey);
       if(p)openProject(p);
     });}
+}
+/* Hiding a project is a VIEW flag (settings), not a file move — the sessions of
+   a hidden project stay exactly where Claude Code put them, and the TUI reads
+   the same flag. The reveal button only exists while something is hidden. */
+let SHOW_HIDDEN=false;
+function drawHiddenToggle(){
+  const b=$('#bHidden');if(!b)return;
+  const n=(ST.projects||[]).filter(p=>p.hidden).length;
+  b.style.display=n?'':'none';
+  b.innerHTML=ic('eye')+' '+(SHOW_HIDDEN?'Hide':'Show')
+    +` ${n} hidden project${n===1?'':'s'}`;
+  if(!b.__bound){b.__bound=1;
+    b.onclick=()=>{SHOW_HIDDEN=!SHOW_HIDDEN;drawProjects();};}
+}
+async function toggleHidden(){
+  if(!CUR)return;
+  const hidden=!CUR.hidden;
+  const r=await post('/api/project/hide',{enc:CUR.encoded,hidden});
+  if(r.error){toast('Failed: '+r.error,'err');return;}
+  CUR.hidden=hidden;
+  const p=(ST.projects||[]).find(x=>x.encoded===CUR.encoded);if(p)p.hidden=hidden;
+  if(hidden)SHOW_HIDDEN=true;   // don't make the page you're on vanish from the list
+  toast(hidden?'Project hidden':'Project restored','ok');
+  drawProjects();drawProject();
 }
 
 /* ── router ── */
@@ -1632,6 +1658,9 @@ function startMemBadge(){
 function drawProject(){
   NAV_ID++;
   $('#ttl').textContent=CUR.name;$('#tpath').textContent=CUR.path;
+  $('#bHide').textContent=CUR.hidden?'Unhide':'Hide';
+  $('#bHide').title=CUR.hidden?'Show this project in the list again'
+                              :'Hide this project from the project list (nothing is deleted)';
   $('#tabs').innerHTML=TABS.map(([id,l])=>
     `<div class="tab${TAB===id?' sel':''}" onclick="TAB='${id}';drawProject()">${l}</div>`).join('')
     +`<div class="tab" onclick="window.open('/graph?${qs({path:CUR.path,enc:CUR.encoded,k:CK})}','_blank')">Graph ${ic('ext')}</div>`;
@@ -4838,6 +4867,7 @@ $('#bNew').onclick=()=>CUR&&askLaunch({title:'New session',sub:CUR.name,isNew:tr
   path:CUR.path,enc:CUR.encoded,choice:'new'});
 $('#bCont').onclick=()=>CUR&&askLaunch({title:'Continue latest',sub:CUR.name,isNew:false,
   path:CUR.path,enc:CUR.encoded,choice:'continue',cfgdir:CUR.primary_cfgdir});
+$('#bHide').onclick=toggleHidden;
 $('#bTerm').onclick=async()=>{if(!CUR)return;
   const r=await post('/api/launch',{path:CUR.path,enc:CUR.encoded,choice:'terminal',opts:{}});
   toast(r.ok?'Terminal opened':'Failed: '+(r.error||''),r.ok?'ok':'err');};

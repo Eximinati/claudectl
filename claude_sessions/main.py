@@ -20,6 +20,80 @@ from . import render
 from . import store
 
 
+#: `claudectl --help`. Every user-facing dispatch in run() has a line here, and
+#: tests/test_cli_help.py fails a subcommand that does not — a pip install is
+#: the first contact most people have with this tool and the only thing they can
+#: type without reading the docs first.
+HELP = """claudectl {ver}— the workspace layer for Claude Code.
+
+USAGE
+  claudectl                  open the workspace UI (TUI unless ui_mode says GUI)
+  claudectl --gui | --tui    force the web/desktop GUI, or the terminal UI
+  claudectl <command> [...]
+
+COMMANDS
+  workspace status           print the current folder's project status — memory
+                             freshness, CLAUDE.md, MCP servers, git. No UI, so
+                             it is safe to call from a script or a hook.
+  recall "<query>"           print the task-relevant slice of this project's
+                             memory graph. This is what the recall hook injects
+                             into a session, and what CLAUDE.md points Claude at.
+  review [--staged | --branch BASE] [--min-confidence N] [PATH]
+                             confidence-scored review of the working tree,
+                             printed to stdout.
+  sync-accounts [--yes | --dry-run]
+                             level every configured account up to what you have
+                             provisioned (hooks, statusline, settings). Shows
+                             the diff before writing anything.
+  statusline                 Claude Code's statusLine command: reads one JSON
+                             payload on stdin and prints one line. Install it
+                             from the Hooks screen rather than wiring it by hand.
+  --failover-stop            stop the background model-failover proxy.
+
+OPTIONS
+  -h, --help                 this text
+  -V, --version              print the installed claudectl version
+
+WHAT YOU GET
+  Projects   every folder Claude Code has a session for, across all accounts, in
+             one list — launch with a chosen model, effort, permission mode,
+             agent set and worktree. Projects you never want to see can be
+             hidden from the list (they are not deleted, and come back).
+  Memory     a per-project graph of entities, relations and learned lessons in
+             <project>/.claudectl/memory, injected through CLAUDE.md and the
+             recall hook, so a fresh session starts knowing the project.
+  Sessions   browse, resume, fork, rename, tag, export or archive any past
+             session; read its transcript, tokens and cost.
+  Config     MCP servers, agents, skills, plugins, hooks and output styles —
+             per project and globally, per account.
+  GUI        the same workspace as a local web app (--gui), bound to 127.0.0.1
+             behind a per-run token. Nothing is uploaded anywhere.
+
+FILES
+  ~/.claude/claudectl.json      claudectl's own settings (accounts, defaults)
+  ~/.claude/                    Claude Code's config dir. CLAUDE_CONFIG_DIR
+                                overrides it, and claudectl follows it.
+  <project>/.claudectl/memory   that project's memory graph
+
+DOCS   https://babarmuhammad.github.io/claudectl/
+"""
+
+
+def _help_cli():
+    try:
+        from .versions import self_installed
+        ver = (self_installed() + ' ') if self_installed() else ''
+    except Exception:
+        ver = ''
+    # the glyphs are ASCII here, but the pipe encoding lesson still applies:
+    # `claudectl --help | more` on Windows picks the locale codepage
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    print(HELP.format(ver=ver))
+
+
 def _workspace_status_cli():
     """`claudectl workspace status` — resolve the project from cwd and print."""
     from .paths import encode_component
@@ -77,6 +151,25 @@ def _bg_scan_cli(project_path, proj_folder):
         memory.clear_scan_lock(project_path)
 
 
+def _hidden_projects_menu(grouped):
+    """Archive projects out of the main list, and bring them back.
+
+    Its own screen rather than a key over the project list because `menu()` has
+    no hotkeys — every printable key goes to its search bar. Enter toggles the
+    row under the cursor and the screen redraws, so hiding several is one visit.
+    """
+    from .config import hidden_projects, set_project_hidden
+    while True:
+        hidden = hidden_projects()
+        items = [(f"{'☐' if enc in hidden else '☑'}  "
+                  f"{os.path.basename(path) or path:<28}  {C_DIM}{path}{C_RESET}", enc)
+                 for _m, path, enc, _pd, _od in grouped]
+        sel = menu(items, "HIDE / RESTORE PROJECTS   (Enter toggles · ☐ = hidden)")
+        if not sel:
+            return
+        set_project_hidden(sel, sel not in hidden)
+
+
 #: the main menu's own rows, hoisted to module scope so a test can read them.
 #: [(label, key, gui_route)] — a blank route means the row has no GUI
 #: counterpart, and `test_every_main_menu_row_has_a_gui_counterpart` requires a
@@ -85,6 +178,7 @@ def _bg_scan_cli(project_path, proj_folder):
 MAIN_ACTIONS = [
     ('📂  Open new project by path…',        '__open_path__',        '/api/state'),
     ('🔍  Search all sessions',              '__search_all__',       '/api/search-index'),
+    ('📦  Hide / restore projects',           '__hidden_projects__',  '/api/project/hide'),
     ('⚙  Usage stats',                       '__usage_stats__',      '/api/usage/daily'),
     ('⚙  MCP servers',                       '__mcp__',              '/api/mcp'),
     ('⚙  Agents',                            '__agents__',           '/api/agents/library'),
@@ -99,6 +193,15 @@ MAIN_ACTIONS = [
 
 
 def run():
+    # `claudectl --help` / `-h` / `help` — FIRST: a released package must answer
+    # the one thing a new user types, and it must never start a UI to do it.
+    if len(sys.argv) >= 2 and sys.argv[1] in ('--help', '-h', 'help'):
+        _help_cli()
+        return
+    if len(sys.argv) >= 2 and sys.argv[1] in ('--version', '-V'):
+        from .versions import self_installed
+        print(self_installed() or 'unknown')
+        return
     # `claudectl workspace status` — scriptable, no TUI
     if sys.argv[1:3] == ['workspace', 'status']:
         _workspace_status_cli()
@@ -246,19 +349,31 @@ def run():
     grouped.sort(reverse=True, key=lambda r: r[0])
 
     _default_acct_dir = all_config_dirs()[0][1]
-    project_items = []
-    for i, (_, p, _n, primary_dir, other_dirs) in enumerate(grouped):
-        if other_dirs:
-            names = ', '.join(_account_name_for(d) for d in other_dirs)
-            tag = f"  {C_DIM}[+{names}]{C_RESET}"
-        elif primary_dir != _default_acct_dir:
-            tag = f"  {C_DIM}[{os.path.basename(primary_dir)}]{C_RESET}"
-        else:
-            tag = ''
-        project_items.append((f"{os.path.basename(p) or p:<28}  {p}{tag}", f'__proj_{i}__'))
+    all_recent = load_recent_sessions(5)
 
-    recent = load_recent_sessions(5)
-    if recent:
+    def _build_items():
+        """(visible projects, visible recents, menu rows).
+
+        Rebuilt on every pass of the loop below, because hiding a project
+        changes what belongs in the menu — and the `__proj_N__` / `__quickresume_N__`
+        values index the FILTERED lists, so they are returned together with it.
+        """
+        from .config import hidden_projects
+        hidden  = hidden_projects()
+        visible = [g for g in grouped if g[2] not in hidden]
+        recent  = [s for s in all_recent if s.get('encoded_name', '') not in hidden]
+
+        project_items = []
+        for i, (_, p, _n, primary_dir, other_dirs) in enumerate(visible):
+            if other_dirs:
+                names = ', '.join(_account_name_for(d) for d in other_dirs)
+                tag = f"  {C_DIM}[+{names}]{C_RESET}"
+            elif primary_dir != _default_acct_dir:
+                tag = f"  {C_DIM}[{os.path.basename(primary_dir)}]{C_RESET}"
+            else:
+                tag = ''
+            project_items.append((f"{os.path.basename(p) or p:<28}  {p}{tag}", f'__proj_{i}__'))
+
         qr_items = []
         for i, sess in enumerate(recent):
             lr_proj    = os.path.basename(sess['project_path']) or sess['project_path']
@@ -280,12 +395,15 @@ def run():
                          [3, 18, None, 7],
                          aligns=['left', 'left', 'left', 'right']))
             qr_items.append((label, f"__quickresume_{i}__"))
-        full_items = qr_items + [(f"{'─' * W}", None)] + project_items
-    else:
-        full_items = project_items
 
-    full_items = full_items + [(f"{'─' * W}", None)] + \
-        [(label, key) for label, key, _route in MAIN_ACTIONS]
+        rows = (qr_items + [(f"{'─' * W}", None)] + project_items) if qr_items \
+            else project_items
+        rows = rows + [(f"{'─' * W}", None)] + \
+            [(label, key) for label, key, _route in MAIN_ACTIONS]
+        if len(visible) < len(grouped):
+            rows = rows + [(f"{C_DIM}  {len(grouped) - len(visible)} project(s) hidden"
+                            f"{C_RESET}", None)]
+        return visible, recent, rows
 
     # ── main loop ─────────────────────────────────────────────────
 
@@ -302,6 +420,7 @@ def run():
         return '\n'.join(lines)
 
     while True:
+        visible, recent, full_items = _build_items()
         sel = menu(full_items, "SELECT PROJECT",
                    footer_fn=mcp_status_line, banner_fn=_banner)
         if not sel:
@@ -383,13 +502,17 @@ def run():
             settings_menu()
             continue
 
+        elif sel == '__hidden_projects__':
+            _hidden_projects_menu(grouped)
+            continue
+
         elif sel == '__help__':
             help_screen()
             continue
 
         elif sel and sel.startswith('__proj_'):
             idx = int(sel[len('__proj_'):-2])
-            _, path, encoded_name, primary_dir, other_dirs = grouped[idx]
+            _, path, encoded_name, primary_dir, other_dirs = visible[idx]
             opts['cfgdir'] = primary_dir if primary_dir != config_dir else ''
             proj_folder  = store.project_folder(primary_dir, encoded_name)
 

@@ -7,6 +7,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Hide projects you never want to see.** Every folder Claude Code has ever run in shows
+  up in the project list, including one-off experiments and folders that no longer exist
+  as work. A project can now be hidden from the TUI project menu and the GUI sidebar —
+  from `Hide / restore projects` in the main menu, or the `Hide` button on a project page.
+  It is a view flag (`project_defaults[<enc>].hidden`), so nothing on disk moves: the
+  sessions stay resumable and restoring costs one click. The TUI says how many rows are
+  filtered; the GUI grows a `Show N hidden projects` button while any are.
+- `claudectl --help` (and `-h`, `help`, `--version`). A pip install used to answer the
+  most obvious command by opening the full-screen terminal UI. The help text covers every
+  subcommand, what the tool does and where its state lives, and a test enumerates the
+  dispatch table so it cannot fall behind it.
+
+### Fixed
+
+- `load_settings()` copied the defaults shallowly, so every load of a settings file that
+  named no `project_defaults` handed back the same dict — and each writer of one mutates
+  it in place. In a long-lived process (the GUI, a long TUI run) one project's pins leaked
+  into the next load.
+
 ## [1.7.0] - 2026-08-28
 
 ### Added
