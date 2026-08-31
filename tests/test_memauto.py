@@ -378,3 +378,81 @@ def test_a_project_that_is_already_current_still_reports_fresh(monkeypatch, tmp_
     _m, _live, checks, _score, _safe = workspace.compute_status(actual, folder)
     states = {c['name']: c['state'] for c in checks}
     assert states['repo'] == 'fresh' and states['claude_md_fresh'] == 'fresh'
+
+
+# ── it runs on launch, then on the interval ──────────────────
+#
+#     "if i want to build auto memory it should do it automatically when i
+#      launch claudectl, then do it periodically on the configured time period,
+#      right now i have to click on a project then it starts updating memory"
+#
+# The loop had no coverage at all: only that the stop flag could be set.
+
+def test_the_scheduler_runs_a_pass_on_launch(monkeypatch):
+    """Not "when you open a project" — on start."""
+    import threading
+    from claude_sessions import gui_api
+    passes = threading.Event()
+    monkeypatch.setattr(gui_api, 'STARTUP_DELAY', 0.05)
+    monkeypatch.setattr(gui_api, '_auto_scan_pass',
+                        lambda: passes.set() or False)
+    monkeypatch.setattr(gui_api, '_sched_started', False)
+    try:
+        gui_api.start_auto_memory_scheduler()
+        assert passes.wait(5), 'no pass ran after launch'
+    finally:
+        gui_api.stop_auto_memory_scheduler()
+
+
+def test_it_keeps_going_after_the_first_pass(monkeypatch):
+    """One pass at launch is not "periodically". The wait between passes is the
+    configured interval, or CATCHUP_INTERVAL while a project still owes work —
+    the same loop either way, and the short one is what a test can observe."""
+    import threading
+    from claude_sessions import gui_api
+    n = []
+    done = threading.Event()
+
+    def _pass():
+        n.append(1)
+        if len(n) >= 3:
+            done.set()
+        return True                       # still owed → the catch-up wait
+
+    monkeypatch.setattr(gui_api, 'STARTUP_DELAY', 0.05)
+    monkeypatch.setattr(gui_api, 'CATCHUP_INTERVAL', 0.05)
+    monkeypatch.setattr(gui_api, '_auto_scan_pass', _pass)
+    monkeypatch.setattr(gui_api, '_sched_started', False)
+    try:
+        gui_api.start_auto_memory_scheduler()
+        assert done.wait(5), f'only {len(n)} pass(es) ran; it does not repeat'
+    finally:
+        gui_api.stop_auto_memory_scheduler()
+
+
+def test_a_stopped_scheduler_stops(monkeypatch):
+    """A daemon thread that ignores the stop flag outlives the window."""
+    import threading
+    import time
+    from claude_sessions import gui_api
+    n = []
+    monkeypatch.setattr(gui_api, 'STARTUP_DELAY', 0.05)
+    monkeypatch.setattr(gui_api, 'CATCHUP_INTERVAL', 0.05)
+    monkeypatch.setattr(gui_api, '_auto_scan_pass', lambda: n.append(1) or True)
+    monkeypatch.setattr(gui_api, '_sched_started', False)
+    gui_api.start_auto_memory_scheduler()
+    time.sleep(0.4)
+    gui_api.stop_auto_memory_scheduler()
+    seen = len(n)
+    assert seen, 'it never ran'
+    time.sleep(0.4)
+    assert len(n) == seen, 'it kept running after being stopped'
+
+
+def test_both_interfaces_start_it(monkeypatch):
+    """It had ONE caller, in run_gui — so "keep this updated automatically"
+    silently meant "while the GUI window is open"."""
+    import inspect
+    from claude_sessions import gui, main as main_mod
+    assert 'start_auto_memory_scheduler' in inspect.getsource(gui.run_gui)
+    assert 'start_auto_memory_scheduler' in inspect.getsource(main_mod.run)

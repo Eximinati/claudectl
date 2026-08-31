@@ -7,6 +7,35 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-08-31
+
+### Fixed
+
+- **Auto-memory crashed in the GUI**, with
+  `Memory update failed: 'NoneType' object has no attribute 'reconfigure'`. The
+  stale-on-edit work added in 1.8.0 imported a *hook script* for one path
+  helper, and a hook reconfigures stdout when it is imported — correctly, since
+  Claude Code hands it a pipe. The GUI runs as a windowed process with no
+  console, where `sys.stdout` is `None`, so that line took down the whole
+  refresh cycle. In the GUI auto-memory therefore never ran at all: the hourly
+  pass failed silently on every project, and opening a project only made the
+  same failure visible. The dependency now points hook → library, never the
+  other way, and a gate walks the package for any module importing an entry
+  point — it found two more instances immediately (see below).
+- **The context-weight audit under-reported two always-on hooks.** It imported
+  `minimalcode_hook` and `concise_hook` for their rule text inside a bare
+  `except Exception: pass`, so in the GUI the import failed and both hooks'
+  per-session cost silently vanished from the total. The text now lives in
+  `hookrules.py`, which the audit and the hooks share.
+- **A hook no longer dies when there is no stdout.** Setting UTF-8 on a pipe is
+  right; being the reason the hook exits when stdout is absent is not.
+- **Auto-memory runs on launch and on the interval, from either interface.**
+  The periodic pass had one caller, in the GUI's server startup — so on the
+  terminal side "keep this project's memory updated automatically" only ever
+  happened when you opened the project. The scheduler loop itself had no test
+  beyond "the stop flag can be set"; the launch pass, the repeat and the stop
+  are now covered.
+
 ## [1.8.0] - 2026-08-31
 
 ### Added

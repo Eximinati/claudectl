@@ -482,6 +482,11 @@ def _auto_scan_pass():
 #: not made back to back.
 CATCHUP_INTERVAL = 45
 
+#: how long the first pass waits after start — enough for the server/TUI to
+#: settle, short enough that "it updates when I launch claudectl" is true.
+#: A module constant so the loop can actually be tested; it had none.
+STARTUP_DELAY = 2
+
 
 def start_auto_memory_scheduler():
     """Daemon thread: one pass on start, then every auto_memory_interval seconds
@@ -499,7 +504,7 @@ def start_auto_memory_scheduler():
     def _loop():
         # wait(), not sleep(): server_close() must be able to end this, and a
         # thread parked in sleep(3600) cannot be told anything
-        if _sched_stop.wait(2):           # let the server settle first
+        if _sched_stop.wait(STARTUP_DELAY):    # let the server/TUI settle first
             return
         while not _sched_stop.is_set():
             owed = False
