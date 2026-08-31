@@ -24,6 +24,15 @@ three.js and anime.js (both MIT, served from `/vendor/`, never a CDN).
 - **Job cancel** — running background jobs (plan generation, memory build, review) show a Cancel button; the `cancelled` flag is cooperative (checked at loop top, no thread kill).
 - **Persistent preferences** — theme and account selection saved to `localStorage`, restored across page reloads.
 - **Editable Plan → Execute** — the generated plan appears in a monospace textarea for inline editing before approval; "Re-plan" sends feedback to regenerate; "Per-step approval" gates execution step by step. Every generated plan is auto-saved.
+- **Skills** — the four scopes Claude Code actually loads (personal, project, plugin,
+  built-in), each row showing the command you type and how often Claude Code has used it,
+  with a filter over the lot. See [Agents & skills](agents.md#skills).
+- **Loops** — start a `/loop` in its own session, watch it fire, end it, and edit the
+  `loop.md` behind a bare `/loop`. See [Loops](usage.md#loops).
+- **Global CLAUDE.md** — its own page: the instructions read in every session on an
+  account, its `loop.md` sibling and the cross-project conventions worth promoting into it.
+- **Output styles** — by scope, with the active one and the file that pins it named, plus
+  four claudectl starters to copy (Terse, Reviewer, Pair, Ship).
 - **Skills / Worklog / Review / model-routing panels** — Skills manager, worklog toggle + entry history, one-click code review (working diff or staged-only), and OmniRoute free-tier configuration.
 
 Icons are inline Material SVG — no CDN, no emoji.

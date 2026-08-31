@@ -404,3 +404,486 @@ def test_a_spend_cap_reaches_the_headless_call(monkeypatch, tmp_path):
     s['headless_budget_usd'] = 2.5
     config.save_settings(s)
     assert memory._budget_args() == ['--max-budget-usd', '2.5']
+
+
+# ── graph consolidation: the cap, the pin, and the snapshot ──
+# Nothing exercised _consolidate before this: not the memory_max_entities cap,
+# not the rank + hits*2 sort, not the cross-module merge, not _INVALID_CAP.
+# It is the code that DELETES memory, which makes it the last place to have no
+# test at all.
+
+def _ent(name, rank=0, hits=0, **kw):
+    e = {'name': name, 'type': 'component', 'summary': 'x' * 10, 'repo': 'r',
+         'module': 'm', 'rank': rank, 'hits': hits, 'valid': True}
+    e.update(kw)
+    return e
+
+
+def test_eviction_keeps_the_well_connected_and_names_what_it_dropped(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    from claude_sessions import config
+    s = config.load_settings(); s['memory_max_entities'] = 3; config.save_settings(s)
+    mem = memory._empty()
+    mem['entities'] = [_ent('keep-rank', rank=99), _ent('keep-hits', hits=50),
+                       _ent('keep-mid', rank=5),
+                       _ent('drop-a'), _ent('drop-b')]
+    got = memory._consolidate(mem)
+    names = {e['name'] for e in got['entities']}
+    assert {'keep-rank', 'keep-hits', 'keep-mid'} <= names
+    assert 'drop-a' not in names and 'drop-b' not in names
+    assert got['evicted_entities'] == 2
+    # names, not just a count — a count is not something a user can check
+    assert set(got['evicted_names']) == {'drop-a', 'drop-b'}
+
+
+def test_a_pinned_entity_is_never_evicted(monkeypatch, tmp_path):
+    """Pinning reached lessons only, so the cap could silently drop the very
+    fact the user had marked as the one that matters."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    from claude_sessions import config
+    s = config.load_settings(); s['memory_max_entities'] = 2; config.save_settings(s)
+    mem = memory._empty()
+    mem['entities'] = [_ent('pinned-nobody-uses', status='pinned'),
+                       _ent('busy-1', rank=90), _ent('busy-2', rank=80),
+                       _ent('busy-3', rank=70)]
+    got = memory._consolidate(mem)
+    names = {e['name'] for e in got['entities']}
+    assert 'pinned-nobody-uses' in names, 'a pin outranks the cap'
+    assert 'busy-1' in names
+
+
+def test_pins_win_over_the_cap_rather_than_the_reverse(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    from claude_sessions import config
+    s = config.load_settings(); s['memory_max_entities'] = 1; config.save_settings(s)
+    mem = memory._empty()
+    mem['entities'] = [_ent('p1', status='pinned'), _ent('p2', status='pinned'),
+                       _ent('ordinary', rank=99)]
+    got = memory._consolidate(mem)
+    names = {e['name'] for e in got['entities']}
+    assert {'p1', 'p2'} <= names, 'pinning more than the cap keeps them all'
+    assert 'ordinary' not in names
+
+
+def test_a_pin_survives_the_cross_module_merge(monkeypatch, tmp_path):
+    """Two modules describing one thing merge into one record; the merged one
+    must inherit the pin, or pinning the duplicate silently did nothing."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    from claude_sessions import config
+    s = config.load_settings(); s['memory_max_entities'] = 1; config.save_settings(s)
+    mem = memory._empty()
+    mem['entities'] = [_ent('Auth Service', module='a'),
+                       _ent('auth service', module='b', status='pinned'),
+                       _ent('other', rank=99)]
+    got = memory._consolidate(mem)
+    merged = [e for e in got['entities'] if e['name'].lower() == 'auth service']
+    assert len(merged) == 1, 'merged by normalized name'
+    assert merged[0].get('status') == 'pinned'
+
+
+def test_relations_to_evicted_entities_are_dropped(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    from claude_sessions import config
+    s = config.load_settings(); s['memory_max_entities'] = 1; config.save_settings(s)
+    mem = memory._empty()
+    mem['entities'] = [_ent('kept', rank=99), _ent('gone')]
+    mem['relations'] = [{'source': 'kept', 'target': 'gone', 'type': 'uses'}]
+    got = memory._consolidate(mem)
+    assert got['relations'] == []
+
+
+def test_a_shrinking_save_is_snapshotted_and_restorable(monkeypatch, tmp_path):
+    """The whole answer to 'if I compact or prune, do I lose my memory'."""
+    from claude_sessions import diffview
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    big = memory._empty()
+    big['entities'] = [_ent('a'), _ent('b'), _ent('c')]
+    memory.save_memory(actual, folder, big)
+    assert diffview.versions(actual, folder, 'memory_graph') == []
+
+    small = memory._empty(); small['entities'] = [_ent('a')]
+    memory.save_memory(actual, folder, small)
+    vs = diffview.versions(actual, folder, 'memory_graph')
+    assert vs, 'a save that loses entities snapshots the old graph'
+
+    ok, _msg = diffview.restore(actual, folder, 'memory_graph', vs[0]['ts'])
+    assert ok
+    back = {e['name'] for e in memory.load_memory(actual, folder)['entities']}
+    assert back == {'a', 'b', 'c'}
+
+
+def test_growing_saves_are_not_snapshotted(monkeypatch, tmp_path):
+    """Every refresh saves. Versioning all of them pushes the one snapshot that
+    matters out of the ring within an hour."""
+    from claude_sessions import diffview
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    m = memory._empty(); m['entities'] = [_ent('a')]
+    memory.save_memory(actual, folder, m)
+    for extra in ('b', 'c', 'd'):
+        m['entities'].append(_ent(extra))
+        memory.save_memory(actual, folder, m)
+    assert diffview.versions(actual, folder, 'memory_graph') == []
+
+
+# ── a cycle must never destroy what it failed to replace ─────
+# The worst class of bug in this subsystem: refresh_memory advanced provenance
+# for EVERY unit it hashed, not the units it actually extracted. A failed call
+# or a max_calls truncation therefore marked unprocessed units "current", so
+# the hash gate said unchanged forever and their stale facts were never
+# revisited — while a failure additionally invalidated everything already known
+# about that module.
+
+def _stub_failing(monkeypatch, fail_units, calls=None):
+    """Extraction that returns None (call failed) for the named units."""
+    def fake(corpus, cwd, unit='', progress=''):
+        if calls is not None:
+            calls.append(unit)
+        if unit in fail_units:
+            return None
+        return {'summary': f'summary of {unit}',
+                'entities': [{'name': f'E[{unit}]', 'type': 'module', 'summary': 's'}],
+                'relations': []}
+    monkeypatch.setattr(memory, '_extract', fake)
+
+
+def test_a_failed_extraction_keeps_the_facts_it_could_not_replace(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    _mkfile(actual, 'mod1/a.py')
+    _mkfile(actual, 'mod2/b.py')
+    _stub(monkeypatch)
+    memory.refresh_memory(actual, folder, 'alpha')
+
+    # both modules change; mod1's call now fails
+    _mkfile(actual, 'mod1/a.py', 'changed = 1\n')
+    _mkfile(actual, 'mod2/b.py', 'changed = 2\n')
+    _stub_failing(monkeypatch, {'mod1/(root)'})
+    mem = memory.refresh_memory(actual, folder, 'alpha')
+
+    m1 = [e for e in mem['entities'] if e['repo'] == 'mod1']
+    assert m1, 'the failed module still has its entities'
+    assert all(e.get('valid', True) for e in m1), \
+        'a failed CALL is not evidence the facts became false'
+    assert mem['summaries'].get('mod1/(root)'), 'its summary survives too'
+    assert mem['pending_units'] >= 1, 'and it is counted as still owed'
+
+
+def test_a_failed_unit_is_retried_next_cycle(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    _mkfile(actual, 'mod1/a.py')
+    _stub(monkeypatch)
+    memory.refresh_memory(actual, folder, 'alpha')
+
+    _mkfile(actual, 'mod1/a.py', 'changed = 1\n')
+    _stub_failing(monkeypatch, {'mod1/(root)'})
+    memory.refresh_memory(actual, folder, 'alpha')
+    # the file's hash must NOT have been recorded, or this is invisible forever
+    assert memory.is_stale(actual, folder), 'a failed unit is still stale'
+
+    calls = []
+    _stub(monkeypatch, calls)
+    memory.refresh_memory(actual, folder, 'alpha')
+    assert calls == ['mod1/(root)'], 'and the next cycle picks it up'
+
+
+def test_a_truncated_run_leaves_the_units_it_skipped_stale(monkeypatch, tmp_path):
+    """memory_max_calls caps the work; it must not also declare the uncapped
+    remainder up to date."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    from claude_sessions import config
+    actual, enc, folder, _ = sb.add_project('alpha')
+    for i in range(4):
+        _mkfile(actual, f'mod{i}/a.py')
+    _stub(monkeypatch)
+    memory.refresh_memory(actual, folder, 'alpha')
+
+    for i in range(4):
+        _mkfile(actual, f'mod{i}/a.py', f'changed = {i}\n')
+    s = config.load_settings(); s['memory_max_calls'] = 2; config.save_settings(s)
+    calls = []
+    _stub(monkeypatch, calls)
+    mem = memory.refresh_memory(actual, folder, 'alpha')
+    assert len(calls) == 2, 'the cap held'
+    assert mem['pending_units'] == 2
+    assert memory.is_stale(actual, folder), 'the other two are still owed'
+
+    calls.clear()
+    memory.refresh_memory(actual, folder, 'alpha')
+    assert len(calls) == 2, 'and the next run does them'
+    assert not memory.is_stale(actual, folder)
+
+
+def test_a_refresh_that_cannot_save_is_not_silent(monkeypatch, tmp_path):
+    """One Claude call per unit was already paid for. Losing it quietly is the
+    one outcome worse than not running."""
+    import pytest
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    _mkfile(actual, 'mod1/a.py')
+    _stub(monkeypatch)
+    monkeypatch.setattr(memory, 'save_memory', lambda *a, **k: False)
+    with pytest.raises(OSError):
+        memory.refresh_memory(actual, folder, 'alpha')
+
+
+def test_two_processes_cannot_both_hold_the_scan_lock(monkeypatch, tmp_path):
+    """The claim and the test have to be one syscall. Read-then-write left a
+    window where a GUI pass and a detached worker both proceeded."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    assert memory.acquire_scan_lock(actual) is True
+    assert memory.acquire_scan_lock(actual) is False
+    memory.clear_scan_lock(actual)
+    assert memory.acquire_scan_lock(actual) is True
+    memory.clear_scan_lock(actual)
+
+
+def test_progress_goes_to_the_project_it_belongs_to(monkeypatch, tmp_path):
+    """One module-global lock root meant two concurrent refreshes wrote each
+    other's progress and the first to finish silenced both."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    a, _e1, _f1, _ = sb.add_project('alpha')
+    b, _e2, _f2, _ = sb.add_project('beta')
+    assert memory.acquire_scan_lock(a) and memory.acquire_scan_lock(b)
+    memory._report_progress('memory 1/9', a)
+    memory._report_progress('memory 4/4', b)
+    assert memory.scan_lock_status(a) == 'memory 1/9'
+    assert memory.scan_lock_status(b) == 'memory 4/4'
+    memory.clear_scan_lock(b)
+    memory._report_progress('memory 2/9', a)
+    assert memory.scan_lock_status(a) == 'memory 2/9', \
+        'clearing one project must not silence the other'
+    memory.clear_scan_lock(a)
+
+
+def test_extract_reports_a_failed_call_as_failure_not_as_emptiness(monkeypatch, tmp_path):
+    """The conversion the loop's guard depends on. `_claude_json` returns None
+    for a timeout, a budget stop or unparseable output; turning that into an
+    empty result is what made a failure look like 'this module has nothing'."""
+    Sandbox(monkeypatch, tmp_path)
+    monkeypatch.setattr(memory, '_claude_json', lambda *a, **k: None)
+    assert memory._extract('some corpus', '.', unit='m/(root)') is None
+
+    monkeypatch.setattr(memory, '_claude_json',
+                        lambda *a, **k: {'summary': 's', 'entities': [], 'relations': []})
+    got = memory._extract('some corpus', '.', unit='m/(root)')
+    assert got == {'summary': 's', 'entities': [], 'relations': []}, \
+        'a genuinely empty module is still a successful answer'
+
+
+# ── the cycle has to make progress, not stall ────────────────
+
+def test_a_capped_cycle_makes_partial_progress_and_converges(monkeypatch, tmp_path):
+    """auto_cap used to be all-or-nothing: more changed units than the cap and
+    the run did NOTHING, so the harder you worked the less memory updated."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    for i in range(5):
+        _mkfile(actual, f'mod{i}/a.py')
+    calls = []
+    _stub(monkeypatch, calls)
+    memory.refresh_memory(actual, folder, 'alpha')      # first build, uncapped
+    for i in range(5):
+        _mkfile(actual, f'mod{i}/a.py', f'changed = {i}\n')
+
+    calls.clear()
+    mem = memory.refresh_memory(actual, folder, 'alpha', auto_cap=2)
+    assert len(calls) == 2, 'it does what it can'
+    assert mem['pending_units'] == 3 and mem['last_extracted'] == 2
+
+    seen = set(calls)
+    for _ in range(4):                                   # further ticks
+        if not memory.is_stale(actual, folder):
+            break
+        calls.clear()
+        memory.refresh_memory(actual, folder, 'alpha', auto_cap=2)
+        seen |= set(calls)
+    assert not memory.is_stale(actual, folder), 'it converges'
+    assert len(seen) == 5, 'and every changed unit was eventually done'
+
+
+def test_auto_memory_can_bootstrap_an_empty_graph(monkeypatch, tmp_path):
+    """is_stale returned False with no entities, so a project you had opted in
+    stayed at zero entities forever and the first build had to be manual."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    _mkfile(actual, 'mod1/a.py')
+    assert memory.load_memory(actual, folder)['entities'] == []
+    assert memory.is_stale(actual, folder) is True
+
+    _stub(monkeypatch)
+    memory.refresh_memory(actual, folder, 'alpha', auto_cap=2)
+    assert memory.load_memory(actual, folder)['entities']
+
+
+def test_an_empty_project_is_not_stale(monkeypatch, tmp_path):
+    """…but a directory with no source is not 'owing a build' forever."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    assert memory.is_stale(actual, folder) is False
+
+
+def test_the_budget_keeps_the_important_units_not_the_biggest(monkeypatch, tmp_path):
+    """Units were taken in file-count order, so a cap kept the largest modules
+    and dropped the entry point — and the coverage-repair units appended by
+    _changed_units sat at the very end, first to be cut by the cap meant to
+    catch up on them."""
+    todo = [('r', 'big', ['f'] * 50), ('r', 'core', ['f']), ('r', 'new', ['f'] * 2)]
+    mem = {'entities': [
+        {'repo': 'r', 'module': 'big', 'rank': 1},
+        {'repo': 'r', 'module': 'core', 'rank': 900},
+    ]}
+    order = [m for _r, m, _fs in memory._prioritise(todo, mem)]
+    assert order[0] == 'new', 'a unit with no entities at all comes first'
+    assert order[1] == 'core', 'then the most depended-on, not the biggest'
+    assert order[2] == 'big'
+
+
+def test_a_capped_cycle_actually_uses_the_priority_order(monkeypatch, tmp_path):
+    """The ordering function is only worth having if refresh_memory calls it."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    _mkfile(actual, 'core/a.py')                       # small
+    for i in range(6):
+        _mkfile(actual, f'big/f{i}.py')                # large
+    _stub(monkeypatch)
+    memory.refresh_memory(actual, folder, 'alpha')
+
+    # make `core` the most depended-on unit, then change both
+    mem = memory.load_memory(actual, folder)
+    for e in mem['entities']:
+        e['rank'] = 900 if e['repo'] == 'core' else 1
+    memory.save_memory(actual, folder, mem)
+    _mkfile(actual, 'core/a.py', 'changed = 1\n')
+    for i in range(6):
+        _mkfile(actual, f'big/f{i}.py', f'changed = {i}\n')
+
+    calls = []
+    _stub(monkeypatch, calls)
+    memory.refresh_memory(actual, folder, 'alpha', auto_cap=1)
+    assert calls == ['core/(root)'], \
+        'one call must go to the important unit, not the largest one'
+
+
+# ── the staleness sweep has to be cheap ──────────────────────
+
+def test_an_unchanged_project_is_not_re_hashed(monkeypatch, tmp_path):
+    """is_stale ran on every scheduler tick and every project open, and read
+    every source file in full to SHA-256 it. Unchanged files are now settled by
+    a stat."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    for i in range(4):
+        _mkfile(actual, f'mod{i}/a.py')
+    _stub(monkeypatch)
+    memory.refresh_memory(actual, folder, 'alpha')
+
+    from claude_sessions import workspace
+    hashed = []
+    real = workspace._sha256_file
+    monkeypatch.setattr(workspace, '_sha256_file',
+                        lambda p: (hashed.append(p), real(p))[1])
+    assert memory.is_stale(actual, folder) is False
+    assert hashed == [], 'nothing changed, so nothing was read'
+
+    _mkfile(actual, 'mod2/a.py', 'changed = 1\n')
+    hashed.clear()
+    assert memory.is_stale(actual, folder) is True
+    assert len(hashed) == 1 and hashed[0].endswith('a.py'), \
+        'only the file whose stat moved is read'
+
+
+def test_a_touched_but_identical_file_costs_no_claude_call(monkeypatch, tmp_path):
+    """The stat is a prefilter, not the answer — content stays the truth, or a
+    `touch` would bill a model call per module."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    p = _mkfile(actual, 'mod1/a.py')
+    calls = []
+    _stub(monkeypatch, calls)
+    memory.refresh_memory(actual, folder, 'alpha')
+    calls.clear()
+
+    os.utime(p, (12345, 12345))                  # mtime moves, bytes do not
+    assert memory.is_stale(actual, folder) is False
+    memory.refresh_memory(actual, folder, 'alpha')
+    assert calls == []
+
+
+def test_a_graph_written_before_signatures_existed_still_works(monkeypatch, tmp_path):
+    """Provenance records with only a hash must not read as 'changed'."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    _mkfile(actual, 'mod1/a.py')
+    _stub(monkeypatch)
+    memory.refresh_memory(actual, folder, 'alpha')
+
+    mem = memory.load_memory(actual, folder)
+    mem['provenance'] = {rel: {'hash': v['hash']}      # strip the signatures
+                         for rel, v in mem['provenance'].items()}
+    memory.save_memory(actual, folder, mem)
+    assert memory.is_stale(actual, folder) is False
+
+
+# ── the edit signal ──────────────────────────────────────────
+
+def test_the_edit_hook_records_what_claude_changed(monkeypatch, tmp_path):
+    from claude_sessions import memdirty_hook
+    cwd = str(tmp_path)
+    memdirty_hook.record(cwd, os.path.join(cwd, 'a.py'))
+    memdirty_hook.record(cwd, os.path.join(cwd, 'b.py'))
+    assert memory.has_dirty(cwd) is True
+    got = memory.drain_dirty(cwd)
+    assert {os.path.basename(p) for p in got} == {'a.py', 'b.py'}
+    assert memory.has_dirty(cwd) is False, 'draining clears it'
+    assert memory.drain_dirty(cwd) == set()
+
+
+def test_a_staleness_probe_does_not_eat_the_edit_signal(monkeypatch, tmp_path):
+    """is_stale runs on every tick and every project open; if the probe drained
+    the log, the refresh that followed would find nothing to prioritise."""
+    from claude_sessions import memdirty_hook
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    _mkfile(actual, 'mod1/a.py')
+    _stub(monkeypatch)
+    memory.refresh_memory(actual, folder, 'alpha')
+
+    memdirty_hook.record(actual, os.path.join(actual, 'mod1', 'a.py'))
+    assert memory.is_stale(actual, folder) is True
+    assert memory.is_stale(actual, folder) is True, 'probing twice is still true'
+    assert memory.has_dirty(actual), 'the signal survives the probe'
+    memory.refresh_memory(actual, folder, 'alpha')
+    assert not memory.has_dirty(actual), 'the refresh consumes it'
+
+
+def test_an_edited_unit_is_extracted_first(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    from claude_sessions import memdirty_hook
+    actual, enc, folder, _ = sb.add_project('alpha')
+    _mkfile(actual, 'mod1/a.py')
+    for i in range(4):
+        _mkfile(actual, f'big/f{i}.py')
+    _stub(monkeypatch)
+    memory.refresh_memory(actual, folder, 'alpha')
+
+    _mkfile(actual, 'mod1/a.py', 'changed = 1\n')
+    for i in range(4):
+        _mkfile(actual, f'big/f{i}.py', f'changed = {i}\n')
+    memdirty_hook.record(actual, os.path.join(actual, 'mod1', 'a.py'))
+
+    calls = []
+    _stub(monkeypatch, calls)
+    memory.refresh_memory(actual, folder, 'alpha', auto_cap=1)
+    assert calls == ['mod1/(root)'], 'the unit you just edited goes first'
+
+
+def test_the_dirty_log_only_records_edit_tools(monkeypatch, tmp_path):
+    """A PostToolUse payload for a Read or a Bash must not mark anything."""
+    from claude_sessions import memdirty_hook
+    cwd = str(tmp_path)
+    assert memdirty_hook.record(cwd, '') == 0
+    assert memory.has_dirty(cwd) is False

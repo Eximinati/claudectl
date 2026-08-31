@@ -80,10 +80,38 @@ def load_memory(project_path, proj_folder=None):
     return _empty()
 
 
+def _snapshot_if_shrinking(project_path, proj_folder, new):
+    """Snapshot the graph before a save that LOSES entities.
+
+    Only on shrink: every refresh saves, and versioning every one of them would
+    push the interesting snapshot out of the ring within an hour. Eviction and
+    decay are the operations a user needs to be able to walk back, and they are
+    exactly the ones that shrink it. Best-effort, never blocks the save."""
+    try:
+        for d in _mem_dirs(project_path, proj_folder):
+            p = os.path.join(d, GRAPH_NAME)
+            if not os.path.isfile(p):
+                continue
+            old_text = open(p, encoding='utf-8', errors='ignore').read()
+            try:
+                old_n = len(json.loads(old_text).get('entities') or [])
+            except Exception:
+                return
+            if old_n <= len(new.get('entities') or []):
+                return
+            from . import diffview
+            diffview.record(project_path, proj_folder, 'memory_graph',
+                            old_text, json.dumps(new, indent=1))
+            return
+    except Exception:
+        pass
+
+
 def save_memory(project_path, proj_folder, m):
     # Write to BOTH the working-dir and encoded-folder locations so the graph
     # is discoverable for cross-project scanning (conventions) regardless of
     # which one a caller resolves. Success if at least one write lands.
+    _snapshot_if_shrinking(project_path, proj_folder, m)
     ok = False
     for d in _mem_dirs(project_path, proj_folder):
         try:
@@ -99,16 +127,6 @@ def save_memory(project_path, proj_folder, m):
     return ok
 
 
-def clear_memory(project_path, proj_folder=None):
-    for d in _mem_dirs(project_path, proj_folder):
-        p = os.path.join(d, GRAPH_NAME)
-        if os.path.isfile(p):
-            try:
-                os.remove(p)
-            except Exception:
-                pass
-
-
 # ── cross-process scan lock ──────────────────────────────────
 # The background memory update runs in a DETACHED worker process (see
 # spawn_background_worker) so it survives the TUI exiting to launch claude.
@@ -117,7 +135,13 @@ def clear_memory(project_path, proj_folder=None):
 
 SCAN_LOCK = 'scan.lock'
 SCAN_LOCK_STALE_SEC = 900
-_scan_lock_root = None      # set while THIS process holds the lock
+#: projects THIS process currently holds a lock for. A single global root meant
+#: two concurrent refreshes (the on-open async one can overlap a scheduler pass)
+#: shared one slot: the second acquirer overwrote it, so one project's progress
+#: was written into the other's lock file and whichever finished first cleared
+#: reporting for both.
+_scan_lock_roots = set()
+_scan_lock_root = None      # deprecated alias, kept for tests that monkeypatch it
 
 
 def _scan_lock_path(project_path):
@@ -163,23 +187,38 @@ def scan_lock_status(project_path):
 
 
 def acquire_scan_lock(project_path):
-    """Claim the scan lock for THIS process. False if a live worker holds it."""
+    """Claim the scan lock for THIS process. False if a live worker holds it.
+
+    O_CREAT|O_EXCL, so the claim is the same syscall as the test. The old
+    read-then-write left a window in which the GUI and a detached worker could
+    both see 'free' and both proceed to read-modify-write the same graph."""
     global _scan_lock_root
     import time
     p = _scan_lock_path(project_path)
     if not p:
         return False
-    if _read_scan_lock(project_path) is not None:
-        return False
+    _read_scan_lock(project_path)       # reclaims a dead worker's lock, if any
     try:
         os.makedirs(os.path.dirname(p), exist_ok=True)
-        with open(p, 'w', encoding='utf-8') as f:
-            json.dump({'pid': os.getpid(), 'started': _iso(),
-                       'updated': time.time(), 'progress': ''}, f)
-        _scan_lock_root = os.path.abspath(project_path)
-        return True
+        fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False                    # a live worker holds it
     except Exception:
         return False
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump({'pid': os.getpid(), 'started': _iso(),
+                       'updated': time.time(), 'progress': ''}, f)
+    except Exception:
+        try:
+            os.remove(p)                # never leave a lock we cannot describe
+        except OSError:
+            pass
+        return False
+    root = os.path.abspath(project_path)
+    _scan_lock_roots.add(root)
+    _scan_lock_root = root
+    return True
 
 
 def clear_scan_lock(project_path):
@@ -190,17 +229,56 @@ def clear_scan_lock(project_path):
             os.remove(p)
         except Exception:
             pass
-    if _scan_lock_root == os.path.abspath(project_path or ''):
-        _scan_lock_root = None
+    root = os.path.abspath(project_path or '')
+    _scan_lock_roots.discard(root)
+    if _scan_lock_root == root:
+        _scan_lock_root = next(iter(_scan_lock_roots), None)
 
 
-def _report_progress(text):
+class MemoryBusy(RuntimeError):
+    """Another process is already scanning this project."""
+
+
+class scan_guard:
+    """Hold the scan lock for one refresh — unless this process already holds it.
+
+    The lock lived at the CALLERS: the GUI job, the scheduler and the detached
+    worker each acquired it, while the three manual TUI builds
+    (`connections` 'm', `memhub` 'b', `session_menu` '!') took no lock at all
+    and read-modify-wrote the same graph.json as a running worker, last writer
+    winning whole-file. Guarding the function every one of them calls is one
+    place instead of four, and it stays correct for the next caller.
+
+    Re-entrant by design: `auto_cycle`'s callers legitimately hold the lock
+    around the whole cycle, so a nested acquire must be a no-op, not a failure.
+    """
+
+    def __init__(self, project_path):
+        self.root = os.path.abspath(project_path) if project_path else ''
+        self.mine = False
+
+    def __enter__(self):
+        if not self.root or self.root in _scan_lock_roots:
+            return self
+        if not acquire_scan_lock(self.root):
+            raise MemoryBusy('a memory scan is already running for this project')
+        self.mine = True
+        return self
+
+    def __exit__(self, *exc):
+        if self.mine:
+            clear_scan_lock(self.root)
+        return False
+
+
+def _report_progress(text, project_path=None):
     """Update the scan-lock progress line — no-op unless this process holds a
     lock (foreground refresh/scan calls this too; it must stay silent there)."""
     import time
-    if not _scan_lock_root:
+    root = os.path.abspath(project_path) if project_path else _scan_lock_root
+    if not root or root not in _scan_lock_roots:
         return
-    p = _scan_lock_path(_scan_lock_root)
+    p = _scan_lock_path(root)
     try:
         with open(p, 'w', encoding='utf-8') as f:
             json.dump({'pid': os.getpid(), 'started': _iso(),
@@ -439,8 +517,13 @@ def _extract(corpus_text, cwd, unit='', progress=''):
     label = f"Analyzing {unit} with Claude...  {progress}".strip()
     data = _claude_json(prompt, cwd, GRAPH_SCHEMA,
                         crumbs=('CLAUDECTL', 'MEMORY', unit or 'EXTRACT'), label=label)
+    # None means the CALL failed (timeout, budget, unparseable) — which is a
+    # different fact from "this module has no entities", and the caller must be
+    # able to tell them apart. Returning an empty result for a failure made the
+    # loop invalidate every fact it already knew about the module AND record its
+    # hashes as current, so the module's memory was wiped and never retried.
     if not isinstance(data, dict):
-        return {'summary': '', 'entities': [], 'relations': []}
+        return None
     return {'summary': data.get('summary', '') or '',
             'entities': data.get('entities', []) or [],
             'relations': data.get('relations', []) or []}
@@ -547,18 +630,125 @@ def _read(f):
 
 # ── refresh (cognify) — per repo/module, whole project ───────
 
+def _project_opts(project_path, encoded=None):
+    from .config import load_settings
+    st = load_settings()
+    if encoded is None:
+        try:
+            from .paths import encode_component
+            encoded = encode_component(os.path.abspath(project_path or ''))
+        except Exception:
+            encoded = ''
+    return st, (st.get('project_defaults') or {}).get(encoded) or {}
+
+
+def auto_enabled(project_path, encoded=None):
+    """Is this project opted into BACKGROUND auto-memory?
+
+    One answer for every runner that schedules work on its own: the GUI's
+    periodic pass, the TUI's, and the detached worker. The flag it reads is the
+    same `project_defaults[enc].auto_memory` the GUI checkbox writes — which
+    previously only the GUI scheduler consulted, so ticking the box did nothing
+    outside a running GUI window and the TUI had no way to set it at all.
+
+    Explicit opt-in, deliberately: a machine-wide default here would mean an
+    hourly Claude spend on every project claudectl can see."""
+    _st, proj = _project_opts(project_path, encoded)
+    return bool(proj.get('auto_memory'))
+
+
+def refresh_on_open(project_path, encoded=None):
+    """Should opening this project kick off a refresh?
+
+    A different question from `auto_enabled` — this one is scoped to something
+    you just did, so the global `memory_auto_refresh` remains its default and
+    the long-standing behaviour is unchanged. Opting a project into background
+    memory implies it."""
+    st, proj = _project_opts(project_path, encoded)
+    if proj.get('auto_memory'):
+        return True
+    if 'auto_memory' in proj:
+        return False                       # explicitly turned off
+    return st.get('memory_auto_refresh') == 'open'
+
+
+def drain_dirty(project_path):
+    """Paths the stale-on-edit hook recorded since the last cycle, and clear it.
+
+    Read-and-remove, like `recall.fold_hits`: the log is a hint that work is
+    owed, and a hint consumed twice is a wasted call. Returns a set of absolute
+    paths (empty when the hook is not installed, which is the normal case)."""
+    from .memdirty_hook import dirty_log_path
+    p = dirty_log_path(os.path.abspath(project_path or ''))
+    out = set()
+    try:
+        if not os.path.isfile(p):
+            return out
+        with open(p, encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    out.add(os.path.abspath(line))
+        os.remove(p)
+    except Exception:
+        pass
+    return out
+
+
+def has_dirty(project_path):
+    """True if the edit hook recorded anything — checked WITHOUT draining, so a
+    staleness probe never eats the signal a refresh still needs."""
+    try:
+        from .memdirty_hook import dirty_log_path
+        p = dirty_log_path(os.path.abspath(project_path or ''))
+        return os.path.isfile(p) and os.path.getsize(p) > 0
+    except Exception:
+        return False
+
+
+def _file_sig(path):
+    """(mtime_ns, size) — the cheap half of the change check."""
+    try:
+        st = os.stat(path)
+        return [st.st_mtime_ns, st.st_size]
+    except OSError:
+        return None
+
+
 def _changed_units(root, units, mem):
     """(todo, deleted, cur_hashes): units whose representative files changed or
     that the current graph doesn't cover yet, plus tracked files now gone.
-    Hash-only — no Claude calls. Shared by refresh_memory and is_stale."""
+    No Claude calls. Shared by refresh_memory and is_stale.
+
+    A file is re-hashed only when its (mtime, size) differs from the recorded
+    signature. Content hash stays the source of truth — a file touched but not
+    changed must not cost a Claude call — but an unchanged tree now costs one
+    `stat` per file instead of a full SHA-256 read of the whole project, which
+    is what this paid on every scheduler tick and every project open. Same idea
+    as the hash tree Cursor walks: compare cheaply, descend only where it
+    differs. Records with no signature (written before this existed) hash once
+    and gain one.
+    """
     from .workspace import _sha256_file
     prov = mem.get('provenance', {})
     cur_hashes = {}
+    cur_sigs = {}
     todo = []
     for repo, module, fs in units:
-        h = {_rel(root, f): _sha256_file(f) for f in fs}
-        cur_hashes.update(h)
-        if any(prov.get(rel, {}).get('hash') != hv for rel, hv in h.items()):
+        changed = False
+        for f in fs:
+            rel = _rel(root, f)
+            old = prov.get(rel) or {}
+            sig = _file_sig(f)
+            cur_sigs[rel] = sig
+            if sig is not None and old.get('sig') == sig and old.get('hash'):
+                cur_hashes[rel] = old['hash']       # unchanged on disk
+                continue
+            hv = _sha256_file(f)
+            cur_hashes[rel] = hv
+            if old.get('hash') != hv:
+                changed = True
+        if changed:
             todo.append((repo, module, fs))
     # key-scheme drift (e.g. v1→v2 module remap): units with unchanged hashes
     # but no entities under the current key must still be (re)extracted
@@ -570,18 +760,73 @@ def _changed_units(root, units, mem):
                 todo.append((repo, module, fs))
                 todo_keys.add((repo, module))
     deleted = [rel for rel in prov if rel not in cur_hashes]
-    return todo, deleted, cur_hashes
+    cur = {rel: {'hash': h, 'sig': cur_sigs.get(rel)} for rel, h in cur_hashes.items()}
+    return todo, deleted, cur
+
+
+def _stamp_fresh(project_path, proj_folder):
+    """Re-baseline workspace freshness against the CURRENT repo state.
+
+    Called whenever memory is confirmed to match the code — after a refresh, and
+    after a check that found nothing to do. Both mean the same thing to the
+    freshness score, and only the first one used to say so."""
+    try:
+        from . import workspace
+        workspace.update_manifest(project_path, proj_folder, 'memory')
+    except Exception:
+        _c.log.exception('memory: freshness stamp failed')
+
+
+def _prioritise(todo, mem, edited=()):
+    """Order the units a cycle will extract, most valuable first.
+
+    Two problems with taking them in `_units` order, which is by file COUNT:
+    the budget then keeps the biggest modules and drops the important small
+    ones (a repo's entry point is rarely its largest directory), and the
+    coverage-repair units appended by `_changed_units` land at the very end,
+    making them the first casualties of the cap that was meant to catch up on
+    them. Rank by dependency degree — the measure the graph already computes,
+    and the same signal Aider's repo map ranks on — with never-covered units
+    first because a unit with no entities at all contributes nothing until it
+    is extracted once.
+    """
+    rank = {}
+    covered = set()
+    for e in mem.get('entities', []):
+        key = (e.get('repo'), e.get('module'))
+        covered.add(key)
+        rank[key] = max(rank.get(key, 0), e.get('rank', 0) or 0)
+    edited = {os.path.abspath(p) for p in (edited or ())}
+
+    def _key(u):
+        repo, module, fs = u
+        just_edited = bool(edited) and any(os.path.abspath(f) in edited for f in fs)
+        return (not just_edited,                          # what you just touched
+                (repo, module) in covered,                # then never-covered
+                -rank.get((repo, module), 0),             # then most-depended-on
+                -len(fs))                                 # then biggest
+
+    return sorted(todo, key=_key)
 
 
 def is_stale(project_path, proj_folder):
     """True if the project's source changed since its memory graph was built —
-    a cheap hash-only check (no Claude). Returns False when there's no graph yet
-    (first build stays manual, matching the TUI). Used to decide whether an
-    auto-refresh is actually worth running."""
+    a cheap hash-only check (no Claude). Used to decide whether an auto-refresh
+    is worth running.
+
+    An empty graph counts as stale. It used to return False, which meant
+    auto-memory could never BOOTSTRAP: a project you had opted in stayed at zero
+    entities forever, and the only way to start was a manual build. That guard
+    existed because a first build was all-or-nothing and expensive; now a cycle
+    takes `auto_cap` units at a time and the rest wait for the next one, so a
+    first build is just a longer sequence of budgeted cycles."""
     try:
+        # the edit hook already said so — no walk, no stat, no hashing
+        if has_dirty(project_path):
+            return True
         mem = load_memory(project_path, proj_folder)
         if not mem.get('entities'):
-            return False
+            return bool(_units(project_path, proj_folder))
         root = os.path.abspath(project_path)
         units = _units(project_path, proj_folder)
         todo, deleted, _ = _changed_units(root, units, mem)
@@ -594,28 +839,63 @@ def is_stale(project_path, proj_folder):
 def refresh_memory(project_path, proj_folder, project_name, auto_cap=None):
     """(Re)extract the semantic graph across EVERY repo and its important
     modules. Incremental by file hash; only changed modules are re-analyzed.
-    `auto_cap`: if set and the number of changed units exceeds it, do nothing
-    and return the current graph tagged `auto_skipped` (used by the auto-refresh
-    path so a big rebuild never runs silently on project open)."""
+
+    `auto_cap`: how many changed units one cycle may extract. The rest are left
+    in `pending_units` for the next cycle rather than abandoning the run — see
+    the note in the body.
+
+    Raises MemoryBusy if another process is already scanning this project."""
+    with scan_guard(project_path):
+        return _refresh_locked(project_path, proj_folder, project_name, auto_cap)
+
+
+def _refresh_locked(project_path, proj_folder, project_name, auto_cap=None):
     from .config import load_settings
     root = os.path.abspath(project_path)
     mem = load_memory(project_path, proj_folder)
     prov = mem.get('provenance', {})
     units = _units(project_path, proj_folder)
 
+    # consumed here rather than in is_stale: a probe must not eat the signal a
+    # refresh still needs. The paths only reorder work — the hash gate below is
+    # still what decides whether a unit is genuinely changed.
+    edited = drain_dirty(project_path)
+
     todo, deleted, cur_hashes = _changed_units(root, units, mem)
     if not todo and not deleted and mem.get('entities'):
+        mem['last_extracted'] = 0        # nothing to do is not "we did work"
+        # Reinforcement still has to land. fold_hits ran ONLY in the full path
+        # below, and this early return is the common case on a settled repo —
+        # so on this very project the sidecar held 807 recorded hits while the
+        # highest `hits` value in the graph was 1. The counter that decides
+        # what eviction keeps was, in practice, never incremented.
+        try:
+            from .recall import fold_hits
+            if fold_hits(project_path, proj_folder, mem):
+                save_memory(project_path, proj_folder, mem)
+        except Exception:
+            _c.log.exception('memory: folding recall hits failed')
+        # …but it IS a verification that the memory matches the code right now,
+        # which is a stronger statement than "we did work" and the one the
+        # freshness score asks for. Without it, a commit that touched no source
+        # file (docs, a README) moved HEAD, nothing needed re-extracting, and
+        # the workspace screen reported the project stale while auto-memory was
+        # switched on and working perfectly. Costs no Claude call.
+        _stamp_fresh(project_path, proj_folder)
         return mem
+    todo = _prioritise(todo, mem, edited)
 
-    if auto_cap is not None and len(todo) > auto_cap and mem.get('entities'):
-        mem['auto_skipped'] = len(todo)              # too big for a silent refresh
-        return mem
-
+    # How much this cycle may do. `auto_cap` used to be all-or-nothing: more
+    # changed units than the cap and the whole run returned having done NOTHING,
+    # so the harder you worked the less memory updated — and because provenance
+    # is now only advanced for units actually extracted, the remainder is simply
+    # picked up by the next cycle. A busy repo converges instead of stalling.
     max_calls = load_settings().get('memory_max_calls') or None
+    budget = min(x for x in (auto_cap, max_calls) if x) if (auto_cap or max_calls) else None
     skipped_units = 0
-    if max_calls:
-        skipped_units = max(0, len(todo) - max_calls)
-        todo = todo[:max_calls]
+    if budget:
+        skipped_units = max(0, len(todo) - budget)
+        todo = todo[:budget]
 
     touched_units = {(r, m) for r, m, _ in todo}
     current_units = {(r, m) for r, m, _ in units}          # units that still exist
@@ -648,14 +928,31 @@ def refresh_memory(project_path, proj_folder, project_name, auto_cap=None):
 
     n = len(todo)
     done_hashes = {}
+    done_units = []
+    failed_units = 0
+    spent = 0.0
     for i, (repo, module, fs) in enumerate(todo):
         unit = f"{repo}/{module}"
-        summaries.pop(unit, None)
-        relations = [r for r in relations if r.get('unit') != unit]
         corpus = _unit_corpus(root, _representative(fs))
         if not corpus.strip():
             continue
+        # Extract BEFORE discarding what we already know. The old order popped
+        # the unit's summary and relations first, so a failed or empty call left
+        # the module stripped of everything and nothing to put back.
         ex = _extract(corpus, root, unit=unit, progress=f"({i + 1}/{n})")
+        # the real figure from the headless JSON envelope, which was recorded
+        # and then read by nothing outside the tests — so what a cycle costs
+        # has never been visible anywhere in the product
+        if last_call_cost:
+            spent += last_call_cost
+        if ex is None:
+            # the call failed: keep the old facts, do NOT record these hashes,
+            # and count the unit so the next cycle picks it up again
+            failed_units += 1
+            _report_progress(f"memory {i + 1}/{n}", project_path)
+            continue
+        summaries.pop(unit, None)
+        relations = [r for r in relations if r.get('unit') != unit]
         if ex.get('summary'):
             summaries[unit] = ex['summary']
         rel0 = _rel(root, fs[0])
@@ -695,32 +992,48 @@ def refresh_memory(project_path, proj_folder, project_name, auto_cap=None):
         # so an interruption keeps completed work. Entities of touched units
         # not yet re-extracted ride along unchanged, and provenance advances
         # only for processed units so the rest re-extract on the next run.
+        done_units.append(unit)
         for f in fs:
             rel = _rel(root, f)
-            done_hashes[rel] = cur_hashes.get(rel)
+            if rel in cur_hashes:
+                done_hashes[rel] = cur_hashes[rel]
         if i < n - 1:                        # last unit → the full save below
             snap = dict(mem)
             snap['entities'] = kept + list(prev_touched.values())
             snap['relations'] = relations
             snap['summaries'] = summaries
-            snap['provenance'] = {**prov,
-                                  **{r: {'hash': h} for r, h in done_hashes.items()}}
+            snap['provenance'] = {**prov, **done_hashes}
             snap['generated_at'] = _iso()
             save_memory(project_path, proj_folder, snap)
-        _report_progress(f"memory {i + 1}/{n}")
+        _report_progress(f"memory {i + 1}/{n}", project_path)
         from .gui_api import JobCancelled, _JOBCTX
         _job = getattr(_JOBCTX, 'job', None)
         if _job and _job.get('cancel_event', threading.Event()).is_set():
             raise JobCancelled
 
+    # Entities of touched units that were never reached — an empty corpus or a
+    # failed call — ride along unchanged. The checkpoint at the top of the loop
+    # already did this; the final write did not, so anything skipped on the LAST
+    # pass was silently dropped.
+    kept = kept + list(prev_touched.values())
+
     module_edges, unit_rank = _module_graph(project_path, proj_folder, units)
     for e in kept:
         e['rank'] = unit_rank.get((e.get('repo'), e.get('module')), 0)
 
+    # Provenance advances ONLY for units actually extracted, exactly as the
+    # per-unit checkpoint does. Writing every hash here is what let a truncated
+    # or failed run mark unprocessed units current: the hash gate then said
+    # "unchanged" forever and the stale facts were never revisited.
+    new_prov = {rel: v for rel, v in prov.items() if rel in cur_hashes}
+    new_prov.update(done_hashes)
+
     mem.update({'entities': kept, 'relations': relations, 'summaries': summaries,
-                'provenance': {rel: {'hash': h} for rel, h in cur_hashes.items()},
+                'provenance': new_prov,
                 'module_edges': module_edges,
-                'pending_units': skipped_units,
+                'last_extracted': len(done_units),
+                'last_cost_usd': round(spent, 4),
+                'pending_units': skipped_units + failed_units,
                 'repo_summaries': _rollup_summaries(units, summaries, unit_rank),
                 'generated_at': _iso()})
     # Reinforcement counts recorded by the per-prompt recall hook. Folded in
@@ -732,18 +1045,18 @@ def refresh_memory(project_path, proj_folder, project_name, auto_cap=None):
     except Exception:
         _c.log.exception('memory: folding recall hits failed')
     _consolidate(mem)
-    save_memory(project_path, proj_folder, mem)
+    # This run paid for one Claude call per unit. Losing it quietly is the one
+    # outcome worse than not running at all, and save_memory's False return had
+    # no reader anywhere.
+    if not save_memory(project_path, proj_folder, mem):
+        raise OSError('memory: could not write graph.json to either location')
     sync_to_claudemd(project_path, proj_folder, mem)
     try:
         from .memrules import sync_rules
         sync_rules(project_path, proj_folder, mem)
     except Exception:
         _c.log.exception('memory: rules sync failed')
-    try:
-        from . import workspace
-        workspace.update_manifest(project_path, proj_folder, 'memory')
-    except Exception:
-        pass
+    _stamp_fresh(project_path, proj_folder)
     return mem
 
 
@@ -784,23 +1097,37 @@ def _consolidate(mem):
             cur['modules'].append(u)
         if len(e.get('summary', '')) > len(cur.get('summary', '')):
             cur['summary'] = e['summary']            # keep the richer summary
+        if e.get('status') == 'pinned':
+            cur['status'] = 'pinned'                 # a pin survives the merge
     reg = list(merged.values())
 
     # 2. importance cap — score = dependency rank + access reinforcement (hits).
     #    Useful, frequently-recalled knowledge stays; dead knowledge is evicted.
-    dropped = 0
-    if len(reg) > cap:
+    #    Pinned entities are held out of the cap entirely: if you pinned more
+    #    than the cap allows, the pins win and the cap gives way, not the
+    #    reverse. Nothing a user explicitly protected is dropped to satisfy it.
+    #    Pinning reached lessons only before this, so the cap could silently
+    #    drop the very fact you had marked as the one that matters.
+    pinned = [e for e in reg if e.get('status') == 'pinned']
+    reg = [e for e in reg if e.get('status') != 'pinned']
+    room = max(0, cap - len(pinned))
+    evicted = []
+    if len(reg) > room:
         reg.sort(key=lambda e: (e.get('rank', 0) + e.get('hits', 0) * 2,
                                 len(e.get('summary', ''))), reverse=True)
-        dropped = len(reg) - cap
-        reg = reg[:cap]
+        evicted = [e.get('name', '') for e in reg[room:]]
+        reg = reg[:room]
 
+    reg = pinned + reg
     mem['entities'] = reg + lessons + invalid
     kept_names = {e.get('name') for e in reg}
     mem['relations'] = [r for r in mem.get('relations', [])
                         if r.get('source') in kept_names and r.get('target') in kept_names]
     _add_unlinked_mentions(mem, reg)
-    mem['evicted_entities'] = dropped
+    mem['evicted_entities'] = len(evicted)
+    # names, not just a count: "12 entities evicted" is not something a user can
+    # check, and checking is the whole point of telling them
+    mem['evicted_names'] = evicted[:50]
     return mem
 
 
@@ -913,10 +1240,15 @@ def auto_cycle(project_path, proj_folder, project_name, auto_cap=6):
     """
     from .config import load_settings
     st = load_settings()
-    out = {'graph': False, 'lessons': 0, 'scanned': 0}
+    out = {'graph': False, 'lessons': 0, 'scanned': 0, 'pending': 0}
 
     mem = refresh_memory(project_path, proj_folder, project_name, auto_cap=auto_cap)
-    out['graph'] = not mem.get('auto_skipped')
+    # "how many units did this cycle actually re-extract" — not "was everything
+    # done". A capped cycle now makes partial progress, and reporting that as a
+    # no-op is what let the UI claim nothing happened after paying for calls.
+    out['graph'] = int(mem.get('last_extracted') or 0) > 0
+    out['extracted'] = int(mem.get('last_extracted') or 0)
+    out['pending'] = int(mem.get('pending_units') or 0)
 
     # 'off' is a real answer and is honoured; 'prompt' still mines here, because
     # the prompt is about REVIEWING lessons, not about whether to notice them.

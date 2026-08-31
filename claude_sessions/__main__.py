@@ -14,6 +14,27 @@ if len(sys.argv) >= 2 and sys.argv[1] == 'statusline':
     from .statusline import main
     raise SystemExit(main(sys.argv[2:]))
 
+# `--help` before `main`, for the same reason and one of its own: the first
+# thing a new install types must not pay for the TUI stack, and must not be
+# breakable by anything in it. `cli` imports the standard library only.
+if len(sys.argv) >= 2 and sys.argv[1] in ('--help', '-h', 'help'):
+    from .cli import print_help
+    print_help()
+    raise SystemExit(0)
+if len(sys.argv) >= 2 and sys.argv[1] in ('--version', '-V'):
+    from .cli import print_version
+    print_version()
+    raise SystemExit(0)
+
+# A scheduled background loop, run by Task Scheduler or cron every N minutes.
+# HERE, above `main`, for the same reason as the statusline: this fires
+# unattended forever, so it must not import the TUI stack to run one headless
+# `claude -p`. `loops` reaches config/proc and nothing else.
+if len(sys.argv) >= 3 and sys.argv[1] == '--loop-run':
+    from .loops import run_once
+    _cfg = sys.argv[sys.argv.index('--cfgdir') + 1] if '--cfgdir' in sys.argv else None
+    raise SystemExit(run_once(sys.argv[2], _cfg))
+
 # The deferred self-upgrade worker (versions.update_self spawns it). Dispatched
 # HERE for a second reason on top of the statusline's: pip is about to replace
 # every file in this package, so the worker must hold no lazy import of one.

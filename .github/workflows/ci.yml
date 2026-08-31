@@ -101,6 +101,23 @@ jobs:
           & $py -c "import claude_sessions.gui_html as g, sys; sys.exit(0 if len(g.PAGE) > 10000 and g.VENDOR_FILES else 1)"
           if ($LASTEXITCODE -ne 0) { throw 'the wheel is missing shipped data files' }
 
+      # The one command a fresh install types. Run from the INSTALLED console
+      # script, not from the source tree: the point is that the released
+      # artifact answers it, and reports the version it really is.
+      - name: The installed console script answers --help
+        shell: pwsh
+        run: |
+          $exe = if ($IsWindows -eq $false) { '.wheeltest/bin/claudectl' }
+                 else { '.wheeltest\Scripts\claudectl.exe' }
+          $help = & $exe --help
+          if ($LASTEXITCODE -ne 0) { throw 'claudectl --help failed' }
+          if ($help -notmatch 'USAGE' -or $help -notmatch 'COMMANDS') {
+            throw 'claudectl --help printed no usage'
+          }
+          $ver = (& $exe --version).Trim()
+          $want = python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          if ($ver -ne $want.Trim()) { throw "claudectl --version says $ver, pyproject says $want" }
+
   plugin:
     # The same validation the community plugin review runs. Cheap, and the
     # failure it catches — a manifest a user cannot install — is invisible

@@ -519,12 +519,261 @@ def sync_project_agents(project_path, refs, omniroute=False):
             os.remove(manifest_path)
     except Exception:
         pass
+    # Installing an agent is only half of getting it used — see the note above
+    # write_routing_block. Refreshed here so the table can never describe a
+    # selection that is no longer on disk.
+    try:
+        write_routing_block(project_path)
+        write_agent_index(project_path)
+    except Exception:
+        pass
     return len(written)
 
 
 # Inline --agents JSON rides the command line (Windows ~32KB cap). Past this
 # many agents the launch can fail, so warn the user.
 SAFE_AGENT_LIMIT = 10
+
+
+# ── making the installed agents actually get used ────────────
+#
+# Copying agent files into <project>/.claude/agents/ makes them AVAILABLE.
+# It does not make them used: Claude Code decides to delegate by matching the
+# task against each agent's `description`, and library descriptions are written
+# as catalogue entries ("Use this agent when building server-side APIs…"), which
+# read as documentation rather than as a trigger. The result is the complaint
+# this exists to answer — a project carrying ten agents that never fire.
+#
+# The lever is CLAUDE.md, because it is the one thing read on EVERY turn. A
+# short delegation table there turns "these exist somewhere" into "for this kind
+# of work, hand it to this one". It is written from the agents' own frontmatter,
+# so it cannot drift from what is installed, and it is a sentinel block, so it
+# is replaced rather than appended and disappears when the selection empties.
+
+def _first_sentence(text, cap=150):
+    t = ' '.join((text or '').split())
+    # library descriptions open with "Use this agent when/for …" — that clause
+    # IS the trigger, so keep it and drop the rest of the catalogue prose
+    for stop in ('. ', '; '):
+        if stop in t:
+            t = t.split(stop)[0]
+            break
+    t = re.sub(r'(?i)^use (?:this|the) agent (?:when|for|to)\s*', '', t).strip()
+    return (t[:cap - 1] + '…') if len(t) > cap else t
+
+
+def routing_table(project_path):
+    """[(name, trigger)] for the agents installed in this project, in the order
+    Claude will see them."""
+    dest = os.path.join(project_path, '.claude', 'agents')
+    return [(name, _first_sentence(desc))
+            for name, desc, _model, _path in list_agents(dest)]
+
+
+#: what the per-turn nudge hook reads. A hook that fires on every prompt must
+#: not open and parse every agent file, so `sync_project_agents` writes this one
+#: small index instead — the cost rule this codebase learned from the recall
+#: hook's counters and the worklog hook's transcript re-scan.
+AGENT_INDEX = '.claudectl-agents.json'
+
+_KW = re.compile(r'[a-z][a-z0-9+#._-]{2,}')
+_KW_STOP = {'the', 'and', 'for', 'with', 'this', 'that', 'when', 'use', 'used',
+            'using', 'agent', 'agents', 'code', 'project', 'file', 'files',
+            'from', 'into', 'your', 'you', 'are', 'was', 'has', 'have', 'not',
+            'but', 'can', 'all', 'any', 'run', 'make', 'need', 'want', 'like',
+            'also', 'more', 'than', 'then', 'them', 'invoke', 'proactively'}
+
+
+def keywords_for(name, description, cap=24):
+    """The words that should make this agent come to mind.
+
+    Taken from the description because that is what Claude Code itself matches
+    on — the hook and the model are then looking at the same text, rather than
+    at two ideas of what the agent is for."""
+    words = [w for w in _KW.findall(('%s %s' % (name, description)).lower())
+             if w not in _KW_STOP]
+    seen, out = set(), []
+    for w in words:
+        if w not in seen:
+            seen.add(w)
+            out.append(w)
+    return out[:cap]
+
+
+def write_agent_index(project_path):
+    """Refresh `.claude/.claudectl-agents.json` from what is installed."""
+    import json
+    dest = os.path.join(project_path, '.claude', 'agents')
+    rows = [{'name': name, 'keywords': keywords_for(name, desc)}
+            for name, desc, _m, _p in list_agents(dest)]
+    path = os.path.join(project_path, '.claude', AGENT_INDEX)
+    if not rows:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return 0
+    _c.write_atomic(path, json.dumps({'agents': rows}, indent=1))
+    return len(rows)
+
+
+def write_routing_block(project_path):
+    """Refresh the CLAUDECTL:AGENTS block in <project>/CLAUDE.md from what is
+    actually installed. Removes it when no agents are. Returns the row count."""
+    from .claude_md import upsert_block
+    from .config import _AGENTS_START, _AGENTS_END
+    rows = routing_table(project_path)
+    if not rows:
+        upsert_block(project_path, _AGENTS_START, _AGENTS_END, '')
+        return 0
+    lines = '\n'.join('- **%s** — %s' % (n, t or 'see its own description')
+                      for n, t in rows)
+    section = (
+        f"{_AGENTS_START}\n## Subagents available here (claudectl — auto-maintained)\n"
+        "<!-- Generated from .claude/agents/; edits here are overwritten -->\n\n"
+        "Delegate to one of these with the Agent tool when the work matches — "
+        "prefer a specialist over doing it inline, and say which one you used.\n\n"
+        f"{lines}\n{_AGENTS_END}\n")
+    upsert_block(project_path, _AGENTS_START, _AGENTS_END, section)
+    return len(rows)
+
+
+def sharpen_prompt(rows):
+    """The authoring prompt for rewriting descriptions into trigger form.
+
+    Only the `description` is touched, because it is the ONLY field Claude Code
+    matches a task against — rewriting the body would change what the agent does
+    while leaving the reason it never gets picked exactly as it was."""
+    listing = '\n'.join('- %s: %s' % (n, d or '(no description)') for n, d in rows)
+    return (
+        "Rewrite the `description` field of these Claude Code subagents so the "
+        "router actually picks them.\n\n"
+        "Claude Code chooses a subagent by matching the user's task against this "
+        "one field. A description written as a job title ('Expert backend "
+        "engineer') never matches anything; one written as a trigger does.\n\n"
+        "For each agent below, output exactly one line:\n"
+        "<name>|Use PROACTIVELY when <concrete trigger: the kind of task, the "
+        "file types, the words a user would actually type>. Do not use for "
+        "<the nearest thing it should NOT take>.\n\n"
+        "Rules: one line per agent, same order, no numbering, no commentary, no "
+        "code fences. Keep each under 220 characters. Preserve the agent's real "
+        "purpose — you are sharpening how it is found, not changing what it is.\n\n"
+        "AGENTS:\n" + listing)
+
+
+def apply_descriptions_dir(agents_dir, new_by_name):
+    """Write rewritten descriptions into one directory of agent files.
+
+    Frontmatter only: `write_agent` re-emits the file from (meta, body), so the
+    body is carried through byte-for-byte and a bad rewrite can only ever have
+    damaged one field. Knows nothing about projects, so it serves a project's
+    `.claude/agents`, an account's user-level agents and the library alike."""
+    done = []
+    for name, desc, _model, path in list_agents(agents_dir):
+        new = (new_by_name.get(name) or '').strip()
+        if not new or new == desc:
+            continue
+        meta, body = parse_agent(path)
+        meta['description'] = new
+        if write_agent(path, meta, body):
+            done.append(name)
+    return done
+
+
+def apply_descriptions(project_path, new_by_name):
+    """As above for a project, plus the two files that only a project has: the
+    CLAUDE.md routing table and the nudge hook's index."""
+    done = apply_descriptions_dir(project_agents_dir(project_path), new_by_name)
+    if done:
+        write_routing_block(project_path)
+        write_agent_index(project_path)
+    return done
+
+
+def all_installed():
+    """Every agent file claudectl can reach, across every scope.
+
+    [{'scope','dir','project_path','account','name','desc','path'}] over each
+    account's user-level agents, each project's `.claude/agents`, and the
+    claudectl library — so sharpening the library means every FUTURE install is
+    already sharp, not just the copies that exist today.
+
+    Best-effort per source: one unreadable project must not hide the rest.
+    """
+    out = []
+
+    def _add(scope, d, project_path='', account=''):
+        if not d or not os.path.isdir(d):
+            return
+        for name, desc, _model, path in list_agents(d):
+            out.append({'scope': scope, 'dir': d, 'project_path': project_path,
+                        'account': account, 'name': name,
+                        'desc': desc or '', 'path': path})
+
+    try:
+        for acct, cfgdir in _c.all_config_dirs():
+            _add('user', user_agents_dir(cfgdir), account=acct)
+    except Exception:
+        _add('user', user_agents_dir())
+    try:
+        from . import gui
+        seen = set()
+        for row in gui.list_projects():
+            p = row.get('path')
+            if not p or p in seen:
+                continue
+            seen.add(p)
+            _add('project', project_agents_dir(p), project_path=p,
+                 account=row.get('name', ''))
+    except Exception:
+        _c.log.exception('agents: project scan failed')
+    try:
+        for cat in list_categories():
+            _add('library', os.path.join(library_dir(), cat))
+    except Exception:
+        pass
+    return out
+
+
+def sharpen_groups(rows):
+    """Group installs by (name, description) — one prompt row, many writes.
+
+    A library agent copied into twelve projects is the SAME description twelve
+    times. Asking a model to rewrite it twelve times costs twelve times as much
+    and invites twelve different answers to the same question."""
+    groups = {}
+    for r in rows:
+        groups.setdefault((r['name'], r['desc']), []).append(r)
+    return groups
+
+
+def parse_sharpened(text):
+    """`name|description` lines → {name: description}. Tolerant: a model that
+    adds a stray blank line or a bullet must not lose the whole batch."""
+    out = {}
+    for line in (text or '').splitlines():
+        line = line.strip().lstrip('-*0123456789. ').strip()
+        if '|' not in line:
+            continue
+        name, _, desc = line.partition('|')
+        name, desc = name.strip().strip('`'), desc.strip()
+        if name and len(desc) > 10:
+            out[name] = desc[:400]
+    return out
+
+
+def usage(cfgdir=None):
+    """{agent_name: age_string} from Claude Code's own `agentLastUsed`.
+
+    The honest measure of whether any of this works, and it costs nothing —
+    `clientstate` already reads that file. An agent installed months ago and
+    never used is the thing to remove, not to explain."""
+    try:
+        from . import clientstate
+        return {r['name']: r.get('last_used', '')
+                for r in clientstate.usage_rollup(cfgdir).get('agents') or []}
+    except Exception:
+        return {}
 
 
 # ── per-session agent selection screen ───────────────────────

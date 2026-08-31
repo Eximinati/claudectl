@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
-from claude_sessions import main as main_mod
+from claude_sessions import cli as cli_mod, main as main_mod
 
 #: dispatches a user never types — claudectl spawns these at itself. They stay
 #: out of the help text on purpose; naming them here is what makes that a
@@ -83,7 +83,7 @@ def test_help_prints_without_starting_a_ui(monkeypatch, capsys, flag):
 
 
 def test_every_user_facing_subcommand_is_in_the_help(monkeypatch, capsys):
-    missing = [c for c in _dispatched() - INTERNAL if c not in main_mod.HELP]
+    missing = [c for c in _dispatched() - INTERNAL if c not in cli_mod.HELP]
     assert not missing, 'dispatches run() handles but --help never mentions: %s' % missing
 
 

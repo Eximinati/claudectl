@@ -24,10 +24,14 @@ from .ui import text_input, _cls, wait_event, poll_event
 _AI_ANALYZE_TIMEOUT = 900
 
 
-def write_memory_block(project_path, digest):
-    """Insert/replace the CLAUDECTL:MEMORY sentinel block in <project>/CLAUDE.md,
-    leaving all other content (user prose, AUTOGEN, SESSIONS, AI marker) intact.
-    Returns (ok, old_content, new_content)."""
+def upsert_block(project_path, start, end, section):
+    """Insert, replace or REMOVE one sentinel block in <project>/CLAUDE.md,
+    leaving everything else (user prose, AUTOGEN, SESSIONS, other blocks)
+    intact. `section` of '' deletes the block. Returns (ok, old, new).
+
+    Extracted because there are now two machine-maintained blocks — the memory
+    digest and the agent routing table — and the seam handling below is the
+    fiddly half nobody wants a second copy of."""
     md_path = os.path.join(project_path, 'CLAUDE.md')
     old = ''
     if os.path.exists(md_path):
@@ -35,12 +39,9 @@ def write_memory_block(project_path, digest):
             old = open(md_path, encoding='utf-8', errors='ignore').read()
         except Exception:
             old = ''
-    section = (f"{_MEMORY_START}\n## Project memory (claudectl — auto-maintained)\n"
-               f"<!-- Generated from the semantic graph; edits here are overwritten -->\n\n"
-               f"{digest}\n{_MEMORY_END}\n")
-    if _MEMORY_START in old and _MEMORY_END in old:
-        pre = old[:old.index(_MEMORY_START)]
-        post = old[old.index(_MEMORY_END) + len(_MEMORY_END):]
+    if start in old and end in old:
+        pre = old[:old.index(start)]
+        post = old[old.index(end) + len(end):]
         # Normalise the seam instead of concatenating it. `section` already ends
         # in a newline and `post` began with the one that followed the old
         # sentinel, so a plain join added a blank line on EVERY rewrite — a slow
@@ -48,7 +49,10 @@ def write_memory_block(project_path, digest):
         # timer, by which point the file had grown dozens of trailing blanks.
         # This makes the write idempotent: same digest in, same bytes out.
         tail = post.lstrip('\n')
-        new = pre + section + ('\n' + tail if tail else '')
+        new = (pre.rstrip('\n') + ('\n\n' + tail if tail else '\n')) if not section \
+            else pre + section + ('\n' + tail if tail else '')
+    elif not section:
+        return True, old, old               # nothing to remove
     elif old.strip():
         new = old.rstrip('\n') + '\n\n' + section
     else:
@@ -62,6 +66,15 @@ def write_memory_block(project_path, digest):
         return True, old, new
     except Exception:
         return False, old, old
+
+
+def write_memory_block(project_path, digest):
+    """Insert/replace the CLAUDECTL:MEMORY sentinel block in <project>/CLAUDE.md.
+    Returns (ok, old_content, new_content)."""
+    section = (f"{_MEMORY_START}\n## Project memory (claudectl — auto-maintained)\n"
+               f"<!-- Generated from the semantic graph; edits here are overwritten -->\n\n"
+               f"{digest}\n{_MEMORY_END}\n")
+    return upsert_block(project_path, _MEMORY_START, _MEMORY_END, section)
 
 
 def _valid_claude_md(text):
@@ -331,11 +344,13 @@ def replace_machine_blocks(existing, new_autogen, new_sessions):
     return pre + new_autogen + post
 
 
-def prune_claude_md(project_path, proj_folder=None):
-    """Rebuild the AUTOGEN + SESSIONS blocks with the configured caps, WITHOUT
-    opening an editor — the audit screen's one-key fix for a CLAUDE.md whose
-    session log grew unbounded. Returns (old_tokens, new_tokens) or None if
-    there is no CLAUDE.md."""
+def prune_preview(project_path, proj_folder=None):
+    """What a prune WOULD do, writing nothing.
+
+    Returns {'old_tokens','new_tokens','dropped','text'} or None when there is
+    no CLAUDE.md. `dropped` names the session entries the cap will discard —
+    the whole point of a preview is that you see what disappears before it
+    does, not a token count after the fact."""
     from .memory import tokens_estimate
     md_path = os.path.join(project_path, 'CLAUDE.md')
     if not os.path.isfile(md_path):
@@ -344,26 +359,88 @@ def prune_claude_md(project_path, proj_folder=None):
         existing = open(md_path, 'r', encoding='utf-8', errors='ignore').read()
     except Exception:
         return None
-
+    before = _parse_existing_sessions(existing)
     autogen_content = _build_autogen_block(project_path, proj_folder)
     new_autogen = f"{_AUTOGEN_START}\n{autogen_content}{_AUTOGEN_END}\n"
-    sessions_content = _build_sessions_block(proj_folder, _parse_existing_sessions(existing))
+    sessions_content = _build_sessions_block(proj_folder, before)
     new_sessions = (f"{_SESSIONS_START}\n{sessions_content}{_SESSIONS_END}\n"
                     if sessions_content else '')
     final = replace_machine_blocks(existing, new_autogen, new_sessions)
-    if final == existing:
+    # _build_sessions_block emits one `- **<key>** (...)` line per kept entry,
+    # so an entry the cap discarded is exactly one whose marker is now absent
+    dropped = [k for k in before if f'- **{k}**' not in (sessions_content or '')]
+    return {'old_tokens': tokens_estimate(existing),
+            'new_tokens': tokens_estimate(final),
+            'dropped': dropped, 'text': final, 'existing': existing,
+            'changed': final != existing}
+
+
+def prune_claude_md(project_path, proj_folder=None):
+    """Rebuild the AUTOGEN + SESSIONS blocks with the configured caps, WITHOUT
+    opening an editor — the audit screen's one-key fix for a CLAUDE.md whose
+    session log grew unbounded. Returns (old_tokens, new_tokens) or None if
+    there is no CLAUDE.md."""
+    from .memory import tokens_estimate
+    md_path = os.path.join(project_path, 'CLAUDE.md')
+    prev = prune_preview(project_path, proj_folder)
+    if prev is None:
+        return None
+    existing, final = prev['existing'], prev['text']
+    if not prev['changed']:
         return (tokens_estimate(existing), tokens_estimate(existing))
-    try:
-        with open(md_path, 'w', encoding='utf-8') as f:
-            f.write(final)
-    except Exception:
+    # atomic: Claude Code parses this file on every turn, so a half-written
+    # CLAUDE.md breaks the user's whole session, not just claudectl
+    if not _cfg.write_atomic(md_path, final):
         return None
     try:
         from . import diffview
         diffview.record(project_path, proj_folder, 'claude_md', existing, final)
     except Exception:
         pass
+    try:
+        from . import workspace
+        # prune regenerates AUTOGEN/SESSIONS from live git, exactly as scaffold
+        # does — so it re-baselines freshness. Without this the score stayed
+        # Stale after the very operation meant to fix it.
+        workspace.update_manifest(project_path, proj_folder, 'prune')
+    except Exception:
+        pass
     return (tokens_estimate(existing), tokens_estimate(final))
+
+
+_KEEP_RE = re.compile(re.escape(_cfg._KEEP_START) + r'.*?' + re.escape(_cfg._KEEP_END),
+                      re.S)
+_KEEP_MARK = '@@CLAUDECTL_KEEP_%d@@'
+
+
+def _fence_out(manual):
+    """Cut CLAUDECTL:KEEP regions out of `manual`, leaving a numbered marker.
+
+    Returns (text_with_markers, [region_text]). The regions never reach the
+    model, so no amount of creative rewriting can touch them."""
+    kept = []
+
+    def _sub(m):
+        kept.append(m.group(0))
+        return _KEEP_MARK % (len(kept) - 1)
+
+    return _KEEP_RE.sub(_sub, manual or ''), kept
+
+
+def _fence_in(text, kept):
+    """Put the fenced regions back where their markers are.
+
+    A marker the model dropped does NOT lose the region — it is re-appended at
+    the end instead. Content survives even when placement does not, because
+    "you will not lose this" is the only promise the fence makes."""
+    out = text or ''
+    for i, region in enumerate(kept):
+        mark = _KEEP_MARK % i
+        if mark in out:
+            out = out.replace(mark, region)
+        else:
+            out = out.rstrip('\n') + '\n\n' + region + '\n'
+    return out
 
 
 def _valid_compressed(text):
@@ -397,6 +474,7 @@ def ai_compress_claude_md(project_path, proj_folder=None):
 
     from .ctxaudit import split_blocks
     manual = split_blocks(existing)['manual']
+    manual, kept = _fence_out(manual)
     prompt = (
         "Compress this CLAUDE.md project-instructions file. It is loaded into the "
         "model's context on EVERY message, so every token counts.\n\n"
@@ -405,7 +483,10 @@ def ai_compress_claude_md(project_path, proj_folder=None):
         "command, constraint and preference, drop filler, marketing tone, "
         "restatements of things obvious from the code, and meeting-notes-style "
         "history. Keep the # title. Do not invent new facts.\n\n"
-        "Output ONLY the raw markdown of the compressed file — no preamble, no "
+        + ("Reproduce every @@CLAUDECTL_KEEP_n@@ marker exactly as it appears, "
+           "each on its own line, in the same order. They stand for protected "
+           "sections you are not being shown.\n\n" if kept else "")
+        + "Output ONLY the raw markdown of the compressed file — no preamble, no "
         "code fences, no commentary.\n\n"
         f"FILE:\n{manual}"
     )
@@ -419,6 +500,7 @@ def ai_compress_claude_md(project_path, proj_folder=None):
         flash("Compression failed (empty/invalid output) — CLAUDE.md untouched",
               ok=False, secs=2)
         return False
+    compressed = _fence_in(compressed, kept)
 
     autogen_content = _build_autogen_block(project_path, proj_folder)
     new_autogen = f"{_AUTOGEN_START}\n{autogen_content}{_AUTOGEN_END}\n"
@@ -444,13 +526,13 @@ def ai_compress_claude_md(project_path, proj_folder=None):
                             f"COMPRESS {old_tok}→{new_tok} tok  /  {name}"):
         flash("Rejected — CLAUDE.md not written", ok=False, secs=1.4)
         return False
-    try:
-        with open(md_path + '.bak', 'w', encoding='utf-8') as f:
-            f.write(existing)                    # backup BEFORE overwriting
-        with open(md_path, 'w', encoding='utf-8') as f:
-            f.write(final)
-    except Exception as e:
-        flash(f"Write failed: {e}", ok=False, secs=2)
+    # backup BEFORE overwriting, and atomically in both cases: Claude Code
+    # parses CLAUDE.md on every turn, so a half-written file breaks the user's
+    # whole session. The .bak is the last-ditch copy; diffview.record below is
+    # the browsable history.
+    if not (_cfg.write_atomic(md_path + '.bak', existing)
+            and _cfg.write_atomic(md_path, final)):
+        flash("Write failed — CLAUDE.md untouched", ok=False, secs=2)
         return False
     try:
         diffview.record(project_path, proj_folder, 'claude_md', existing, final)

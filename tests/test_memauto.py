@@ -37,10 +37,14 @@ Also mine. Also untouchable.
 """
 
 
-def _mem(entities=()):
+def _mem(entities=(), extracted=1):
+    # `last_extracted` is how a cycle reports how many units it actually
+    # re-extracted; auto_cycle's `graph` flag reads it. Default 1 = "the refresh
+    # did work", which is what most of these fixtures mean.
     return {'entities': list(entities), 'relations': [], 'summaries': {},
             'provenance': {}, 'module_edges': [], 'lessons_scanned': {},
-            'session_counter': 0}
+            'session_counter': 0, 'last_extracted': extracted,
+            'pending_units': 0}
 
 
 # ── the boundary ──────────────────────────────────────────────
@@ -190,9 +194,12 @@ def test_both_auto_paths_use_the_one_cycle():
     from claude_sessions import gui_api, main as main_mod
     g = inspect.getsource(gui_api._refresh_project)
     assert 'auto_cycle' in g and 'refresh_memory(' not in g, g
-    m = inspect.getsource(main_mod)
-    worker = m[m.index('def _bg_scan_worker') if 'def _bg_scan_worker' in m else 0:]
-    assert 'auto_cycle' in worker
+    # `_bg_scan_worker` does not exist — the function is `_bg_scan_cli`, so the
+    # `else 0` fallback made `worker` the WHOLE module and the assertion below
+    # trivially true. Half this guard had never tested anything.
+    assert not hasattr(main_mod, '_bg_scan_worker')
+    worker = inspect.getsource(main_mod._bg_scan_cli)
+    assert 'auto_cycle' in worker and 'refresh_memory(' not in worker
 
 
 def test_the_cycle_stamps_when_it_last_ran(tmp_path, monkeypatch):
@@ -207,3 +214,167 @@ def test_the_cycle_stamps_when_it_last_ran(tmp_path, monkeypatch):
     memory.auto_cycle(str(tmp_path), str(tmp_path), 'proj')
     assert saved.get('auto_updated'), saved
     assert 'auto_last' in saved
+
+
+# ── one setting, every runner ────────────────────────────────
+# The GUI checkbox wrote project_defaults[enc].auto_memory and only the GUI
+# scheduler read it; the TUI's on-open scan and the detached worker gated on
+# the global memory_auto_refresh, which had no control on either surface. So
+# ticking the box did nothing outside a running GUI window.
+
+def test_every_runner_reads_the_same_per_project_flag(tmp_path, monkeypatch):
+    from harness import Sandbox
+    from claude_sessions import memhub, gui_api
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+
+    # the sandbox cannot resolve an encoded folder back to a fake drive, so the
+    # scheduler's project list is supplied directly — what is under test is the
+    # FILTER, which used to read a flag nothing else in the product wrote
+    from claude_sessions import gui
+    monkeypatch.setattr(gui, 'list_projects', lambda: [
+        {'path': actual, 'encoded': enc, 'primary_cfgdir': str(sb.cfg)}])
+
+    assert memory.auto_enabled(actual, enc) is False
+    assert gui_api._auto_projects() == []
+
+    memhub.set_auto_memory(enc, True)                 # the TUI control
+    assert memory.auto_enabled(actual, enc) is True   # …seen by the schedulers
+    assert [p for p, _f, _e in gui_api._auto_projects()] == [actual]
+
+    memhub.set_auto_memory(enc, False)
+    assert memory.auto_enabled(actual, enc) is False
+    assert gui_api._auto_projects() == []
+
+
+def test_background_auto_memory_is_explicit_opt_in(tmp_path, monkeypatch):
+    """`memory_auto_refresh` defaults to 'open' and means "refresh when you open
+    this". Letting it also mean "poll every project hourly" would put a Claude
+    spend on every project claudectl can see."""
+    from harness import Sandbox
+    from claude_sessions import config
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    assert config.load_settings().get('memory_auto_refresh') == 'open'
+    assert memory.auto_enabled(actual, enc) is False
+    assert memory.refresh_on_open(actual, enc) is True
+
+
+def test_turning_it_off_turns_off_the_open_scan_too(tmp_path, monkeypatch):
+    from harness import Sandbox
+    from claude_sessions import memhub
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    memhub.set_auto_memory(enc, False)
+    assert memory.refresh_on_open(actual, enc) is False, \
+        'an explicit no must beat the global default'
+
+
+def test_the_tui_starts_the_same_scheduler_the_gui_does(tmp_path, monkeypatch):
+    """It had one caller, in run_gui — so "keep this updated automatically"
+    silently meant "while the GUI window is open"."""
+    import inspect
+    from claude_sessions import main as main_mod
+    src = inspect.getsource(main_mod.run)
+    assert 'start_auto_memory_scheduler' in src
+
+
+# ── with auto-memory on, memory must never sit stale ─────────
+#
+#     "make sure if auto memory is on and the project is getting updated then
+#      the memory should never go stale"
+#
+# Three separate ways it could, all closed here: a capped cycle that abandons
+# the remainder, a scheduler that waits a full hour before finishing what it
+# started, and a project whose memory is verified current but whose freshness
+# baseline is never re-stamped.
+
+def test_repeated_ticks_converge_to_not_stale(monkeypatch, tmp_path):
+    from harness import Sandbox
+    from claude_sessions import gui_api
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    for i in range(9):
+        d = os.path.join(actual, f'mod{i}')
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, 'a.py'), 'w', encoding='utf-8') as f:
+            f.write('x = 1\n')
+
+    calls = []
+    monkeypatch.setattr(memory, '_extract', lambda c, w, unit='', progress='':
+                        calls.append(unit) or {'summary': 's ' + unit,
+                                               'entities': [{'name': 'E' + unit,
+                                                             'type': 'module',
+                                                             'summary': 's'}],
+                                               'relations': []})
+    from claude_sessions import memhub, gui
+    memhub.set_auto_memory(enc, True)
+    monkeypatch.setattr(gui, 'list_projects', lambda: [
+        {'path': actual, 'encoded': enc, 'primary_cfgdir': str(sb.cfg)}])
+
+    assert memory.is_stale(actual, folder) is True     # nine modules, no graph
+    owed = None
+    for _ in range(10):
+        owed = gui_api._auto_scan_pass()
+        if not memory.is_stale(actual, folder):
+            break
+    assert not memory.is_stale(actual, folder), 'it never caught up'
+    assert owed is False, 'and the last pass reported nothing owed'
+    assert len(set(calls)) == 9, 'every module was eventually extracted'
+
+
+def test_a_capped_pass_asks_to_be_called_back_soon(monkeypatch, tmp_path):
+    """A cycle does at most auto_cap modules. Waiting the full interval between
+    passes would leave memory stale for an hour while auto-memory was on."""
+    from harness import Sandbox
+    from claude_sessions import gui_api, memhub, gui
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    for i in range(9):
+        d = os.path.join(actual, f'mod{i}')
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, 'a.py'), 'w', encoding='utf-8') as f:
+            f.write('x = 1\n')
+    monkeypatch.setattr(memory, '_extract', lambda c, w, unit='', progress='':
+                        {'summary': 's', 'entities': [{'name': 'E' + unit,
+                                                       'type': 'module',
+                                                       'summary': 's'}],
+                         'relations': []})
+    memhub.set_auto_memory(enc, True)
+    monkeypatch.setattr(gui, 'list_projects', lambda: [
+        {'path': actual, 'encoded': enc, 'primary_cfgdir': str(sb.cfg)}])
+
+    assert gui_api._auto_scan_pass() is True, 'nine modules, cap of six'
+    assert gui_api.CATCHUP_INTERVAL < 300, 'the catch-up wait must be short'
+
+
+def test_a_project_that_is_already_current_still_reports_fresh(monkeypatch, tmp_path):
+    """A commit that touches no source file moves HEAD. Nothing needs
+    re-extracting — and the workspace screen used to call the project stale
+    anyway, because only a refresh that DID work re-stamped the baseline."""
+    from harness import Sandbox
+    from claude_sessions import workspace
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    d = os.path.join(actual, 'mod1')
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, 'a.py'), 'w', encoding='utf-8') as f:
+        f.write('x = 1\n')
+    monkeypatch.setattr(memory, '_extract', lambda *a, **k:
+                        {'summary': 's', 'entities': [{'name': 'E', 'type': 'module',
+                                                       'summary': 's'}],
+                         'relations': []})
+    monkeypatch.setattr(workspace, '_git_head', lambda p: ('a' * 40, 'a' * 7, 'main'))
+    memory.refresh_memory(actual, folder, 'alpha')
+    assert not memory.is_stale(actual, folder)
+
+    monkeypatch.setattr(workspace, '_git_head', lambda p: ('b' * 40, 'b' * 7, 'main'))
+    _m, _live, checks, _score, _safe = workspace.compute_status(actual, folder)
+    assert {c['name']: c['state'] for c in checks}['repo'] == 'stale'
+
+    # a cycle that finds nothing to do is still a verification that memory
+    # matches the code, and must say so
+    memory.refresh_memory(actual, folder, 'alpha')
+    _m, _live, checks, _score, _safe = workspace.compute_status(actual, folder)
+    states = {c['name']: c['state'] for c in checks}
+    assert states['repo'] == 'fresh' and states['claude_md_fresh'] == 'fresh'

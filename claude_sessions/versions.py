@@ -37,8 +37,6 @@ import os
 import re
 import sys
 import time
-import urllib.error
-import urllib.request
 
 from . import config as _c
 from . import jsonstore
@@ -137,6 +135,10 @@ def released(refresh=False):
              and time.time() - float(cached.get('fetched') or 0) < CACHE_TTL)
     if fresh and not refresh:
         return dict(cached, error='')
+    # imported HERE, not at module level: urllib pulls ssl and http.client, and
+    # this module is on the path of `claudectl --version` and of the version
+    # banner — neither of which fetches anything.
+    import urllib.error, urllib.request
     try:
         req = urllib.request.Request(NPM_URL, headers={'Accept': NPM_ACCEPT})
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
@@ -305,6 +307,7 @@ def self_released(refresh=False):
              and time.time() - float(cached.get('fetched') or 0) < SELF_TTL)
     if fresh and not refresh:
         return dict(cached, error='')
+    import urllib.error, urllib.request     # see released(), same reason
     try:
         req = urllib.request.Request(
             PYPI_URL, headers={'Accept': 'application/json', 'User-Agent': 'claudectl'})

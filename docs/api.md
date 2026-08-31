@@ -32,6 +32,7 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/client/usage` | `api_client_usage` | What is actually being used versus carried as dead weight. |
 | `/api/conventions` | `api_conventions` | Conventions shared across projects, and the global CLAUDE.md block they |
 | `/api/ctxaudit` | `api_ctxaudit` | — |
+| `/api/ctxaudit/prune-preview` | `api_ctxaudit_prune_preview` | What a prune would remove. The GUI destroyed without asking while the |
 | `/api/dashboard` | `api_dashboard` | Home-screen aggregate: today/week usage, live jobs, MCP status, |
 | `/api/deny` | `api_deny_scan` | — |
 | `/api/disk` | `api_disk` | — |
@@ -39,21 +40,24 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/global-claude-md` | `api_global_claude_md` | The account-global CLAUDE.md Claude reads in every session. |
 | `/api/graph-lite` | `api_graph_lite` | Compact project shape for the ambient motion layer. |
 | `/api/health` | `api_health` | Project health — 229 lines of checks that were a README headline and had |
+| `/api/history` | `api_history` | Every replaced version claudectl still holds, newest first. |
+| `/api/history/diff` | `api_history_diff` | — |
 | `/api/hooks` | `api_hooks_get` | Every hook in ONE account, enabled and disabled alike. |
 | `/api/inject/sessions` | `api_inject_sessions` | — |
 | `/api/lessons` | `api_lessons_get` | — |
 | `/api/loop-md` | `api_loop_md_get` | — |
+| `/api/loops` | `api_loops` | Loops claudectl started, with live state read off the process and the |
 | `/api/mcp` | `api_mcp_get` | — |
 | `/api/mcp/detail` | `api_mcp_detail` | `claude mcp get <name>` — the detail the TUI shows and the GUI did not. |
 | `/api/memory-map` | `api_memory_map` | — |
 | `/api/memory/active` | `api_memory_active` | Project paths whose memory is being refreshed right now (scan-lock held) |
 | `/api/memory/auto` | `api_memory_auto_get` | Per-project auto-memory state for the management UI. |
-| `/api/memory/progress` | `api_memory_progress` | — |
+| `/api/memory/progress` | `api_memory_progress` | Live progress, and — once the lock clears — HOW the last run ended. |
 | `/api/memory/state` | `api_memory_state` | — |
 | `/api/omniroute/models` | `api_omniroute_models` | Models that can actually serve a session, not the whole routable catalog. |
 | `/api/omniroute/status` | `api_omniroute_status` | — |
 | `/api/output-style/read` | `api_output_style_read` | — |
-| `/api/output-styles` | `api_output_styles` | — |
+| `/api/output-styles` | `api_output_styles` | Every style, WHERE the active one is pinned, and the starters to copy. |
 | `/api/path-complete` | `api_path_complete` | Live folder auto-completion for the open-project modal: same pure |
 | `/api/plan/last` | `api_plan_last` | Read back <project>/.claudectl/plan-latest.md, split into the task |
 | `/api/plugins` | `api_plugins` | Marketplaces, installed plugins, and what each one ships — for ONE |
@@ -66,7 +70,7 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/session/meta` | `api_session_meta` | — |
 | `/api/session/tags` | `api_tags_get` | — |
 | `/api/sessions` | `_api_sessions` | — |
-| `/api/skills` | `api_skills_get` | — |
+| `/api/skills` | `api_skills_get` | Every skill Claude Code can load, by scope, with its real usage. |
 | `/api/skills/read` | `api_skill_read` | — |
 | `/api/state` | `_api_state` | — |
 | `/api/statusline` | `api_statusline` | Install state plus a live preview rendered from real numbers. |
@@ -93,16 +97,20 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/agents/delete` | `api_agent_delete` | — |
 | `/api/agents/session` | `api_agents_session` | — |
 | `/api/automode` | `api_automode_set` | Set the starting mode and/or the environment entries for ONE account. |
+| `/api/brief/dismiss` | `api_brief_dismiss` | Stop showing one scan finding. Remembered across re-scans. |
 | `/api/cc-settings` | `api_cc_settings_set` | — |
 | `/api/claude-md/scaffold` | `api_claude_md_scaffold` | — |
+| `/api/conventions/pin` | `api_conventions_pin` | — |
 | `/api/conventions/sync` | `api_conventions_sync` | — |
 | `/api/ctxaudit/compact` | `api_ctxaudit_compact` | — |
+| `/api/ctxaudit/protect` | `api_ctxaudit_protect` | Fence a section of CLAUDE.md so AI compression can never rewrite it. |
 | `/api/ctxaudit/prune` | `api_ctxaudit_prune` | — |
 | `/api/deny/apply` | `api_deny_apply` | — |
 | `/api/disk/gc` | `api_disk_gc` | — |
 | `/api/extra-paths` | `api_extra_paths_set` | — |
 | `/api/global-claude-md` | `api_global_claude_md_save` | Atomic, because Claude Code reads this file every session. |
 | `/api/health/allowlist` | `api_health_allowlist` | — |
+| `/api/history/restore` | `api_history_restore` | — |
 | `/api/hooks/purge` | `api_hooks_purge` | — |
 | `/api/hooks/remove` | `api_hooks_remove` | — |
 | `/api/hooks/template` | `api_hooks_template` | — |
@@ -112,6 +120,8 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/launch` | `_api_launch` | — |
 | `/api/lessons` | `api_lessons_post` | — |
 | `/api/loop-md` | `api_loop_md_set` | — |
+| `/api/loops/start` | `api_loop_start` | Start a loop — in a session, or in the OS scheduler. |
+| `/api/loops/stop` | `api_loop_stop` | — |
 | `/api/mcp/add` | `api_mcp_add` | Mirrors mcp._mcp_add_with_extras: -e env vars for stdio, -H headers for |
 | `/api/mcp/remove` | `api_mcp_remove` | — |
 | `/api/memory/auto` | `api_memory_auto_set` | Toggle a project's auto-memory opt-in (and optionally the interval). |
@@ -120,6 +130,7 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/open-editor` | `api_open_editor` | — |
 | `/api/open-path` | `api_open_path` | Resolve a typed folder into a launchable project — validate it's an |
 | `/api/output-style/delete` | `api_output_style_delete` | — |
+| `/api/output-style/install` | `api_output_style_install` | Copy a claudectl starter into the user or project scope. |
 | `/api/output-style/save` | `api_output_style_save` | — |
 | `/api/output-style/select` | `api_output_style_select` | — |
 | `/api/plan/edit` | `api_plan_edit` | — |
@@ -136,9 +147,9 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/session/tags` | `api_tags_set` | — |
 | `/api/settings` | `_api_settings` | — |
 | `/api/skills/create` | `api_skill_create` | — |
-| `/api/skills/install` | `api_skill_install` | — |
-| `/api/skills/library` | `api_skills_library` | Copy a template or project skill into the user's own library. |
-| `/api/skills/remove` | `api_skill_remove` | — |
+| `/api/skills/install` | `api_skill_install` | Install into the project, or into the personal scope of every account — |
+| `/api/skills/library` | `api_skills_library` | Copy a template, project or plugin skill into the PERSONAL scope of every |
+| `/api/skills/remove` | `api_skill_remove` | Delete a skill folder. A PERSONAL one is removed from every account that |
 | `/api/statusline` | `api_statusline_set` | `cfgdir` targets one account; omitting it means every account, which is |
 | `/api/system-prompt` | `api_system_prompt_set` | — |
 | `/api/worklog` | `api_worklog_set` | Per-project recent-work memory on/off. |

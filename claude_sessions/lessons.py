@@ -232,7 +232,7 @@ def scan_sessions(project_path, proj_folder, sids=None):
         # persist after EVERY transcript (each cost a Claude call) — an
         # interrupted scan keeps its completed work and never re-scans it
         memory.save_memory(project_path, proj_folder, mem)
-        memory._report_progress(f"lessons {i + 1}/{len(todo)}")
+        memory._report_progress(f"lessons {i + 1}/{len(todo)}", project_path)
     if todo:
         apply_decay(mem)
         memory.save_memory(project_path, proj_folder, mem)

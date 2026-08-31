@@ -212,6 +212,16 @@ def start_job(label, fn, inputs=None):
                     'job ended without setting a terminal status'
             job['ended'] = time.time()
             _JOBCTX.job = None
+            # THE place a background job ends, which is why the desktop
+            # notification hangs here rather than on each of the thirty
+            # start_job call sites. It notifies only for work that ran long
+            # enough that the user has probably left the window.
+            try:
+                from . import notify
+                notify.job_finished(job['label'], job['status'],
+                                    job['ended'] - job['started'], job['error'])
+            except Exception:
+                pass
 
     threading.Thread(target=_run, daemon=True).start()
     return jid
@@ -379,6 +389,18 @@ _sched_started = False
 _sched_stop = threading.Event()
 
 
+#: outcome of the last finished background refresh, per project path. The GUI
+#: badge poller watches the scan lock and reads the lock DISAPPEARING as
+#: success — so a crashed cycle, which clears the lock in its `finally`, toasted
+#: "Memory updated" exactly like a successful one. This is where the difference
+#: is recorded. Bounded: one entry per project, replaced each run.
+_LAST_REFRESH = {}
+
+
+def last_refresh(path):
+    return _LAST_REFRESH.get(os.path.abspath(path or ''))
+
+
 def _refresh_project(path, folder, auto_cap=6):
     """Run one incremental memory refresh in-process under the scan-lock so the
     badge and /api/memory/active reflect it. Silent (headless Claude calls).
@@ -387,13 +409,20 @@ def _refresh_project(path, folder, auto_cap=6):
     if not memory.acquire_scan_lock(path):
         return False                      # another refresh already in flight
     memory._tls.silent = True
+    key = os.path.abspath(path or '')
     try:
         name = os.path.basename(path.rstrip('\\/')) or path
         # auto_cycle, not refresh_memory: "auto memory" means every memory
         # surface, lessons included. See memory.auto_cycle.
-        memory.auto_cycle(path, folder, name, auto_cap=auto_cap)
-    except Exception:
+        res = memory.auto_cycle(path, folder, name, auto_cap=auto_cap) or {}
+        _LAST_REFRESH[key] = {'ok': True, 'at': time.time(),
+                              'extracted': res.get('extracted', 0),
+                              'lessons': res.get('lessons', 0),
+                              'pending': res.get('pending', 0)}
+    except Exception as e:
         _c.log.exception('gui: memory refresh failed for %s', path)
+        _LAST_REFRESH[key] = {'ok': False, 'at': time.time(),
+                              'error': str(e) or e.__class__.__name__}
     finally:
         memory.clear_scan_lock(path)
     return True
@@ -409,12 +438,12 @@ def _refresh_async(path, folder, auto_cap=6):
 
 def _auto_projects():
     """[(path, folder, enc)] for every project opted into auto-memory."""
-    from .config import load_settings
-    from . import gui
-    pd = load_settings().get('project_defaults') or {}
+    from . import gui, memory
     out = []
     for p in gui.list_projects():
-        if (pd.get(p['encoded']) or {}).get('auto_memory'):
+        # memory.auto_enabled is the one answer all three runners ask — this
+        # loop, the TUI's on-open scan and the detached worker
+        if memory.auto_enabled(p['path'], p['encoded']):
             out.append((p['path'],
                         _store.project_folder(p['primary_cfgdir'], p['encoded']),
                         p['encoded']))
@@ -424,23 +453,41 @@ def _auto_projects():
 def _auto_scan_pass():
     """One sweep: refresh each opted-in project whose source changed and that
     isn't already updating. Cheap (hash-only) staleness gate keeps token cost
-    to genuinely-changed projects."""
+    to genuinely-changed projects.
+
+    Returns True when work is still owed — a cycle hit its per-cycle cap, or a
+    project is still stale. The caller uses that to come back SOON instead of
+    after the full interval: with auto-memory on, memory must CONVERGE, not sit
+    stale for an hour because one tick could only afford six modules.
+    """
     from . import memory
+    owed = False
     for path, folder, _enc in _auto_projects():
         try:
             if memory.scan_lock_status(path) is not None:
-                continue                                  # already running
+                owed = True                               # still running
+                continue
             if not memory.is_stale(path, folder):
                 continue                                  # nothing changed
             _refresh_project(path, folder, auto_cap=6)    # blocking, sequential
+            if memory.is_stale(path, folder):
+                owed = True                               # capped — more to do
         except Exception:
             _c.log.exception('gui: auto-scan pass failed for %s', path)
+    return owed
+
+
+#: gap between catch-up passes while a project still owes work. Short enough to
+#: converge within minutes, long enough that a capped cycle's Claude calls are
+#: not made back to back.
+CATCHUP_INTERVAL = 45
 
 
 def start_auto_memory_scheduler():
-    """Daemon thread: one pass on GUI start, then every auto_memory_interval
-    seconds. Started by the real GUI entry points only (never make_server, so
-    tests don't spawn refreshes). Idempotent."""
+    """Daemon thread: one pass on start, then every auto_memory_interval seconds
+    — or every CATCHUP_INTERVAL while a project still owes work. Started by the
+    real entry points only (never make_server, so tests don't spawn refreshes).
+    Idempotent."""
     global _sched_started
     if _sched_started:
         return
@@ -455,15 +502,20 @@ def start_auto_memory_scheduler():
         if _sched_stop.wait(2):           # let the server settle first
             return
         while not _sched_stop.is_set():
+            owed = False
             try:
-                _auto_scan_pass()
+                owed = _auto_scan_pass()
             except Exception:
                 _c.log.exception('gui: auto-memory scheduler tick failed')
             try:
                 interval = max(60, int(load_settings().get('auto_memory_interval', 3600)))
             except Exception:
                 interval = 3600
-            _sched_stop.wait(interval)
+            # Converge, don't idle. A cycle is capped at `auto_cap` modules, so
+            # a busy repo needs several passes — waiting the full interval
+            # between them would leave memory stale for an hour at a time while
+            # auto-memory was switched on and nominally working.
+            _sched_stop.wait(CATCHUP_INTERVAL if owed else interval)
 
     threading.Thread(target=_loop, daemon=True).start()
 
@@ -570,7 +622,7 @@ def call(fn, q=None, body=None):
 _REQUEST_PARAMS = frozenset((
     'enc', 'sid', 'cfgdir', 'path', 'action', 'kind', 'name', 'id',
     'dir', 'file', 'key', 'event', 'scope', 'text', 'value', 'model', 'task',
-    'url', 'query', 'q',
+    'url', 'query', 'q', 'ts',
 ))
 
 
@@ -1121,14 +1173,26 @@ def api_agents_library(q, body):
                    'desc': (desc or '')[:140]}
                   for name, desc, model, path in list_library_agents(c)]
         cats.append({'category': c, 'agents': agents})
+    # `own` used to be the active account's user agents plus, only when a
+    # `path` was supplied, that one project's. The global Agents page has no
+    # path, so it listed a fraction of what is installed — and the page that
+    # now offers a machine-wide Sharpen has to show what it is about to touch.
+    from .agents import all_installed
     mine = []
-    for scope, d in (('user', user_agents_dir()),
-                     ('project', project_agents_dir(q['path']) if q.get('path') else None)):
-        if not d:
-            continue
-        for n, desc, model, path in list_agents(d):
-            mine.append({'name': n, 'desc': (desc or '')[:140], 'model': model,
-                         'path': path, 'scope': scope})
+    if q.get('path'):
+        for scope, d in (('user', user_agents_dir()),
+                         ('project', project_agents_dir(q['path']))):
+            for n, desc, model, path in list_agents(d):
+                mine.append({'name': n, 'desc': (desc or '')[:140], 'model': model,
+                             'path': path, 'scope': scope})
+    else:
+        for r in all_installed():
+            if r['scope'] == 'library':
+                continue          # already listed below, by category
+            mine.append({'name': r['name'], 'desc': r['desc'][:140], 'model': '',
+                         'path': r['path'],
+                         'scope': (r['scope'] if not r['project_path'] else
+                                   'project · ' + os.path.basename(r['project_path']))})
     from .agents import KNOWN_TOOLS
     from .config import models
     vals, labels = models()
@@ -1177,8 +1241,14 @@ def api_agents_session_get(q, body):
                          for r, reason, _s in suggest_agents(q['path'], folder)]
         except Exception:
             pass
+    from .agents import usage as _agent_usage, routing_table
     return {'refs': load_session_agents(folder).get('__project__', []),
-            'suggested': suggested, 'limit': SAFE_AGENT_LIMIT}
+            'suggested': suggested, 'limit': SAFE_AGENT_LIMIT,
+            # what Claude Code says it has actually delegated to, and the
+            # delegation table claudectl writes into CLAUDE.md so it can
+            'usage': _agent_usage(q.get('cfgdir')),
+            'routing': [{'name': n, 'trigger': t}
+                        for n, t in (routing_table(q['path']) if q.get('path') else [])]}
 
 
 def api_agents_session(q, body):
@@ -1189,7 +1259,8 @@ def api_agents_session(q, body):
     if os.path.isdir(folder):
         save_session_agents(folder, '__project__', refs)
     n = sync_project_agents(body['path'], refs)
-    return {'ok': True, 'active': n}
+    from .agents import routing_table
+    return {'ok': True, 'active': n, 'routed': len(routing_table(body['path']))}
 
 
 def api_health(q, body):
@@ -1222,20 +1293,41 @@ def api_brief(q, body):
     # calls each, and the Tools tab used to pay that on every visit
     diff = brief.session_diff_rows(q['path'], folder,
                                    refresh=q.get('refresh') in ('1', 'true'))
+    from . import memory as _mem
     return {'suggestions': [{'tag': t, 'text': x}
                             for t, x in brief.work_suggestions(q['path'], folder)],
+            # so the card can say how old the AI half of the advice is rather
+            # than presenting a month-old finding as current
+            'scan_at': brief.scan_age(_mem.load_memory(q['path'], folder)),
             # structured, so the GUI can collapse per repo and show counts.
             # `since_last` stays for any client still reading the flat lines.
             'since': diff,
             'since_last': brief.session_diff(q['path'], folder)}
 
 
+def api_brief_dismiss(q, body):
+    """Stop showing one scan finding. Remembered across re-scans."""
+    from . import brief
+    n = brief.dismiss_scan_item(body['path'],
+                                _folder(body.get('cfgdir'), body['enc']),
+                                body.get('text', ''))
+    return {'ok': True, 'dismissed': n}
+
+
 def api_conventions(q, body):
     """Conventions shared across projects, and the global CLAUDE.md block they
-    would become."""
+    would become — plus the candidates that did not qualify, so an empty card
+    can say why it is empty instead of only that it is."""
     from . import conventions
     return {'conventions': conventions.collect_conventions(),
+            'near': conventions.near_misses(),
             'block': conventions.build_block()}
+
+
+def api_conventions_pin(q, body):
+    from . import conventions
+    n = conventions.pin_convention((body or {}).get('text', ''))
+    return {'ok': bool(n), 'pinned': n}
 
 
 def api_conventions_sync(q, body):
@@ -1328,14 +1420,17 @@ def api_memory_toggles(q, body):
 
 
 def api_skills_get(q, body):
-    from .skills import list_templates, list_skills, project_skills_dir
-    templates = [{'name': n, 'desc': (d or '')[:160], 'dir': sd, 'source': src}
-                 for n, d, sd, src in list_templates()]
-    project = []
-    if q.get('path'):
-        project = [{'name': n, 'desc': (d or '')[:160], 'dir': sd}
-                   for n, d, sd in list_skills(project_skills_dir(q['path']))]
-    return {'templates': templates, 'project': project}
+    """Every skill Claude Code can load, by scope, with its real usage.
+
+    The old payload was `{templates, project}` — a list of starters plus one
+    project's folder, which said nothing about what is actually active."""
+    from .skills import inventory
+    inv = inventory(q.get('path') or '', q.get('cfgdir'))
+    for rows in ('personal', 'project', 'plugin', 'bundled', 'templates'):
+        for r in inv[rows]:
+            r['desc'] = (r.get('desc') or '')[:160]
+    inv['accounts'] = [{'name': n, 'dir': d} for n, d in _c.all_config_dirs()]
+    return inv
 
 
 def api_skill_read(q, body):
@@ -1344,21 +1439,45 @@ def api_skill_read(q, body):
     return {'meta': meta, 'body': body_txt}
 
 
+def _skill_dest(body):
+    """Where an install or a create lands. `scope` is explicit because there
+    are two real answers and defaulting to the project would put a skill where
+    it only works in one place."""
+    from .skills import personal_dir, project_skills_dir
+    if body.get('scope') == 'project':
+        if not body.get('path'):
+            raise BadRequest('scope=project needs a path')
+        return project_skills_dir(body['path'])
+    return personal_dir(body.get('cfgdir'))
+
+
 def api_skill_install(q, body):
-    from .skills import install_skill
-    dest = install_skill(body.get('dir', ''), body.get('path', ''))
+    """Install into the project, or into the personal scope of every account —
+    see skills.install_personal for why personal means all of them."""
+    from .skills import install_skill, install_personal
+    if body.get('scope') != 'project':
+        done = install_personal(body.get('dir', ''))
+        return {'ok': bool(done), 'dir': done[0][1] if done else '',
+                'accounts': [n for n, _d in done]}
+    dest = install_skill(body.get('dir', ''), _skill_dest(body))
     return {'ok': bool(dest), 'dir': dest}
 
 
 def api_skill_remove(q, body):
-    from .skills import delete_skill
-    return {'ok': delete_skill(body.get('dir', ''))}
+    """Delete a skill folder. A PERSONAL one is removed from every account that
+    has it, unless the caller says otherwise — the mirror of the install
+    fan-out, so "installed everywhere" cannot decay into orphans."""
+    from .skills import delete_skill, delete_personal, personal_accounts
+    d = body.get('dir', '')
+    if body.get('scope') == 'personal' and body.get('all_accounts', True):
+        gone = delete_personal(d)
+        return {'ok': bool(gone), 'accounts': [n for n, _p in gone]}
+    return {'ok': delete_skill(d), 'accounts': personal_accounts(d)}
 
 
 def api_skill_create(q, body):
-    from .skills import write_skill, project_skills_dir, library_dir, _slug
-    base = project_skills_dir(body['path']) if body.get('path') else library_dir()
-    skill_dir = os.path.join(base, _slug(body['name']))
+    from .skills import write_skill, _slug
+    skill_dir = os.path.join(_skill_dest(body), _slug(body['name']))
     meta = {'name': _slug(body['name']), 'description': body.get('description', '')}
     if body.get('tools'):
         meta['allowed-tools'] = body['tools']
@@ -1393,11 +1512,13 @@ def api_mcp_get(q, body):
 
 
 def api_skills_library(q, body):
-    """Copy a template or project skill into the user's own library."""
-    from .skills import save_to_library
-    dest = save_to_library(body['dir'])
-    return {'ok': bool(dest), 'dir': dest,
-            'error': '' if dest else 'not a skill folder'}
+    """Copy a template, project or plugin skill into the PERSONAL scope of every
+    account — `<cfgdir>/skills`, which Claude Code loads in every project."""
+    from .skills import install_personal
+    done = install_personal(body['dir'])
+    return {'ok': bool(done), 'dir': done[0][1] if done else '',
+            'accounts': [n for n, _d in done],
+            'error': '' if done else 'not a skill folder'}
 
 
 def api_mcp_detail(q, body):
@@ -1522,13 +1643,25 @@ def api_memory_state(q, body):
             'n_pending': len(st['pending']),
             'n_unscanned': n_unscanned,
             'hook_on': st['hook_on'], 'rules_on': st['rules_on'],
+            'auto_on': st['auto_on'],
+            # what the last cycle did and what it cost. `pending_units` and the
+            # cost were both recorded and shown nowhere.
+            'pending_units': int(mem.get('pending_units') or 0),
+            'last_extracted': int(mem.get('last_extracted') or 0),
+            'last_cost_usd': mem.get('last_cost_usd') or 0,
+            'auto_updated': mem.get('auto_updated', ''),
             'budget': (st['settings'] or {}).get('memory_budget', 600),
             'est': st['est']}
 
 
 def api_memory_progress(q, body):
+    """Live progress, and — once the lock clears — HOW the last run ended.
+
+    The poller used to read the lock disappearing as success, which a crashed
+    cycle does in its `finally` exactly like a successful one."""
     from .memory import scan_lock_status
-    return {'progress': scan_lock_status(q['path'])}
+    return {'progress': scan_lock_status(q['path']),
+            'last': last_refresh(q['path'])}
 
 
 def api_memory_autoscan(q, body):
@@ -1659,16 +1792,86 @@ def api_ctxaudit(q, body):
     return {'items': items, 'total': audit_total(items)}
 
 
+def api_ctxaudit_prune_preview(q, body):
+    """What a prune would remove. The GUI destroyed without asking while the
+    TUI confirmed — same operation, two different contracts."""
+    from .claude_md import prune_preview
+    p = prune_preview(q['path'], _folder(q.get('cfgdir'), q['enc']))
+    if p is None:
+        return {'ok': False, 'error': 'no CLAUDE.md in this project'}
+    return {'ok': True, 'old_tokens': p['old_tokens'], 'new_tokens': p['new_tokens'],
+            'dropped': p['dropped'], 'changed': p['changed']}
+
+
 def api_ctxaudit_prune(q, body):
     from .claude_md import prune_claude_md
-    old_tok, new_tok = prune_claude_md(body['path'],
-                                       _folder(body.get('cfgdir'), body['enc']))
+    res = prune_claude_md(body['path'],
+                          _folder(body.get('cfgdir'), body['enc']))
+    if res is None:                # no CLAUDE.md, or the write failed
+        return {'ok': False, 'error': 'no CLAUDE.md in this project'}
+    old_tok, new_tok = res
     return {'ok': True, 'old_tokens': old_tok, 'new_tokens': new_tok}
+
+
+#: what the History panel offers to roll back. Keys must exist in
+#: diffview.target_path or a restore would have nowhere to write.
+_HISTORY_KEYS = ('claude_md', 'memory_graph', 'system_prompt')
+
+
+def api_history(q, body):
+    """Every replaced version claudectl still holds, newest first."""
+    from . import diffview
+    from .sessions import format_age
+    folder = _folder(q.get('cfgdir'), q['enc'])
+    keys = []
+    for k in _HISTORY_KEYS:
+        vs = diffview.versions(q['path'], folder, k)
+        keys.append({'key': k, 'title': diffview.TITLES.get(k, k),
+                     'versions': [dict(v, age=format_age(v['ts'])) for v in vs]})
+    return {'keys': keys}
+
+
+def api_history_diff(q, body):
+    from . import diffview
+    folder = _folder(q.get('cfgdir'), q['enc'])
+    key = q['key']
+    if key not in _HISTORY_KEYS:
+        raise BadRequest('unknown history key')
+    old = diffview.read_version(q['path'], folder, key, q['ts'])
+    p = diffview.target_path(q['path'], folder, key)
+    cur = ''
+    if p and os.path.isfile(p):
+        try:
+            cur = open(p, encoding='utf-8', errors='ignore').read()
+        except Exception:
+            cur = ''
+    # old=current, new=snapshot: the diff reads as "what restoring would do"
+    return {'title': diffview.TITLES.get(key, key),
+            'diff': diffview.unified(cur, old, diffview.TITLES.get(key, key))}
+
+
+def api_history_restore(q, body):
+    from . import diffview
+    if body.get('key') not in _HISTORY_KEYS:
+        raise BadRequest('unknown history key')
+    ok, msg = diffview.restore(body['path'],
+                               _folder(body.get('cfgdir'), body['enc']),
+                               body['key'], body['ts'])
+    return {'ok': ok, 'message': msg} if ok else {'ok': False, 'error': msg}
 
 
 def api_ctxaudit_compact(q, body):
     from .ctxaudit import append_compact_section
     return {'ok': bool(append_compact_section(body['path']))}
+
+
+def api_ctxaudit_protect(q, body):
+    """Fence a section of CLAUDE.md so AI compression can never rewrite it."""
+    from .ctxaudit import protect_section
+    md = os.path.join(body['path'], 'CLAUDE.md')
+    ok = protect_section(md, body.get('text', ''))
+    return {'ok': ok} if ok else {
+        'ok': False, 'error': 'no matching unprotected section found'}
 
 
 def api_deny_scan(q, body):
@@ -1855,6 +2058,81 @@ def api_loop_md_set(q, body):
     return {'ok': True, 'file': p}
 
 
+def api_loops(q, body):
+    """Loops claudectl started, with live state read off the process and the
+    transcript. See loops.py for why there is nothing else to read."""
+    from . import loops
+    return {'loops': loops.listing(_cfg(q)),
+            'registry': loops.registry_path(_cfg(q)),
+            'perms': [{'id': p, 'note': n} for p, n in loops.PERMS],
+            'accounts': [{'name': n, 'dir': d} for n, d in _c.all_config_dirs()],
+            'ttl_days': loops.DEFAULT_TTL // 86400}
+
+
+def api_loop_start(q, body):
+    """Start a loop — in a session, or in the OS scheduler.
+
+    `kind='session'`: a `/loop` is session-scoped, so starting one IS starting a
+    session; it is a normal claudectl launch (same account, agents, skills,
+    system prompt, add-dirs) whose first typed message is the command.
+
+    `kind='schedule'`: no session at all. claudectl registers a scheduler entry
+    that runs headless `claude -p` on the interval, under the chosen account,
+    and keeps running with claudectl closed.
+    """
+    from . import gui as _gui
+    from . import loops
+    b = body or {}
+    path, enc = b.get('path', ''), b.get('enc', '')
+    if not path or not enc:
+        raise BadRequest('missing parameter: path')
+    kind = 'schedule' if b.get('kind') == 'schedule' else 'session'
+    perm = b.get('perm') or 'auto'
+    if perm not in {p for p, _d in loops.PERMS}:
+        raise BadRequest('unknown permission mode: %s' % perm)
+    text = loops.loop_prompt(b.get('interval', ''), b.get('prompt', ''))
+
+    if kind == 'schedule':
+        if not (b.get('interval') or '').strip():
+            # a self-paced loop is a thing Claude decides INSIDE a session; a
+            # scheduler needs a number
+            raise BadRequest('a background loop needs an interval')
+        row = loops.record(path, enc, b.get('cfgdir') or '', b.get('interval', ''),
+                           b.get('prompt', ''), 0, b.get('project_name', ''),
+                           kind='schedule', perm=perm)
+        ok, msg = loops.schedule(row['id'], b.get('interval', ''), b.get('cfgdir') or '')
+        if not ok:
+            loops.forget(row['id'], _cfg(b))
+            return {'ok': False, 'error': msg}
+        return {'ok': True, 'loop': row, 'text': text, 'message': msg}
+
+    opts = dict(b.get('opts') or {})
+    opts.update({'cfgdir': b.get('cfgdir') or '', 'prompt': text})
+    for k in ('effort', 'model', 'perm', 'name', 'worktree', 'agent',
+              'max_thinking', 'subagent_model'):
+        opts.setdefault(k, '')
+    ok, err, pid = _gui.launch_session(path, enc, 'new', opts, want_pid=True)
+    if not ok:
+        return {'ok': False, 'error': err}
+    row = loops.record(path, enc, b.get('cfgdir') or '', b.get('interval', ''),
+                       b.get('prompt', ''), pid, b.get('project_name', ''),
+                       kind='session', perm=perm)
+    return {'ok': True, 'loop': row, 'text': text}
+
+
+def api_loop_stop(q, body):
+    from . import loops
+    b = body or {}
+    if b.get('forget'):
+        loops.forget(b.get('id', ''), _cfg(b))
+        return {'ok': True, 'message': 'Removed from the board'}
+    if b.get('renew'):
+        ok, msg = loops.renew(b.get('id', ''), _cfg(b))
+        return {'ok': ok, 'message': msg}
+    ok, msg = loops.stop(b.get('id', ''), _cfg(b))
+    return {'ok': ok, 'message': msg}
+
+
 def api_system_prompt_get(q, body):
     folder = _folder(q.get('cfgdir'), q['enc'])
     p = os.path.join(folder, 'system-prompt.txt')
@@ -1990,6 +2268,88 @@ def api_inject_launch(q, body):
 
 # ── job launchers for the AI features ────────────────────────
 
+#: how many unique agents go into one authoring call. A model asked for two
+#: hundred lines in one answer quietly drops some of them; forty comes back
+#: complete. Batching also gives cancellation somewhere to land.
+SHARPEN_BATCH = 40
+
+
+def _sharpen_descriptions(scope, path):
+    """Rewrite agent `description` fields — for one project, or everywhere.
+
+    Everywhere means every account's user-level agents, every project's
+    `.claude/agents`, and the claudectl library. Grouped by (name, description)
+    so the SAME agent installed in twelve projects is one question and twelve
+    writes, and one approval gate covers the lot: approving the same rewrite
+    twelve times is not consent, it is attrition.
+    """
+    from . import agents as _ag, memory
+    from .claude_md import _pager_confirm
+
+    if scope == 'project':
+        if not path:
+            raise RuntimeError('No project open')
+        d = _ag.project_agents_dir(path)
+        rows = [{'scope': 'project', 'dir': d, 'project_path': path,
+                 'account': '', 'name': n, 'desc': desc or '', 'path': p}
+                for n, desc, _m, p in _ag.list_agents(d)]
+        if not rows:
+            raise RuntimeError('No agents installed in this project')
+    else:
+        rows = _ag.all_installed()
+        if not rows:
+            raise RuntimeError('No agents installed anywhere')
+
+    groups = _ag.sharpen_groups(rows)
+    keys = sorted(groups)
+    job = getattr(_JOBCTX, 'job', None)
+    new = {}
+    for i in range(0, len(keys), SHARPEN_BATCH):
+        if job is not None and job['cancel_event'].is_set():
+            return {'ok': False, 'cancelled': True}
+        batch = keys[i:i + SHARPEN_BATCH]
+        out = (memory._claude_stdin(_ag.sharpen_prompt(batch),
+                                    cwd=path or '.') or '').strip()
+        new.update(_ag.parse_sharpened(out))
+    if not new:
+        raise RuntimeError('Claude returned nothing usable')
+
+    changed = [(n, d, groups[(n, d)]) for (n, d) in keys
+               if new.get(n) and new[n].strip() != d]
+    if not changed:
+        return {'ok': True, 'updated': [], 'locations': 0}
+
+    preview = '\n\n'.join(
+        '%s  (%d location%s)\n  was: %s\n  now: %s'
+        % (n, len(where), '' if len(where) == 1 else 's', d or '(none)', new[n])
+        for n, d, where in changed)
+    if not _pager_confirm('AGENT DESCRIPTIONS — approve to write', preview):
+        return {'ok': False, 'rejected': True}
+
+    # one pass per directory, then the project-only files once per project —
+    # write_routing_block rewrites CLAUDE.md, so doing it per agent would
+    # rewrite the same file once for every agent in it
+    by_dir, projects = {}, set()
+    for _n, _d, where in changed:
+        for r in where:
+            by_dir.setdefault(r['dir'], {})[r['name']] = new[r['name']]
+            if r['project_path']:
+                projects.add(r['project_path'])
+    updated, locations = set(), 0
+    for d, mapping in by_dir.items():
+        done = _ag.apply_descriptions_dir(d, mapping)
+        updated.update(done)
+        locations += len(done)
+    for p in sorted(projects):
+        try:
+            _ag.write_routing_block(p)
+            _ag.write_agent_index(p)
+        except Exception:
+            _c.log.exception('agents: routing refresh failed for %s', p)
+    return {'ok': True, 'updated': sorted(updated), 'locations': locations,
+            'projects': len(projects)}
+
+
 def api_job_start(q, body):
     kind = body.get('kind', '')
     path = body.get('path', '')
@@ -2038,6 +2398,65 @@ def api_job_start(q, body):
         from .hooks import _ai_hook
         jid = start_job('Generating hook', lambda: _ai_hook(),
                         inputs=[body.get('description', '')])
+    elif kind == 'work_scan':
+        # One call, findings persisted into the graph. No approval gate: it
+        # writes advice, not code, and gating a read-only suggestion behind a
+        # diff nobody can act on is ceremony rather than safety.
+        from . import brief as _brief
+        folder = _folder(body.get('cfgdir'), body['enc'])
+        jid = start_job('Scanning for work',
+                        lambda: _brief.run_scan(path, folder))
+    elif kind == 'agent_desc_ai':
+        # The one field Claude Code routes on. Rewriting it is the difference
+        # between an agent that is installed and an agent that gets picked —
+        # see the note above agents.write_routing_block.
+        #
+        # `scope` rather than a second job kind: the two differ only in which
+        # directories they collect, and the gate, the parse and the writer are
+        # identical. Defaults to 'all' because the control now lives on the
+        # global Agents page, which has no open project to scope to.
+        from . import agents as _ag
+        scope = body.get('scope') or ('project' if path else 'all')
+        label = ('Sharpening agent descriptions' if scope == 'project'
+                 else 'Sharpening every agent description')
+        jid = start_job(label, lambda: _sharpen_descriptions(scope, path))
+    elif kind == 'loop_ai':
+        # loop.md is the prompt a bare `/loop` runs, over and over, unattended.
+        # It goes through the same approval gate as every other generated file:
+        # a repeating instruction nobody read is the last thing to write blind.
+        from . import memory
+        from .claude_md import _pager_confirm
+        scope = body.get('scope', 'project')
+        goal = body.get('description', '')
+        md_path = _loop_md_path(scope, path, body.get('cfgdir'))
+
+        def _loopmd():
+            prompt = (
+                "Write the body of a Claude Code `loop.md` file.\n\n"
+                "`loop.md` is the default prompt a bare `/loop` runs on every "
+                "iteration, unattended, in this repository. It is plain markdown "
+                "with no frontmatter and no title — write it as if typing the "
+                "prompt directly.\n\n"
+                f"What the user wants the loop to do each iteration:\n{goal}\n\n"
+                "Rules for what you write:\n"
+                "- Give it a clear stopping condition and say what to do when "
+                "there is nothing to do (one line, no work).\n"
+                "- Prefer checks that are cheap to repeat; say what to skip when "
+                "nothing changed.\n"
+                "- Be explicit about anything irreversible: never push, delete or "
+                "release unless the instruction says so.\n"
+                "- Under 25 lines. No preamble, no code fences, no explanation — "
+                "output the file body only.")
+            content = (memory._claude_stdin(prompt, cwd=path or '.') or '').strip()
+            if not content:
+                raise RuntimeError('No output from Claude')
+            if not _pager_confirm(f'loop.md ({scope}) — approve to write', content):
+                return {'ok': False, 'rejected': True}
+            os.makedirs(os.path.dirname(md_path), exist_ok=True)
+            ok = _c.write_atomic(md_path, content if content.endswith('\n')
+                                 else content + '\n')
+            return {'ok': ok, 'file': md_path, 'text': content}
+        jid = start_job('Writing loop.md', _loopmd)
     elif kind == 'skill_ai':
         from . import skills, memory
         from .claude_md import _pager_confirm
@@ -2052,7 +2471,7 @@ def api_job_start(q, body):
             if not _pager_confirm(f'SKILL / {skills._slug(sk_name)} — approve to write',
                                   content):
                 return {'ok': False, 'rejected': True}
-            d = skills.write_skill_raw(proj, sk_name, content)
+            d = skills.write_skill_raw(_skill_dest(body), sk_name, content)
             return {'ok': bool(d), 'dir': d}
         jid = start_job(f'Generating skill {skills._slug(sk_name)}', _skill)
     elif kind == 'sync_accounts':
@@ -2284,11 +2703,14 @@ def api_job_start(q, body):
         from . import skills
         from .config import load_settings
         url = body.get('url', '')
-        proj = path or None
+        # the same scope choice every other install makes: personal unless the
+        # caller asked for this project
+        proj = path if body.get('scope') == 'project' else None
+        cfgdir = body.get('cfgdir')
 
         def _install():
             exec_model = load_settings().get('omniroute_exec_model', '')
-            ok, msg = skills.install_from_git(url, proj, exec_model)
+            ok, msg = skills.install_from_git(url, proj, exec_model, cfgdir)
             if not ok:
                 raise RuntimeError(msg)
             return {'message': msg}
@@ -2671,16 +3093,38 @@ def _cfg(d):
 
 
 def api_output_styles(q, body):
+    """Every style, WHERE the active one is pinned, and the starters to copy.
+
+    `active_scope` is what the page could not say before: a project's
+    settings.json shadows the account's, so two files can name a style and only
+    one of them is in force."""
     from . import outputstyles
     path = q.get('path') or None
     return {'styles': outputstyles.listing(path, _cfg(q)),
-            'active': outputstyles.current(path, _cfg(q))}
+            'active': outputstyles.current(path, _cfg(q)),
+            'active_scope': outputstyles.active_scope(path, _cfg(q)),
+            'starters': outputstyles.starters(),
+            'user_dir': os.path.join(_c.resolve_config_dir(_cfg(q)), 'output-styles'),
+            'project_dir': (os.path.join(path, '.claude', 'output-styles')
+                            if path else '')}
 
 
 def api_output_style_read(q, body):
     from . import outputstyles
-    return {'body': outputstyles.read(q.get('name', ''), q.get('path') or None,
-                                      _cfg(q))}
+    name = q.get('name', '')
+    return {'body': outputstyles.read(name, q.get('path') or None, _cfg(q)),
+            'builtin': any(n.lower() == name.lower()
+                           for n, _d in outputstyles.BUILTIN)}
+
+
+def api_output_style_install(q, body):
+    """Copy a claudectl starter into the user or project scope."""
+    from . import outputstyles
+    b = body or {}
+    ok, msg = outputstyles.install_starter(
+        b.get('name', ''), b.get('path') if b.get('scope') == 'project' else None,
+        _cfg(b))
+    return {'ok': ok, 'message': msg}
 
 
 def api_output_style_select(q, body):
@@ -2840,6 +3284,9 @@ GET_ROUTES = {
     '/api/memory/auto': api_memory_auto_get,
     '/api/lessons': api_lessons_get,
     '/api/ctxaudit': api_ctxaudit,
+    '/api/ctxaudit/prune-preview': api_ctxaudit_prune_preview,
+    '/api/history': api_history,
+    '/api/history/diff': api_history_diff,
     '/api/deny': api_deny_scan,
     '/api/workspace-status': api_workspace_status,
     '/api/recall-preview': api_recall_preview,
@@ -2862,6 +3309,7 @@ GET_ROUTES = {
     '/api/background-agents': api_background_agents,
     '/api/disk': api_disk,
     '/api/loop-md': api_loop_md_get,
+    '/api/loops': api_loops,
     '/api/omniroute/status': api_omniroute_status,
     '/api/omniroute/models': api_omniroute_models,
     '/api/plan/last': api_plan_last,
@@ -2884,6 +3332,7 @@ POST_ROUTES = {
     '/api/statusline': api_statusline_set,
     '/api/output-style/select': api_output_style_select,
     '/api/output-style/save': api_output_style_save,
+    '/api/output-style/install': api_output_style_install,
     '/api/output-style/delete': api_output_style_delete,
     '/api/hooks/template': api_hooks_template,
     '/api/hooks/remove': api_hooks_remove,
@@ -2905,7 +3354,9 @@ POST_ROUTES = {
     '/api/accounts/terminal': api_accounts_terminal,
     '/api/lessons': api_lessons_post,
     '/api/ctxaudit/prune': api_ctxaudit_prune,
+    '/api/history/restore': api_history_restore,
     '/api/ctxaudit/compact': api_ctxaudit_compact,
+    '/api/ctxaudit/protect': api_ctxaudit_protect,
     '/api/deny/apply': api_deny_apply,
     '/api/claude-md/scaffold': api_claude_md_scaffold,
     '/api/open-editor': api_open_editor,
@@ -2915,10 +3366,14 @@ POST_ROUTES = {
     '/api/open-path': api_open_path,
     '/api/health/allowlist': api_health_allowlist,
     '/api/conventions/sync': api_conventions_sync,
+    '/api/conventions/pin': api_conventions_pin,
+    '/api/brief/dismiss': api_brief_dismiss,
     '/api/cc-settings': api_cc_settings_set,
     '/api/automode': api_automode_set,
     '/api/disk/gc': api_disk_gc,
     '/api/loop-md': api_loop_md_set,
+    '/api/loops/start': api_loop_start,
+    '/api/loops/stop': api_loop_stop,
     '/api/inject/launch': api_inject_launch,
     '/api/job': api_job_start,
     '/api/plan/edit': api_plan_edit,   # TUI-only by design: a terminal cannot free-text-edit a plan, so it needs structured Edit/Delete/Insert/Move. The GUI's plan editor is a <textarea> that does all four natively.

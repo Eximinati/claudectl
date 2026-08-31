@@ -153,6 +153,30 @@ def test_no_page_can_paint_over_the_one_you_are_on():
         'drawPage does not thread the nav token into the renderer')
 
 
+def test_a_finished_job_cannot_repaint_a_view_you_have_left():
+    """The same bug as the test above, one level up.
+
+    A job outlives navigation on purpose — that is what the inline banner is
+    for — and its completion handler used to call `drawMemory()` /
+    `drawPage('skills')` unconditionally. `paint()`'s NAV_ID check cannot see
+    that: `onDone` starts a NEW render, so the token matches and the write
+    lands. Building memory and walking away put you back on the memory tab
+    minutes later, over whatever you had opened.
+
+    So the refresh moved into the runner as `redraw`, gated on the view the job
+    was started from, and no handler may repaint by hand.
+    """
+    assert 'function viewKey()' in PAGE
+    assert 'function jobRedraw(J,st){' in PAGE
+    assert "if(viewKey()!==J.from)return;" in PAGE
+    # every completion handler in the file: nothing there may draw. The line is
+    # cut at `redraw:` — that half IS the guarded path and is allowed to draw.
+    for m in re.finditer(r'onDone:([^\n]*)', _CODE):
+        body = m.group(1).split('redraw:')[0]
+        assert not re.search(r'\b(drawPage\(|draw[A-Z]\w*\()', body), (
+            'an onDone handler repaints directly — use redraw: %r' % body[:90])
+
+
 def test_the_theme_gallery_does_not_apply_on_hover():
     """Click to select. Hover-preview was unwanted, and expensive with it:
     applyTheme reaches STAGE.setTheme, which disposes and rebuilds the whole

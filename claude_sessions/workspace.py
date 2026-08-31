@@ -34,6 +34,28 @@ _WEIGHTS = {
     'mcp_docs': 15, 'repo': 10, 'sessions': 10, 'conflicts': 10,
 }
 
+#: Operations that regenerate the project's context from live inputs, and so
+#: legitimately re-baseline freshness. The WRITER (update_manifest) and the
+#: READER (_last_gen) must use this one tuple: the original code stamped a
+#: baseline for scaffold/ai_analyze only, while memory-rebuild, compress and
+#: prune rebuild the very same AUTOGEN/SESSIONS blocks from live git. So the
+#: score could never come back off Stale no matter how often memory was rebuilt
+#: — and health._check_memory read an `operations.memory.head_at_gen` that
+#: nothing on earth wrote.
+_BASELINE_OPS = ('scaffold', 'ai_analyze', 'compress', 'memory', 'prune')
+
+#: what the user should press to clear each stale check. Diagnosis without a
+#: remedy is why this screen got read once and never again.
+_FIXES = {
+    'manifest': 'build memory (m → b) or scaffold CLAUDE.md (c)',
+    'claude_md': 'scaffold CLAUDE.md (c)',
+    'claude_md_fresh': 'rebuild memory (m → b) — cheap and incremental',
+    'mcp_docs': 'analyze the undocumented server(s) from the MCP screen',
+    'repo': 'rebuild memory (m → b) to re-baseline against this HEAD',
+    'sessions': 'rebuild memory (m → b) to fold in the new sessions',
+    'conflicts': 'README is newer than CLAUDE.md — re-run analyze (a)',
+}
+
 
 # ── low-level helpers ────────────────────────────────────────
 
@@ -76,6 +98,16 @@ def _file_meta(path):
         return {'exists': False, 'sha256': '', 'size': 0, 'mtime': 0}
 
 
+def _global_md_paths():
+    """[(account_name, path)] for every account's global CLAUDE.md.
+
+    Derived per call, never cached at import — see the note in _gather_live."""
+    try:
+        return [(name, _c.global_claude_md_for(d)) for name, d in _c.all_config_dirs()]
+    except Exception:
+        return [('default', _c.global_claude_md_for(None))]
+
+
 def _count_tools(md):
     """Heuristic tool count from analyze_mcp_tools markdown."""
     if not md:
@@ -113,6 +145,9 @@ def _empty_manifest():
         'claude_md_files': [],
         'mcp': {'count': 0, 'servers': []},
         'operations': {},
+        #: freshness baseline — see _last_gen. Empty until an op that
+        #: regenerates the project's context has run at least once.
+        'baseline': {},
         'validation': {'checks': [], 'stale': [], 'conflicts': []},
         'freshness_score': 0,
         'safe_to_launch': True,
@@ -207,23 +242,32 @@ def _gather_live(project_path, proj_folder):
 
     # MCP docs live in the global CLAUDE.md (per-server sentinel sections).
     # Freshness = each live server has a section there; tool counts parsed from it.
+    #
+    # Read EVERY account's global CLAUDE.md, not `_c.global_claude_md`. That
+    # module attribute is computed at import from the then-active config dir,
+    # while the writer (mcp.update_global_claude_md_mcp) takes a cfgdir — so
+    # documenting a server under a non-default account wrote a file this reader
+    # never opened, and the check was permanently stale. Fourth instance of the
+    # import-time-binding bug this codebase keeps re-learning.
     servers = []
     try:
         from . import mcp
         cur = mcp.mcp_servers or mcp.get_mcp_status()
-        gtext = ''
-        try:
-            if os.path.isfile(_c.global_claude_md):
-                gtext = open(_c.global_claude_md, encoding='utf-8', errors='ignore').read()
-        except Exception:
-            pass
+        texts = []
+        for _name, d in _global_md_paths():
+            try:
+                if os.path.isfile(d):
+                    texts.append(open(d, encoding='utf-8', errors='ignore').read())
+            except Exception:
+                continue
         for n, s in cur:
             start, end = f'<!-- MCP:{n}:START -->', f'<!-- MCP:{n}:END -->'
-            documented = start in gtext and end in gtext
-            tool_count = 0
-            if documented:
-                seg = gtext[gtext.index(start) + len(start):gtext.index(end)]
-                tool_count = _count_tools(seg)
+            documented, tool_count = False, 0
+            for gtext in texts:
+                if start in gtext and end in gtext:
+                    documented = True
+                    seg = gtext[gtext.index(start) + len(start):gtext.index(end)]
+                    tool_count = max(tool_count, _count_tools(seg))
             servers.append({'name': n, 'status': s,
                             'documented': documented, 'tool_count': tool_count})
     except Exception:
@@ -269,12 +313,23 @@ def update_manifest(project_path, proj_folder, op, **data):
         op_rec.update({k: v for k, v in data.items() if k != 'tool_count'})
         m['operations'][op] = op_rec
 
-        # baseline for freshness: record HEAD + key hashes at generation time
-        if op in ('scaffold', 'ai_analyze'):
-            m['operations'][op]['head_at_gen'] = live['repo']['head_sha']
-            m['operations'][op]['readme_hash'] = (live['file_hashes']
-                                                  .get('README.md', {}).get('sha256', ''))
-            m['operations'][op]['sessions_at_gen'] = live['sessions']['analyzed_count']
+        # Baseline for freshness: HEAD + key hashes at generation time.
+        #
+        # Stored ONCE at the top level, because it describes the project, not
+        # the operation that happened to refresh it. Keeping it per-op meant
+        # picking a winner among several, and ISO timestamps are second-
+        # resolution — two ops in the same second tied, and the tie went to
+        # whichever came first in _BASELINE_OPS rather than to the latest.
+        # Still mirrored onto the op record: health._check_memory reads
+        # operations['memory']['head_at_gen'], and old manifests only have it
+        # there.
+        if op in _BASELINE_OPS:
+            base = {'head_at_gen': live['repo']['head_sha'],
+                    'readme_hash': (live['file_hashes']
+                                    .get('README.md', {}).get('sha256', '')),
+                    'sessions_at_gen': live['sessions']['analyzed_count']}
+            m['operations'][op].update(base)
+            m['baseline'] = dict(base, op=op, last_run=m['operations'][op]['last_run'])
 
         checks, score, safe = _evaluate(m, live)
         m['validation'] = {
@@ -320,9 +375,19 @@ def compute_status(project_path, proj_folder=None):
 
 
 def _last_gen(m):
-    """Most recent of scaffold / ai_analyze op records (the freshness baseline)."""
-    cand = [m['operations'].get(k) for k in ('ai_analyze', 'scaffold')]
-    cand = [c for c in cand if c and c.get('last_run')]
+    """The freshness baseline: what the repo looked like when the project's
+    context was last regenerated.
+
+    Written at the top level by update_manifest. Falls back to the per-op
+    records for manifests written before that existed — `sessions_at_gen` is
+    the marker there, because an op that regenerates nothing (a `launch`) has
+    only `last_run`, and taking that as a baseline would report `fresh` on no
+    evidence at all."""
+    base = m.get('baseline')
+    if isinstance(base, dict) and 'sessions_at_gen' in base:
+        return base
+    cand = [m['operations'].get(k) for k in _BASELINE_OPS]
+    cand = [c for c in cand if c and c.get('last_run') and 'sessions_at_gen' in c]
     if not cand:
         return None
     return max(cand, key=lambda c: c['last_run'])
@@ -427,15 +492,21 @@ def _evaluate(m, live):
 
 # ── rendering ────────────────────────────────────────────────
 
-_DOTS = {'fresh': '🟢', 'stale': '🟡', 'invalid': '🔴'}
-_WORDS = {'fresh': 'Fresh', 'stale': 'Stale', 'invalid': 'Invalid'}
-_COLORS = lambda: {'fresh': _c.C_OK, 'stale': _c.C_WARN, 'invalid': _c.C_ERR}
+_DOTS = {'fresh': '🟢', 'stale': '🟡', 'invalid': '🔴', 'n/a': '⚪'}
+_WORDS = {'fresh': 'Fresh', 'stale': 'Stale', 'invalid': 'Invalid', 'n/a': 'n/a'}
+_COLORS = lambda: {'fresh': _c.C_OK, 'stale': _c.C_WARN, 'invalid': _c.C_ERR,
+                   'n/a': _c.C_DIM}
 
 
 def _state_of(checks, name):
+    """The display state of a check.
+
+    An `applicable=False` check is excluded from BOTH sides of the score, so
+    painting it 🟡 Stale told the user a warning that contributed nothing to the
+    number underneath it. It reads 'n/a' now, and the dots add up to the score."""
     for c in checks:
         if c['name'] == name:
-            return c['state']
+            return c['state'] if c.get('applicable', True) else 'n/a'
     return 'fresh'
 
 
@@ -458,6 +529,10 @@ def _status_lines(project_path, proj_folder):
     head = repo['head_short'] or '—'
     if repo.get('branch'):
         head = f"{head}  {D}({repo['branch']}){R}"
+    # 'the file is there' and 'the file is current' are two different claims.
+    # When there is no baseline the second one is UNKNOWN, and n/a says so —
+    # reporting Fresh there would be the same confident overstatement as the
+    # permanent Stale this screen used to show, just pointing the other way.
     md_state = _state_of(checks, 'claude_md')
     if md_state == 'fresh':
         md_state = _state_of(checks, 'claude_md_fresh')
@@ -477,6 +552,18 @@ def _status_lines(project_path, proj_folder):
         f"{col['fresh'] if score >= 80 else (col['stale'] if score >= 50 else col['invalid'])}{score}%{R}"
         f"  {render.meter(score, width=20, color=(_c.C_OK if score >= 80 else _c.C_WARN))}",
     ]
+    # every point the score is missing, and the one thing that recovers it
+    todo = [(c['name'], c['detail']) for c in checks
+            if c.get('applicable', True) and c['state'] != 'fresh'
+            and c['name'] in _WEIGHTS]
+    if todo:
+        lines.append('')
+        lines.append(f"  {D}To raise it:{R}")
+        for name, detail in todo:
+            fix = _FIXES.get(name, '')
+            lines.append(f"    {_c.C_WARN}●{R} {detail}"
+                         f"{'  ' + D + '→ ' + fix + R if fix else ''}"
+                         f"  {D}(+{_WEIGHTS[name]}){R}")
     return lines, m, score, safe
 
 

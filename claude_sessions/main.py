@@ -20,80 +20,6 @@ from . import render
 from . import store
 
 
-#: `claudectl --help`. Every user-facing dispatch in run() has a line here, and
-#: tests/test_cli_help.py fails a subcommand that does not — a pip install is
-#: the first contact most people have with this tool and the only thing they can
-#: type without reading the docs first.
-HELP = """claudectl {ver}— the workspace layer for Claude Code.
-
-USAGE
-  claudectl                  open the workspace UI (TUI unless ui_mode says GUI)
-  claudectl --gui | --tui    force the web/desktop GUI, or the terminal UI
-  claudectl <command> [...]
-
-COMMANDS
-  workspace status           print the current folder's project status — memory
-                             freshness, CLAUDE.md, MCP servers, git. No UI, so
-                             it is safe to call from a script or a hook.
-  recall "<query>"           print the task-relevant slice of this project's
-                             memory graph. This is what the recall hook injects
-                             into a session, and what CLAUDE.md points Claude at.
-  review [--staged | --branch BASE] [--min-confidence N] [PATH]
-                             confidence-scored review of the working tree,
-                             printed to stdout.
-  sync-accounts [--yes | --dry-run]
-                             level every configured account up to what you have
-                             provisioned (hooks, statusline, settings). Shows
-                             the diff before writing anything.
-  statusline                 Claude Code's statusLine command: reads one JSON
-                             payload on stdin and prints one line. Install it
-                             from the Hooks screen rather than wiring it by hand.
-  --failover-stop            stop the background model-failover proxy.
-
-OPTIONS
-  -h, --help                 this text
-  -V, --version              print the installed claudectl version
-
-WHAT YOU GET
-  Projects   every folder Claude Code has a session for, across all accounts, in
-             one list — launch with a chosen model, effort, permission mode,
-             agent set and worktree. Projects you never want to see can be
-             hidden from the list (they are not deleted, and come back).
-  Memory     a per-project graph of entities, relations and learned lessons in
-             <project>/.claudectl/memory, injected through CLAUDE.md and the
-             recall hook, so a fresh session starts knowing the project.
-  Sessions   browse, resume, fork, rename, tag, export or archive any past
-             session; read its transcript, tokens and cost.
-  Config     MCP servers, agents, skills, plugins, hooks and output styles —
-             per project and globally, per account.
-  GUI        the same workspace as a local web app (--gui), bound to 127.0.0.1
-             behind a per-run token. Nothing is uploaded anywhere.
-
-FILES
-  ~/.claude/claudectl.json      claudectl's own settings (accounts, defaults)
-  ~/.claude/                    Claude Code's config dir. CLAUDE_CONFIG_DIR
-                                overrides it, and claudectl follows it.
-  <project>/.claudectl/memory   that project's memory graph
-
-DOCS   https://babarmuhammad.github.io/claudectl/
-"""
-
-
-def _help_cli():
-    try:
-        from .versions import self_installed
-        ver = (self_installed() + ' ') if self_installed() else ''
-    except Exception:
-        ver = ''
-    # the glyphs are ASCII here, but the pipe encoding lesson still applies:
-    # `claudectl --help | more` on Windows picks the locale codepage
-    try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
-    print(HELP.format(ver=ver))
-
-
 def _workspace_status_cli():
     """`claudectl workspace status` — resolve the project from cwd and print."""
     from .paths import encode_component
@@ -126,28 +52,60 @@ def _bg_scan_cli(project_path, proj_folder):
     two graph writers never clobber each other. Spawned headless by
     memory.spawn_background_worker; survives the TUI exiting to launch claude.
     Status/progress via the scan.lock marker."""
+    import time as _time
     from . import memory, lessons
     from .config import log
     proj_folder = proj_folder or None
     memory._tls.silent = True                # headless Claude calls, no UI
     if not memory.acquire_scan_lock(project_path):
         return                               # another worker beat us to it
+    name = os.path.basename(project_path.rstrip('\\/')) or project_path
+    started, did_work, failed = _time.time(), '', ''
     try:
         st = load_settings()
         mem = memory.load_memory(project_path, proj_folder)
-        if st.get('memory_auto_refresh') == 'open' and mem.get('entities'):
+        if memory.refresh_on_open(project_path):
             # one call now does the graph, the CLAUDE.md block, the rules AND
             # the lessons — see memory.auto_cycle
-            name = os.path.basename(project_path.rstrip('\\/')) or project_path
-            memory.auto_cycle(project_path, proj_folder, name, auto_cap=6)
+            res = memory.auto_cycle(project_path, proj_folder, name, auto_cap=6)
+            # report what actually happened. This used to discard the result and
+            # say "Memory updated" even when the cycle had done nothing at all.
+            bits = []
+            if res.get('extracted'):
+                bits.append(f"{res['extracted']} module(s)")
+            if res.get('lessons'):
+                bits.append(f"{res['lessons']} lesson(s)")
+            if res.get('pending'):
+                bits.append(f"{res['pending']} still queued")
+            did_work = 'Memory updated — ' + ', '.join(bits) if bits else ''
         elif st.get('memory_lessons', 'prompt') == 'auto':
             # refresh is off but lesson learning is on — mine them on their own
             sids = lessons.pending_sids(proj_folder, mem)
             if sids:
                 lessons.scan_sessions(project_path, proj_folder, sids)
-    except Exception:
+                did_work = 'Lessons learned'
+    except memory.MemoryBusy:
+        return                              # another worker has it; not an error
+    except Exception as e:
         log.exception('bg-scan worker failed')
+        failed = str(e) or e.__class__.__name__
     finally:
+        # This worker is detached and has NO interface of any kind — the badge
+        # in the GUI only exists while that window is open, and the TUI has
+        # already moved on (or exited to launch claude). A desktop notification
+        # is the only way its result reaches anyone — INCLUDING when it fails,
+        # which used to reach no one at all because the notify was gated on
+        # having succeeded.
+        try:
+            from . import notify
+            if failed:
+                notify.job_finished(f'Memory update failed — {name}: {failed[:120]}',
+                                    'error', _time.time() - started)
+            elif did_work:
+                notify.job_finished(f'{did_work} — {name}', 'done',
+                                    _time.time() - started)
+        except Exception:
+            pass
         memory.clear_scan_lock(project_path)
 
 
@@ -196,11 +154,12 @@ def run():
     # `claudectl --help` / `-h` / `help` — FIRST: a released package must answer
     # the one thing a new user types, and it must never start a UI to do it.
     if len(sys.argv) >= 2 and sys.argv[1] in ('--help', '-h', 'help'):
-        _help_cli()
+        from .cli import print_help
+        print_help()
         return
     if len(sys.argv) >= 2 and sys.argv[1] in ('--version', '-V'):
-        from .versions import self_installed
-        print(self_installed() or 'unknown')
+        from .cli import print_version
+        print_version()
         return
     # `claudectl workspace status` — scriptable, no TUI
     if sys.argv[1:3] == ['workspace', 'status']:
@@ -250,6 +209,14 @@ def run():
             save_settings(_s)
     except Exception:
         pass          # a migration must never be the reason claudectl won't start
+    try:
+        # the private skill library moves into <account>/skills, which is the
+        # only place Claude Code reads. Guarded by its own settings flag, so
+        # this is one listdir on every later start.
+        from .skills import migrate_library
+        migrate_library()
+    except Exception:
+        pass
 
     # ── is claudectl itself out of date? ──────────────────────────
     # ABOVE the interface pick, so the GUI gets it too — that branch returns.
@@ -289,6 +256,18 @@ def run():
     # Restored before claude.exe takes the console (atexit = safety net).
     render.screen_init()
     atexit.register(render.screen_restore)
+
+    # ── background memory, in the TUI too ─────────────────────────
+    # Same daemon-thread pass the GUI runs. It had exactly one caller, in
+    # run_gui, so "keep this project's memory updated automatically" silently
+    # meant "while the GUI window is open" — a TUI user's opted-in projects were
+    # only ever refreshed by the one-shot spawn when they happened to open one.
+    # Below the --gui branch, which returns, so this starts once per interface.
+    try:
+        from .gui_api import start_auto_memory_scheduler
+        start_auto_memory_scheduler()
+    except Exception:
+        pass          # background memory must never be why the TUI won't start
 
     # ── claude.exe availability check ─────────────────────────────
     if not get_claude_exe():
@@ -868,6 +847,13 @@ def build_launch_command(path, encoded_name, choice, opts):
     add_dirs = [d for d in load_add_dirs(proj_folder) if os.path.isdir(d)]
     if add_dirs:
         args += ['--add-dir', *add_dirs]
+    # An opening message for an INTERACTIVE session — `claude "<text>"` submits
+    # it as the first turn and leaves you in the session. It is last because it
+    # is the CLI's positional argument, and it is the whole mechanism behind
+    # starting a `/loop` from claudectl: a loop is session-scoped, so there is
+    # nothing to start except a session that begins by typing it.
+    if opts.get('prompt'):
+        args += [str(opts['prompt'])]
     return args, env, proj_folder
 
 

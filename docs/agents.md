@@ -23,11 +23,88 @@ ranked against the project's languages (from the [dependency graph](graph.md)), 
 entities, and name. Local scoring, instant, free. Setting `agents_auto: 'auto'` applies
 suggestions automatically on first open (your manual picks are never touched).
 
+## Getting the agents you install actually used
+
+Copying agent files into a project makes them **available**. It does not make them
+**used**: Claude Code decides to delegate by matching the task against each agent's
+`description`, and library descriptions read as catalogue entries, so a project can carry
+ten agents that never fire. Two things claudectl does about it:
+
+- **A delegation table in `CLAUDE.md`.** Applying a selection writes a
+  `CLAUDECTL:AGENTS` sentinel block naming the installed agents and the trigger from each
+  one's own frontmatter. `CLAUDE.md` is read on **every** turn, which makes it the one
+  place that changes the outcome. The block is regenerated from what is on disk and
+  disappears with the last agent, so it can never name something that is not there.
+- **Usage, from Claude Code's own record.** The picker marks each agent with when it was
+  last delegated to (`agentLastUsed` in `.claude.json`). An agent installed months ago and
+  never used is the one to remove — and the honest answer to "is any of this working?".
+
+- **Sharpen descriptions** (GUI → *Agents* → *Sharpen descriptions*). Rewrites the
+  `description` of every agent into trigger form — *Use PROACTIVELY when …, do not use
+  for …* — and you approve the whole before/after list before anything is written. Only
+  that field changes; bodies and every other frontmatter field are re-emitted
+  byte-for-byte, because the description is the only thing the router reads.
+
+    It is machine-wide, not per project: every account's user-level agents, every
+    project's `.claude/agents`, and the claudectl library, so sharpening also improves
+    every *future* install. Agents that share a name and description are one question and
+    many writes — the same agent in twelve projects is not twelve chances to get twelve
+    different answers. Each touched project's CLAUDE.md routing table and nudge index are
+    refreshed once afterwards.
+- **A prompt-match hook** (`suggest-subagent`, in the Hooks manager). On every prompt it
+  matches your words against the installed agents' triggers and, when something clearly
+  fits, adds one line naming it. No model call, and silence when nothing matches — a hook
+  that fires every turn has to be quiet by default. It reads one small index that the agent
+  sync writes, never the agent files.
+
+Three habits that matter more than any setting: keep the set small (the picker warns past
+ten, and a long list dilutes every description), prefer the **Suggested** section, which
+ranks against what the project actually is, and prefer agents whose description names a
+trigger ("use when the task involves X") over ones that describe a job title.
+
 ## Skills
 
-**Skills manager** — browse, install, scaffold, and AI-generate Claude Code **skills**
-(`.claude/skills/<name>/SKILL.md`) that load on demand instead of bloating `CLAUDE.md`.
-Ships with cited starter templates (see [Credits](credits.md)). TUI: **⚙ Skills**; GUI: the
-**Skills** tab.
+claudectl shows the scopes **Claude Code itself loads**, in the order it resolves them:
 
-Third-party skill and agent bundles are statically risk-scanned before install.
+| Scope | Where | Applies |
+|---|---|---|
+| Personal | `<account>/skills/<name>/SKILL.md` | every project on that account |
+| Project | `<project>/.claude/skills/<name>/SKILL.md` | that project |
+| Plugin | shipped by an installed plugin, as `/plugin:skill` | wherever the plugin is enabled |
+| Built-in | inside Claude Code, not on disk | everywhere |
+
+A personal skill wins over a project skill of the same name, and a shadowed project skill
+is labelled as such rather than listed as if it ran. **The command is the folder name** —
+for a personal or project skill the frontmatter `name` is only a display label — so that is
+what each row shows.
+
+**Personal means you, not one login.** Installing into the personal scope writes into every
+configured account, and deleting removes it from all of them; `sync-accounts` levels skills
+the same way it levels hooks and agents.
+
+### Two usage signals, never one number
+
+`skillUsage` — the counter Claude Code keeps — counts exactly one thing: the times you
+**typed** `/name`. A skill Claude loads on its own, and a plugin that works through a
+`SessionStart` hook, never touch it. That is why caveman can read as *"used twice, 56 days
+ago"* while shaping every session you run. So the page shows two things:
+
+| Signal | What it means | Where it comes from |
+|---|---|---|
+| `typed 12× · 2d` | you invoked it by name | `skillUsage`, merged across every account |
+| `in 27/30 sessions` | something by that name actually ran | your transcripts' hook records |
+
+Two flags explain the rest: **manual only** (`disable-model-invocation: true` — Claude may
+never load it on its own) and **thin description** (Claude picks a skill by matching your
+task against its description, so a one-word one can only be found by name).
+
+Install from the bundled starters (see [Credits](credits.md)), write one by hand, have
+Claude author one, or clone a skill+agent bundle from GitHub — every third-party bundle is
+statically risk-scanned and shown to you before anything is written. TUI: **⚙ Skills**;
+GUI: the **Skills** page.
+
+!!! note "Upgrading from 1.7 or earlier"
+    claudectl used to keep "your library" in `~/.claude/claudectl-skills`, which **no
+    Claude Code reads** — saving a skill there looked like installing it and did nothing.
+    That folder is copied into every account's `skills/` directory once, on the next start,
+    and left in place as a backup.

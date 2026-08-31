@@ -57,6 +57,11 @@ _stats.cache_file = os.path.join(_TMP_STATE, 'stats-cache.json')
 def _no_ambient_claude_env(monkeypatch):
     for var in _AMBIENT:
         monkeypatch.delenv(var, raising=False)
+    # No test may raise a desktop notification. Same choke-point discipline as
+    # `_no_real_editor` below: the job runner notifies from its `finally`, which
+    # every job in the suite reaches, so blocking the SPAWN is the only place
+    # that cannot be forgotten by a new caller.
+    monkeypatch.setenv('CLAUDECTL_NO_NOTIFY', '1')
 
 
 @pytest.fixture(autouse=True)

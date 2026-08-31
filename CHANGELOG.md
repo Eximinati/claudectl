@@ -7,8 +7,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-08-31
+
 ### Added
 
+- **`claudectl --help`** (and `-h`, `help`, `--version`, `-V`). A pip install used to
+  answer the most obvious command by opening a full-screen terminal UI. The help text
+  covers every subcommand, what the tool does and where its state lives; it is answered
+  from `cli.py`, which imports the standard library and nothing else, so it costs nothing
+  and cannot be broken by anything in the TUI stack. A test enumerates the dispatch table
+  from the source, so the text cannot fall behind it.
 - **Hide projects you never want to see.** Every folder Claude Code has ever run in shows
   up in the project list, including one-off experiments and folders that no longer exist
   as work. A project can now be hidden from the TUI project menu and the GUI sidebar —
@@ -16,13 +24,143 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   It is a view flag (`project_defaults[<enc>].hidden`), so nothing on disk moves: the
   sessions stay resumable and restoring costs one click. The TUI says how many rows are
   filtered; the GUI grows a `Show N hidden projects` button while any are.
-- `claudectl --help` (and `-h`, `help`, `--version`). A pip install used to answer the
-  most obvious command by opening the full-screen terminal UI. The help text covers every
-  subcommand, what the tool does and where its state lives, and a test enumerates the
-  dispatch table so it cannot fall behind it.
+- **The Skills section shows what Claude Code actually loads.** It listed claudectl's own
+  private library (`~/.claude/claudectl-skills`) — a directory nothing reads — beside a
+  "Project skills" card that could never fill, because opening a global page ends project
+  context. Now it is the four scopes Claude Code really resolves (personal, project,
+  plugin, bundled), each row carrying the command you type and its real usage count from
+  Claude Code's own `skillUsage` counters, plus the starters to install from. What was in
+  the private library is migrated into `<account>/skills` once, and `sync-accounts` levels
+  skills across accounts like everything else.
+- **Desktop notifications** when a background job that ran longer than 20s finishes, and
+  when the detached memory worker is done — which had no interface of any kind before.
+  One hook in the job runner, one in the worker; `Settings → Notifications` turns them off.
+- **Loops, including ones that run with nothing open.** A `/loop` is session-scoped — it
+  fires only while its session is open and idle — so claudectl offers both: start one *in a
+  session* (and watch it through that session's transcript), or *in the background*, where
+  claudectl registers an entry in Task Scheduler (cron elsewhere) that runs headless
+  `claude -p` on the interval, under the account you pick, with claudectl closed. A
+  background loop carries its guardrails in the runner rather than the UI: a permission mode
+  you choose (`claude -p` starts in Manual and would otherwise do nothing), a 7-day expiry
+  that the scheduled run enforces on itself, your per-call budget cap on every run, a
+  notification when one fails, and a log of the last twenty runs with their cost. Each run
+  is a fresh session that reads a rolling `CLAUDECTL:LOOP` record in the project's
+  CLAUDE.md — rewritten every time, capped at five entries, so it cannot grow. `loop.md` is
+  edited on the same page for either scope, with an AI draft behind the usual approval gate.
+- **Agents that actually get delegated to.** Copying agent files into a project makes them
+  available; Claude Code still picks a subagent by matching the task against its
+  `description`, and nothing reads the body — measured here, `agentLastUsed` held one entry
+  against ten installed agents. Four levers now: a `CLAUDECTL:AGENTS` delegation table in
+  the project's CLAUDE.md (the one file read on every turn), **Sharpen descriptions** (one
+  Claude call rewrites each installed agent's description into *Use PROACTIVELY when …*
+  form, diff-approved, bodies untouched), an optional `suggest-subagent` prompt hook that
+  names a keyword match with no model call and stays silent otherwise, and a last-used
+  marker in the picker so the dead weight is visible.
+- **Output styles explain themselves**, in scope order with the active one and the file
+  that pins it named, and four claudectl starters (Terse, Reviewer, Pair, Ship) to copy.
+- **Global CLAUDE.md has its own page.** It was the third card at the bottom of the MCP
+  servers page.
+- **Search boxes** on the agent library, the project agent picker and the skills inventory.
+- **Skills usage that means something.** `skillUsage` counts one thing — the times you
+  *typed* `/name` — so a plugin that works through a `SessionStart` hook reads as unused
+  forever (caveman: "used twice, 56 days ago", while shaping every session). The page now
+  shows that counter merged across **every** account beside a second, measured signal from
+  your transcripts: *in 27 of your last 30 sessions*. Two flags cover the rest — **manual
+  only** (`disable-model-invocation`) and **thin description**, the two reasons a skill
+  silently never fires. Personal skills install into, and delete from, every account.
+
+- **Auto-memory that actually runs, and converges.** Turned on per project (memory hub
+  `o`, or the checkbox on the GUI memory tab — one flag now honoured by both interfaces
+  *and* the detached worker), a project's memory no longer goes stale while it is on. Each
+  cycle extracts what its budget allows and leaves the rest queued; the scheduler returns
+  in seconds rather than after the full interval until the project has caught up. It
+  bootstraps a project with no graph at all, so the first build no longer has to be
+  manual, and it runs from the TUI as well as the GUI.
+- **A stale-on-edit hook.** `memory-stale-on-change` records the files Claude edits, so
+  auto-memory re-extracts exactly those instead of walking the project. The periodic scan
+  remains the reconciler for edits made outside Claude Code.
+- **Nothing shrinks without a way back.** Pin any entity or lesson and the importance cap
+  can never evict it. Fence a section of CLAUDE.md between `CLAUDECTL:KEEP` markers and AI
+  compression never even *sends* it to the model. Prune names the exact session entries it
+  will drop and asks first — the GUI destroyed silently while the TUI confirmed. Twelve
+  versions of CLAUDE.md and of the memory graph are kept, browsable with a diff and
+  restorable from the context-audit page; restoring is itself snapshotted.
+- **"What to work on" is worth reading.** Four new free signals (stale context with the
+  key that clears it, `TODO`/`FIXME` markers, deferred `ponytail:` shortcuts, untested
+  modules) plus an optional one-call *Find work* scan that adds bugs, vulnerabilities,
+  slow paths and functions worth building. Findings persist, so the card stays instant.
+- **Sharpen descriptions is machine-wide.** It lived on one project's tab and rewrote that
+  project's agents only. It now covers every account's agents, every project's, and the
+  library — grouped so the same agent in twelve projects is one question and twelve
+  writes, behind one approval gate.
+- **Controls for the memory settings that had none.** Seven of fourteen lived only in
+  `claudectl.json`, including `memory_max_calls`, which the memory hub and the health
+  check both told you to raise.
+- **Per-cycle cost, and what a cycle actually did**, in the memory hub and the GUI. The
+  real figure was captured from every headless call and read by nothing.
 
 ### Fixed
 
+- **Auto-memory did nothing at all once more than six modules had changed** — the harder
+  you worked, the less it updated — and it could never build a project that had no graph
+  yet, so "keep this updated automatically" required a manual build first. The GUI
+  checkbox wrote a flag only the GUI scheduler read, while the TUI and the worker gated on
+  a setting with no control on either surface, so ticking the box did nothing outside a
+  running GUI window.
+- **A failed extraction wiped a module's memory and never retried it.** A Claude call that
+  timed out returned an empty result indistinguishable from "this module has nothing", so
+  every fact already known about it was marked superseded — and its file hashes were
+  recorded as current, making the loss invisible to every later check. A capped run did
+  the same to every module it skipped. Provenance now advances only for modules actually
+  extracted, and `save_memory` failing is no longer ignored at five call sites.
+- **The staleness check read every source file in the project**, in full, to hash it — on
+  every scheduler tick and every project open. Files are compared by `(mtime, size)` first
+  and re-hashed only when that moves; content stays the source of truth, so touching a
+  file still costs no Claude call.
+- **A memory refresh reported success after crashing.** The GUI badge read the scan lock
+  disappearing as completion, which a failed cycle does exactly like a successful one; the
+  detached worker announced "Memory updated" when nothing had run, and told nobody at all
+  when it failed.
+- **The query `the` returned 33 entities.** The recall IDF could never reach zero and a
+  positive score was the only gate, so with the prompt hook on, memory was injected into
+  prompts that asked for none. Ranking now fuses four signals by position (BM25, path,
+  dependency rank, and a confidence-weighted lesson signal) instead of adding four
+  quantities on four different scales, and a contentless prompt retrieves nothing.
+- **Recall reinforcement had never worked.** The counter that decides what eviction keeps
+  was folded in only by a refresh that had work to do — so on this repo 807 recorded hits
+  had produced a maximum counter value of 1 — and it credited every entity that ranked
+  rather than the ones that fit the budget and were actually injected.
+- **One generated rule file was always loaded and another could never load.** The
+  path-scoped glob was built with a *character* prefix, so `{tests/, tools/}` became
+  `t/**` (matching nothing, ~375 tokens that never loaded) while a unit whose files
+  diverged at the first segment became `**` — permanently in context, in the one feature
+  whose whole purpose is laziness.
+- **The `memory-stale-on-change` preset had never marked anything stale.** It was bound to
+  an event whose matcher is a list of literal filenames, and it invoked a script that does
+  not touch memory.
+- **A workspace could not stop reporting itself stale.** Only two operations recorded a
+  freshness baseline, so rebuilding memory — the very thing the screen tells you to do —
+  could never clear it. Checks that contribute nothing to the score no longer show a
+  warning dot, and every missing point now prints what recovers it.
+- **claudectl could rename Claude Code's live `.claude.json` out from under it.** Reading
+  a file another program is writing occasionally catches a half-written one, and the
+  corrupt-file quarantine treated that as damage worth preserving.
+- **Cross-project conventions was permanently empty** and described inputs it does not
+  read: it scanned one account, one directory deep. It now reads every account, accepts
+  `decision` lessons, and lists near-misses with a Pin button instead of a dead end.
+- **A finished job no longer repaints the page you moved to.** `onDone` handlers called
+  `drawMemory()` / `drawPage(…)` unconditionally, so building memory and walking away put
+  you back on the memory tab minutes later, over whatever you had opened. The refresh is
+  now a guarded `redraw` in the job runner, gated on the view the job started from.
+- **The `view` button on a built-in output style showed "(empty)"** — those ship inside
+  Claude Code and have no file, which read as a broken button.
+- **Selecting an output style with no project open threw**, because every write assumed
+  `CUR.path`. The same bug made the Skills and Output styles pages' project sections
+  structurally unreachable: navigating to a global page clears the current project, so the
+  "this project" card could never have shown anything. They use the last opened project and
+  say which one it is.
+- **A folded YAML description (`description: >-`) parsed as the literal `>-`**, so every
+  plugin skill looked as if it had no description at all.
 - `load_settings()` copied the defaults shallowly, so every load of a settings file that
   named no `project_defaults` handed back the same dict — and each writer of one mutates
   it in place. In a long-lived process (the GUI, a long TUI run) one project's pins leaked

@@ -173,3 +173,36 @@ def test_append_compact_section(monkeypatch, tmp_path):
     by = {i['label']: i for i in items}
     warns = ' '.join(by['CLAUDE.md · manual content']['warnings'])
     assert 'Compact instructions' not in warns
+
+
+def test_protect_fences_a_whole_section(monkeypatch, tmp_path):
+    """A heading and the prose under it are one idea; fencing half of it
+    protects half of it."""
+    from claude_sessions import ctxaudit
+    from claude_sessions.config import _KEEP_START, _KEEP_END
+    md = tmp_path / 'CLAUDE.md'
+    md.write_text('# proj\n\n## Deployment\nrun the deploy script first\nthen tag\n'
+                  '\n## Other\nunrelated\n', encoding='utf-8')
+    assert ctxaudit.protect_section(str(md), 'deploy script') is True
+    out = md.read_text(encoding='utf-8')
+    assert _KEEP_START in out and _KEEP_END in out
+    body = out[out.index(_KEEP_START):out.index(_KEEP_END)]
+    assert '## Deployment' in body and 'then tag' in body
+    assert '## Other' not in body, 'the fence stops at the next heading'
+    assert ctxaudit.keep_regions(out) == 1
+    # already protected → no double fence
+    assert ctxaudit.protect_section(str(md), 'deploy script') is False
+    assert ctxaudit.keep_regions(md.read_text(encoding='utf-8')) == 1
+
+
+def test_protected_regions_are_reported_in_the_audit(monkeypatch, tmp_path):
+    """You should be able to SEE what compression cannot touch before pressing
+    compress, not find out afterwards."""
+    from claude_sessions import ctxaudit
+    from claude_sessions.config import _KEEP_START, _KEEP_END
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    with open(os.path.join(actual, 'CLAUDE.md'), 'w', encoding='utf-8') as f:
+        f.write(f'# proj\n\n{_KEEP_START}\n## Keep\nsecret\n{_KEEP_END}\n\n## Rest\nx\n')
+    labels = [i['label'] for i in ctxaudit.audit_items(actual, folder)]
+    assert any('protected' in l for l in labels), labels

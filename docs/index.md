@@ -11,7 +11,7 @@ jsonld: |
     "name": "claudectl",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "Windows, macOS, Linux",
-    "softwareVersion": "1.7.0",
+    "softwareVersion": "1.8.0",
     "description": "The workspace layer for Claude Code - persistent project memory, an interactive architecture graph, MCP awareness, and per-project launch control in a fast terminal UI.",
     "url": "https://babarmuhammad.github.io/claudectl/",
     "codeRepository": "https://github.com/babarmuhammad/claudectl",

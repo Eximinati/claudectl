@@ -41,11 +41,16 @@ def run(args, *, cwd=None, env=None, timeout=30, stdin=None, check=False):
 
     `creationflags` is the second reason: output is captured, so a console
     window would show nothing and only flash. See no_window_flags.
+
+    With no `stdin`, the child gets DEVNULL rather than inheriting ours. A CLI
+    that decides to ask a question would otherwise block forever on a terminal
+    nobody is watching — and inside a captured run there is no prompt to see.
     """
     try:
         r = subprocess.run(args, cwd=cwd, env=env, capture_output=True,
                            text=True, encoding='utf-8', errors='ignore',
                            timeout=timeout, input=stdin,
+                           stdin=None if stdin is not None else subprocess.DEVNULL,
                            creationflags=no_window_flags)
     except Exception:
         return None

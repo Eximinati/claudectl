@@ -24,22 +24,50 @@ def rule_filename(repo, module):
     return f"{RULE_PREFIX}{_sanitize(repo)}-{_sanitize(module)}.md"
 
 
-def _unit_glob(entities):
-    """Project-relative glob for a unit, derived from its entities' files."""
+def _unit_glob(entities, module=''):
+    """Project-relative glob for a unit, derived from its entities' files.
+
+    The common prefix is taken over PATH SEGMENTS, not characters.
+    `os.path.commonprefix` is a string operation, so `{tests/, tools/}` produced
+    the prefix `"t"` and the glob `"t/**"` — which matches nothing, so that
+    rule's ~375 tokens could never load. And any unit whose files diverged at
+    the first segment collapsed to `"**"`, i.e. ALWAYS loaded, in a module whose
+    whole purpose is path-scoped laziness. Both were on disk in this repo.
+
+    `module` is the fallback scope: it is the unit's own directory, which is a
+    better answer than "everything" when the entities' files disagree.
+    """
     dirs = set()
     for e in entities:
         for f in e.get('source_files', []) or []:
-            d = os.path.dirname(str(f).replace('\\', '/'))
-            if d:
-                dirs.add(d)
-    if not dirs:
-        return '**'
-    common = os.path.commonprefix([d + '/' for d in dirs]).rsplit('/', 1)[0]
-    return f"{common}/**" if common else '**'
+            if not str(f).strip():
+                continue
+            # A file at the repo ROOT has an empty dirname, and dropping it
+            # meant the prefix was computed from the unit's *other* files: the
+            # `(root)` unit here holds README.md plus claude_sessions/__init__.py
+            # and came out scoped `claude_sessions/**` — firing on a tree it is
+            # not about and never on the root files it IS about. Kept as a
+            # first-level entry so the common prefix correctly collapses.
+            dirs.add(os.path.dirname(str(f).replace('\\', '/')).strip('/'))
+    common = []
+    if dirs and '' not in dirs:
+        parts = [d.split('/') for d in dirs]
+        for seg in zip(*parts):
+            if len(set(seg)) != 1:
+                break
+            common.append(seg[0])
+    if common:
+        return '/'.join(common) + '/**'
+    mod = str(module or '').strip('/')
+    if mod and mod not in ('(root)', '.'):
+        return f"{mod}/**"
+    # A unit that genuinely spans the repo root gets a glob that still SCOPES —
+    # '**' is indistinguishable from an always-on rule and defeats the point.
+    return '*'
 
 
 def render_rule(repo, module, summary, entities, relations):
-    glob = _unit_glob(entities)
+    glob = _unit_glob(entities, module)
     lines = [
         '---',
         f'description: "claudectl memory: {repo}/{module}"',

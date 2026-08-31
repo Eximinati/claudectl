@@ -195,6 +195,7 @@ def state_payload():
         'memory_budget': s.get('memory_budget', 600),
         'gui_shell': s.get('gui_shell', 'auto'),
         'auto_update': s.get('auto_update', 'notify'),
+        'notifications': bool(s.get('notifications', True)),
         'plan_model': s.get('plan_model', ''),
         'exec_model': s.get('exec_model', ''),
         'extract_model': s.get('extract_model', ''),
@@ -289,34 +290,41 @@ def _stage_tier(s):
     return t if t in _themes.STAGE_TIERS else 'lite'
 
 
-def launch_session(path, encoded, choice, opts):
-    """Spawn claude.exe in a NEW console window. Returns (ok, error)."""
+def launch_session(path, encoded, choice, opts, want_pid=False):
+    """Spawn claude.exe in a NEW console window. Returns (ok, error).
+
+    `want_pid=True` returns (ok, error, pid) instead — the loops board needs a
+    handle on the console it started, because a `/loop` lives inside its session
+    and stopping it from outside means ending that process tree. The default
+    shape is unchanged so the two existing callers stay as they are."""
     from .main import build_launch_command
     from .paths import resolve_dir
     # `path` arrives in a request body and becomes a subprocess cwd; validate
     # before spawning, not after.
+    def _out(ok, err, pid=0):
+        return (ok, err, pid) if want_pid else (ok, err)
     if not resolve_dir(path):
-        return False, 'not a directory: %s' % (path or '(empty)')
+        return _out(False, 'not a directory: %s' % (path or '(empty)'))
     try:
         args, env, proj_folder = build_launch_command(path, encoded, choice, opts)
     except RuntimeError as e:
-        return False, str(e)
+        return _out(False, str(e))
     title = f'claude — {os.path.basename(path) or path}'
     # CREATE_NEW_CONSOLE directly (inside proc.spawn_terminal): the old
     # `cmd /c start …` chain, spawned from a windowless GUI process, produced a
     # broken/transparent console window under Windows Terminal.
     from . import proc
-    _p, err = proc.spawn_terminal(args, cwd=path, env=env, title=title,
-                                  keep_open=args is None)
+    p, err = proc.spawn_terminal(args, cwd=path, env=env, title=title,
+                                 keep_open=args is None)
     if err:
-        return False, err
+        return _out(False, err)
     try:
         from . import workspace
         workspace.update_manifest(path, proj_folder, 'launch', choice=choice,
                                   opts={k: opts.get(k) for k in ('effort', 'model', 'perm')})
     except Exception:
         pass
-    return True, ''
+    return _out(True, '', getattr(p, 'pid', 0) or 0)
 
 
 def rename_session(encoded, cfgdir, sid, name):
@@ -609,6 +617,21 @@ def _api_settings(q, body):
                                                     float(body['headless_budget_usd'] or 0)))
         except (TypeError, ValueError):
             raise BadRequest('headless_budget_usd must be a number')
+    # memory limits are read by the detached memory worker and bound what it
+    # may SPEND, so they are clamped here rather than trusted off the wire.
+    # 0/blank means "no cap", which the backend spells as None.
+    if 'memory_max_calls' in body:
+        try:
+            n = int(body['memory_max_calls'] or 0)
+        except (TypeError, ValueError):
+            raise BadRequest('memory_max_calls must be a whole number')
+        s['memory_max_calls'] = max(1, min(500, n)) if n > 0 else None
+    if 'memory_max_entities' in body:
+        try:
+            s['memory_max_entities'] = max(50, min(20000,
+                                                   int(body['memory_max_entities'] or 500)))
+        except (TypeError, ValueError):
+            raise BadRequest('memory_max_entities must be a whole number')
     # failover_models is user input that a detached daemon reads back —
     # sanitize at this trust boundary rather than in the daemon.
     if 'failover_models' in body:

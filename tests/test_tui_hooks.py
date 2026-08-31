@@ -354,3 +354,15 @@ def test_hooks_menu_shows_distinct_labels_for_same_event(monkeypatch, tmp_path):
     assert 'minimal-code' in plain
     assert 'concise-output' in plain
     assert 'echo custom-thing' in plain          # unknown command → snippet
+
+
+def test_the_stale_on_change_preset_is_wired_to_a_real_signal():
+    """It shipped bound to `FileChanged` — whose matcher is a list of literal
+    filenames to watch, not a glob over a codebase — and invoked worklog_hook,
+    which never touches memory. It had therefore never marked anything stale."""
+    from claude_sessions import hooks
+    p = hooks.TEMPLATES['memory-stale-on-change']
+    assert p['event'] == 'PostToolUse'
+    assert p['entry']['matcher'] == 'Edit|Write|NotebookEdit'
+    cmds = ' '.join(h['command'] for h in p['entry']['hooks'])
+    assert 'memdirty_hook.py' in cmds and 'worklog_hook.py' not in cmds

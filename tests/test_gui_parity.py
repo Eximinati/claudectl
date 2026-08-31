@@ -204,34 +204,53 @@ def test_agents_create_read_delete(monkeypatch, tmp_path):
 
 
 def test_skills_endpoints(monkeypatch, tmp_path):
+    """The payload is the SCOPES Claude Code loads, and a write says which one.
+
+    It used to be `{templates, project}`: a list of starters plus one project's
+    folder. Nothing said what was actually active, and an install with no scope
+    went wherever the caller's `path` happened to point."""
     sb = Sandbox(monkeypatch, tmp_path)
-    monkeypatch.setattr(config_mod, 'skills_library_dir', str(tmp_path / 'sklib'))
     actual, enc, folder, sids = _seed(sb, monkeypatch)
     srv, base = _serve()
     try:
-        # templates list includes the bundled starters
         code, d = _req(f'{base}/api/skills?path={urllib.request.quote(actual)}')
         assert code == 200
+        assert {'personal', 'project', 'plugin', 'bundled', 'templates'} <= set(d)
         names = [t['name'] for t in d['templates']]
-        assert 'commit-message' in names and d['project'] == []
+        assert 'commit-message' in names and d['project'] == [] and d['personal'] == []
+        assert d['personal_dir'].endswith('skills')
 
-        # install a bundled template into the project
         tmpl = next(t for t in d['templates'] if t['name'] == 'commit-message')
-        code, r = _req(base + '/api/skills/install', {'dir': tmpl['dir'], 'path': actual})
+
+        # no scope = personal, which is the one that works in every project
+        code, r = _req(base + '/api/skills/install', {'dir': tmpl['dir']})
         assert r['ok'] and os.path.isfile(os.path.join(r['dir'], 'SKILL.md'))
+        assert r['dir'].startswith(d['personal_dir'])
 
-        # now it shows under project skills
-        code, d = _req(f'{base}/api/skills?path={urllib.request.quote(actual)}')
-        assert any(s['name'] == 'commit-message' for s in d['project'])
+        # and it comes back as personal, with the command Claude Code would use
+        code, d2 = _req(f'{base}/api/skills?path={urllib.request.quote(actual)}')
+        row = next(s for s in d2['personal'] if s['command'] == 'commit-message')
+        assert row['scope'] == 'personal'
 
-        # read it back
+        # asking for the project scope puts it there instead
+        code, r = _req(base + '/api/skills/install',
+                       {'dir': tmpl['dir'], 'scope': 'project', 'path': actual})
+        assert r['ok'] and r['dir'].startswith(os.path.join(actual, '.claude', 'skills'))
+        code, d3 = _req(f'{base}/api/skills?path={urllib.request.quote(actual)}')
+        proj = next(s for s in d3['project'] if s['command'] == 'commit-message')
+        assert proj['shadowed'], 'a personal skill of the same name wins — say so'
+
+        # project scope without a project is the caller getting it wrong
+        code, r = _req(base + '/api/skills/install',
+                       {'dir': tmpl['dir'], 'scope': 'project'})
+        assert code == 400
+
         code, r = _req(base + '/api/skills/read?dir=' + urllib.request.quote(tmpl['dir']))
         assert r['meta']['name'] == 'commit-message'
 
-        # create a fresh skill, then remove it
         code, r = _req(base + '/api/skills/create',
                        {'name': 'my new skill', 'description': 'does things',
-                        'path': actual, 'body': '# X\n\nstep'})
+                        'scope': 'project', 'path': actual, 'body': '# X\n\nstep'})
         assert r['ok'] and os.path.isfile(os.path.join(r['dir'], 'SKILL.md'))
         code, r = _req(base + '/api/skills/remove', {'dir': r['dir']})
         assert r['ok']

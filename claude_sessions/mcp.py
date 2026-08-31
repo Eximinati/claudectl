@@ -1,5 +1,4 @@
 import os
-import subprocess
 import threading
 import time
 
@@ -22,18 +21,17 @@ def get_mcp_status(cfgdir=None):
     claude_exe = get_claude_exe()
     if not claude_exe:
         return []
+    # Through proc.run, not subprocess directly. It was the last hand-rolled
+    # spawn outside that module, and being outside it had a cost: the test
+    # suite's process stubs patch `proc`, so every endpoint test that touched
+    # MCP ran the REAL `claude mcp list` against the user's real account —
+    # caught by the conftest guard that restores files a test damaged.
+    from . import proc
     try:
-        r = subprocess.run(
-                [claude_exe, 'mcp', 'list'],
-                capture_output=True, text=True,
-                encoding='utf-8', errors='ignore', timeout=10,
-                stdin=subprocess.DEVNULL, env=_c.account_env(cfgdir),
-                # getattr, not a bare reference: the constant does not exist on
-                # POSIX, and the bare form raised AttributeError inside the
-                # try/except that returns [] — so every MCP server silently
-                # vanished from the list on macOS and Linux.
-                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-            )
+        r = proc.run([claude_exe, 'mcp', 'list'], timeout=10,
+                     env=_c.account_env(cfgdir))
+        if r is None:
+            return []
         lines = (r.stdout + r.stderr).splitlines()
         servers = []
         for line in lines:

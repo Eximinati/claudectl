@@ -179,3 +179,96 @@ def test_update_is_nonfatal_without_project(monkeypatch, tmp_path):
     # no project_path, no proj_folder → must not raise, returns None or dict
     res = workspace.update_manifest('', None, 'launch', choice='new')
     assert res is None or isinstance(res, dict)
+
+
+# ── the score has to MOVE when you act on it ─────────────────
+# The writer stamped a baseline for scaffold/ai_analyze only, while _last_gen
+# read the same two — so a memory rebuild, a compress or a prune regenerated
+# the very blocks the check measures and the score stayed on Stale forever.
+
+def test_rebuilding_memory_clears_the_stale_flag(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    _stub_git(monkeypatch, FIXED_SHA)
+    actual, enc, folder, sids = _seed_project(sb, monkeypatch)
+    workspace.update_manifest(actual, folder, 'scaffold')
+
+    _stub_git(monkeypatch, 'c' * 40)                 # work happened
+    _, _, checks, before, _ = workspace.compute_status(actual, folder)
+    assert {c['name']: c['state'] for c in checks}['claude_md_fresh'] == 'stale'
+
+    # the operation the UI actually tells you to run
+    workspace.update_manifest(actual, folder, 'memory')
+    _, _, checks, after, _ = workspace.compute_status(actual, folder)
+    states = {c['name']: c['state'] for c in checks}
+    assert states['claude_md_fresh'] == 'fresh'
+    assert states['repo'] == 'fresh' and states['sessions'] == 'fresh'
+    assert after > before
+
+
+def test_every_context_regenerating_op_is_a_baseline(monkeypatch, tmp_path):
+    """One tuple, read by _last_gen and written by update_manifest. They were
+    two lists that disagreed, which is the whole bug."""
+    assert set(workspace._BASELINE_OPS) >= {'scaffold', 'ai_analyze', 'compress',
+                                            'memory', 'prune'}
+    assert 'launch' not in workspace._BASELINE_OPS, 'launching regenerates nothing'
+
+    sb = Sandbox(monkeypatch, tmp_path)
+    _stub_git(monkeypatch)
+    actual, enc, folder, sids = _seed_project(sb, monkeypatch)
+    for op in workspace._BASELINE_OPS:
+        m = workspace.update_manifest(actual, folder, op)
+        assert 'sessions_at_gen' in m['operations'][op], op
+
+
+def test_an_op_with_no_baseline_is_not_taken_as_one(monkeypatch, tmp_path):
+    """A `launch` record carries only last_run. Treating it as the baseline
+    would report `fresh` on no evidence at all."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    _stub_git(monkeypatch)
+    actual, enc, folder, sids = _seed_project(sb, monkeypatch)
+    workspace.update_manifest(actual, folder, 'launch', choice='new')
+    m = workspace.load_manifest(actual, folder)
+    assert workspace._last_gen(m) is None
+
+
+def test_a_check_that_does_not_count_does_not_warn(monkeypatch, tmp_path):
+    """`applicable=False` removes a check from BOTH sides of the score, so
+    painting it Stale showed a warning worth zero points."""
+    checks = [{'name': 'mcp_docs', 'state': 'fresh', 'applicable': False,
+               'detail': 'no MCP servers'}]
+    assert workspace._state_of(checks, 'mcp_docs') == 'n/a'
+    assert workspace._DOTS['n/a'] and workspace._WORDS['n/a'] == 'n/a'
+
+
+def test_the_status_block_says_how_to_raise_the_score(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    _stub_git(monkeypatch)
+    actual, enc, folder, sids = _seed_project(sb, monkeypatch, document_mcp=False)
+    lines, _m, score, _safe = workspace._status_lines(actual, folder)
+    body = '\n'.join(lines)
+    assert score < 100
+    assert 'To raise it:' in body
+    # the remedy, not just the symptom
+    assert 'undocumented: TestMCP' in body and 'MCP screen' in body
+
+
+def test_mcp_docs_are_found_under_any_account(monkeypatch, tmp_path):
+    """The reader used config.global_claude_md — bound at import to whichever
+    account was active then — while the writer takes a cfgdir. Documenting a
+    server under a second account wrote a file status never opened."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    _stub_git(monkeypatch)
+    actual, enc, folder, sids = _seed_project(sb, monkeypatch, document_mcp=False)
+    _, _, checks, _, _ = workspace.compute_status(actual, folder)
+    assert {c['name']: c['state'] for c in checks}['mcp_docs'] == 'stale'
+
+    alt = os.path.join(str(tmp_path), 'second-account')
+    os.makedirs(alt, exist_ok=True)
+    with open(os.path.join(alt, 'CLAUDE.md'), 'w', encoding='utf-8') as f:
+        f.write('# Global\n<!-- MCP:TestMCP:START -->\n## MCP: TestMCP\n'
+                '- `do_thing` does a thing\n<!-- MCP:TestMCP:END -->\n')
+    monkeypatch.setattr(config, 'all_config_dirs',
+                        lambda: [('default', config.config_dir), ('alt', alt)])
+
+    _, _, checks, _, _ = workspace.compute_status(actual, folder)
+    assert {c['name']: c['state'] for c in checks}['mcp_docs'] == 'fresh'

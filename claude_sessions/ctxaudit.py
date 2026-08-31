@@ -25,6 +25,46 @@ SYSPROMPT_TOKENS_WARN = 500
 COMPACT_HEADING = '# Compact instructions'
 
 
+#: the user-owned fence. Every other sentinel in this codebase protects
+#: claudectl's output from a human editing it; this one is the reverse, and it
+#: is the answer to "if I compress, do I lose what I wrote".
+_KEEP_RE = re.compile(re.escape(_c._KEEP_START) + r'.*?' + re.escape(_c._KEEP_END),
+                      re.S)
+
+
+def keep_regions(text):
+    """How many CLAUDECTL:KEEP regions the text fences off."""
+    return len(_KEEP_RE.findall(text or ''))
+
+
+def protect_section(md_path, needle):
+    """Wrap the section containing `needle` in a KEEP fence. Returns True if
+    the file changed.
+
+    Section, not line: a heading and the prose under it are one idea, and a
+    fence around half of it protects half of it."""
+    try:
+        text = open(md_path, encoding='utf-8', errors='ignore').read()
+    except Exception:
+        return False
+    if not needle or needle not in text or _c._KEEP_START in text[
+            max(0, text.index(needle) - 400):text.index(needle)]:
+        return False
+    lines = text.splitlines(True)
+    idx = next((i for i, l in enumerate(lines) if needle in l), -1)
+    if idx < 0:
+        return False
+    start = idx
+    while start > 0 and not lines[start].lstrip().startswith('#'):
+        start -= 1
+    end = start + 1
+    while end < len(lines) and not lines[end].lstrip().startswith('#'):
+        end += 1
+    out = (lines[:start] + [_c._KEEP_START + '\n'] + lines[start:end]
+           + [_c._KEEP_END + '\n'] + lines[end:])
+    return bool(_c.write_atomic(md_path, ''.join(out)))
+
+
 def split_blocks(text):
     """Split CLAUDE.md text into its sentinel machine blocks and the manual
     rest. Returns {'autogen','sessions','memory','manual'} ('' when absent)."""
@@ -91,6 +131,13 @@ def audit_items(project_path, proj_folder, settings=None):
             manual_warn.append("no '# Compact instructions' section — add one (i)")
         add('CLAUDE.md · manual content', tokens_estimate(blocks['manual']),
             md_path, warnings=manual_warn)
+        # what AI compression is forbidden to touch. Reported as its own line
+        # because "protected" is a fact about your file you should be able to
+        # SEE before you press compress, not one you find out afterwards.
+        n_keep = keep_regions(md)
+        if n_keep:
+            add(f'CLAUDE.md · protected ({n_keep} fenced)',
+                tokens_estimate(''.join(_KEEP_RE.findall(md))), md_path)
         if blocks['autogen']:
             add('CLAUDE.md · autogen (repos/commits)', tokens_estimate(blocks['autogen']),
                 md_path)
@@ -109,10 +156,18 @@ def audit_items(project_path, proj_folder, settings=None):
             warnings=['missing — press c in the sessions menu to scaffold'])
 
     # ── global CLAUDE.md (every session of EVERY project) ──
-    g = _read(_c.global_claude_md)
-    if g:
+    # Per account, derived per call: `_c.global_claude_md` is bound at import to
+    # whichever account was active then, so the audit silently costed the wrong
+    # file — and reported nothing at all for the accounts that actually have one.
+    from . import workspace as _ws
+    for _acct, gpath in _ws._global_md_paths():
+        g = _read(gpath)
+        if not g:
+            continue
         t = tokens_estimate(g)
-        add('global ~/.claude/CLAUDE.md', t, _c.global_claude_md,
+        label = ('global ~/.claude/CLAUDE.md' if _acct == 'default'
+                 else f'global CLAUDE.md ({_acct})')
+        add(label, t, gpath,
             warnings=([f'> {GLOBAL_TOKENS_WARN} tok — loads in EVERY project']
                       if t > GLOBAL_TOKENS_WARN else []))
 

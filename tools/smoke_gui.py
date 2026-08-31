@@ -252,6 +252,19 @@ ROUTES = {
         'memory 2h old · 148 entities · 11 modules',
         'CLAUDE.md 232 tok of a 250 budget',
         'git: main · clean']},
+    '/api/agents/library': {'own': [
+        {'name': 'reviewer', 'desc': 'reviews diffs', 'scope': 'user',
+         'path': 'C:/x/agents/reviewer.md', 'model': ''}],
+        'categories': [
+            {'category': '01-core-development', 'agents': [
+                {'name': 'backend-developer', 'desc': 'server-side APIs',
+                 'path': 'C:/x/lib/backend.md', 'model': ''},
+                {'name': 'frontend-developer', 'desc': 'React and friends',
+                 'path': 'C:/x/lib/frontend.md', 'model': ''}]},
+            {'category': '04-quality-security', 'agents': [
+                {'name': 'security-auditor', 'desc': 'finds holes',
+                 'path': 'C:/x/lib/sec.md', 'model': ''}]}],
+        'known_tools': ['Read', 'Bash'], 'models': []},
     '/api/agents': {'categories': []}, '/api/skills': {'project': [], 'templates': []},
     '/api/hooks': {'hooks': [], 'templates': []},
     '/api/omniroute/status': {'ok': False}, '/api/failover/status': {'running': False},
@@ -312,11 +325,89 @@ ROUTES = {
          'worktrees': [{'path': 'D:/repos/solo', 'name': 'solo', 'branch': 'main',
                         'head': 'aaa', 'main': True, 'dirty': 0, 'ahead': 0,
                         'behind': 0, 'session': None}]}]},
-    '/api/output-styles': {'active': 'default', 'styles': [
-        {'name': 'default', 'description': 'As it ships.', 'scope': 'built-in',
-         'builtin': True, 'active': True, 'lines': 0},
-        {'name': 'Reviewer', 'description': 'Reviews only.', 'scope': 'project',
-         'builtin': False, 'active': False, 'lines': 12}]},
+    '/api/output-styles': {
+        'active': 'Reviewer', 'active_scope': 'project',
+        'user_dir': 'C:/x/output-styles', 'project_dir': '/demo/acme-api/.claude/output-styles',
+        'styles': [
+            {'name': 'default', 'description': 'As it ships.', 'scope': 'built-in',
+             'builtin': True, 'active': False, 'lines': 0},
+            {'name': 'Terse', 'description': 'Answers only.', 'scope': 'user',
+             'builtin': False, 'active': False, 'lines': 9},
+            {'name': 'Reviewer', 'description': 'Reviews only.', 'scope': 'project',
+             'builtin': False, 'active': True, 'lines': 12}],
+        'starters': [{'name': 'Ship', 'description': 'Change plus one line.',
+                      'scope': 'starter', 'builtin': False, 'file': '', 'lines': 8}]},
+    # the four scopes Claude Code loads skills from, one row each, so the page
+    # is audited in the state that has something in every card
+    '/api/skills': {
+        'personal_dir': 'C:/x/skills', 'project_dir': '/demo/acme-api/.claude/skills',
+        'accounts': [{'name': 'default', 'dir': ''}, {'name': 'teamA', 'dir': 'w'}],
+        'sessions_scanned': 30,
+        'personal': [{'name': 'commit-message', 'command': 'commit-message',
+                      'desc': 'writes commits', 'dir': 'C:/x/skills/commit-message',
+                      'scope': 'personal', 'uses': 12, 'last_used': '2d',
+                      'plugin': '', 'shadowed': False, 'auto': True,
+                      'weak': False, 'via': '', 'sessions': 18,
+                      'of_sessions': 30}],
+        'project': [{'name': 'deploy', 'command': 'deploy', 'desc': 'ships it',
+                     'dir': '/demo/acme-api/.claude/skills/deploy', 'scope': 'project',
+                     'uses': 0, 'last_used': '', 'plugin': '', 'shadowed': True,
+                     'auto': False, 'weak': True, 'via': '', 'sessions': 0,
+                     'of_sessions': 30}],
+        'plugin': [{'name': 'review', 'command': 'demo:review', 'desc': 'reviews',
+                    'dir': 'C:/x/plugins/demo/skills/review', 'scope': 'plugin',
+                    'uses': 3, 'last_used': '5h', 'plugin': 'demo@official',
+                    'shadowed': False, 'auto': True, 'weak': False,
+                    'via': 'demo', 'sessions': 27, 'of_sessions': 30}],
+        'bundled': [{'name': 'doctor', 'command': 'doctor', 'desc': '', 'dir': '',
+                     'scope': 'bundled', 'uses': 9, 'last_used': '1d',
+                     'plugin': '', 'shadowed': False, 'auto': True,
+                     'weak': False, 'via': '', 'sessions': 0, 'of_sessions': 30}],
+        'templates': [{'name': 'token-economy', 'command': 'token-economy',
+                       'desc': 'terse answers', 'dir': 'C:/x/tmpl/token-economy',
+                       'scope': 'template', 'uses': 0, 'last_used': '',
+                       'plugin': '', 'shadowed': False, 'auto': True,
+                       'weak': False, 'via': '', 'sessions': 0,
+                       'of_sessions': 0}]},
+    '/api/global-claude-md': {
+        'path': 'C:/x/CLAUDE.md', 'exists': True,
+        'text': '# Global\n\nAlways run the tests.\n',
+        'accounts': [{'name': 'default', 'dir': ''}, {'name': 'teamA', 'dir': 'w'}]},
+    '/api/loop-md': {'text': 'Check the release PR.\n', 'file': 'C:/x/loop.md',
+                     'exists': True},
+    # one loop still open and one that ended: the board's two states, and the
+    # only place the turn counter and the End-session button are rendered
+    '/api/loops': {'registry': 'C:/x/claudectl-loops.json', 'loops': [
+        {'id': 'aaaa1111', 'name': 'acme-api', 'path': '/demo/acme-api',
+         'encoded': 'demo-acme-api', 'cfgdir': '', 'interval': '15m',
+         'prompt': 'check CI', 'text': '/loop 15m check CI', 'pid': 4242,
+         'started': _NOW - 900, 'stopped': 0, 'running': True, 'age': 900,
+         'iterations': 4, 'last_activity': 60, 'unknown_pid': False},
+        {'id': 'bbbb2222', 'name': 'acme-web', 'path': '/demo/acme-web',
+         'encoded': 'demo-acme-web', 'cfgdir': 'w', 'interval': '',
+         'prompt': '', 'text': '/loop', 'pid': 0,
+         'started': _NOW - 8000, 'stopped': _NOW - 40, 'running': False,
+         'age': 8000, 'iterations': 0, 'last_activity': 0, 'unknown_pid': False}]},
+    # objects, not strings: the endpoint returns {text,score,projects,pinned}
+    # and the near-miss list is what the card shows when nothing qualifies
+    '/api/conventions': {
+        'conventions': [{'text': 'Prefer stdlib over a new dependency', 'score': 25,
+                         'projects': 2, 'pinned': False},
+                        {'text': 'Tests live beside the code they cover', 'score': 20,
+                         'projects': 2, 'pinned': True}],
+        'near': [{'text': 'Always run the linter before committing', 'projects': 1,
+                  'why': 'seen in 1 project — needs 1 more, or pin it to promote it now'}],
+        'block': '## Conventions\n- Prefer stdlib over a new dependency\n'},
+    '/api/history': {'keys': [
+        {'key': 'claude_md', 'title': 'CLAUDE.md', 'versions': [
+            {'ts': _NOW - 900, 'age': '15m', 'added': 4, 'removed': 61},
+            {'ts': _NOW - 90000, 'age': '1d', 'added': 12, 'removed': 3}]},
+        {'key': 'memory_graph', 'title': 'memory graph', 'versions': [
+            {'ts': _NOW - 3600, 'age': '1h', 'added': 0, 'removed': 18}]},
+        {'key': 'system_prompt', 'title': 'system prompt', 'versions': []}]},
+    '/api/ctxaudit/prune-preview': {'ok': True, 'changed': True, 'old_tokens': 1840,
+                                    'new_tokens': 1190,
+                                    'dropped': ['Fable Claude Script', 'AI ClaudeMd']},
     '/api/statusline': {'installed': False, 'preview': 'Opus 5 - memory 4m',
                         'command': 'py -m claude_sessions statusline'},
     # the Tools tab's two async cards. Without them it audits two spinners —
@@ -327,7 +418,15 @@ ROUTES = {
                              (('cd', 272), ('py', 93), ('grep', 53), ('ls', 26),
                               ('git', 23), ('tasklist', 19), ('sed', 18))]},
     '/api/brief': {
-        'suggestions': [{'tag': 'fix', 'text': 'recurring issue: ' + 'long prose ' * 30}],
+        'suggestions': [{'tag': 'fix', 'text': 'recurring issue: ' + 'long prose ' * 30},
+                        # the new emitters: an alert tag, a dismissible scan
+                        # finding, and a plain local one
+                        {'tag': 'stale', 'text': 'CLAUDE.md may be outdated (repo moved)'
+                                                 ' — rebuild memory (m → b) (+25% freshness)'},
+                        {'tag': 'vuln', 'text': 'cfgdir is joined with a path on ~40 endpoints'},
+                        {'tag': 'todo', 'text': 'claude_sessions/gui.py:88 — TODO: cache this'},
+                        {'tag': 'test', 'text': 'no test file for: failover, denygen'}],
+        'scan_at': '2026-08-30T09:12:00+00:00',
         'since': {'since': '2026-08-20', 'note': '', 'repos': [
             {'label': 'IKM.IkmVision', 'path': '/demo/a', 'dirty': 7,
              'commits': ['6580438 fix(cmake): select stubs by target architecture',
@@ -727,6 +826,124 @@ def main():
             "document.querySelectorAll('#plist .proj .tag').length > 0")
         check('revealing shows it again, marked', rows == 2 and tagged, rows)
         pg.evaluate("ST.projects[1].hidden=false;SHOW_HIDDEN=false;drawProjects()")
+
+        print('\n— the pages that could not explain themselves —')
+        # Skills: every scope Claude Code loads from, each row carrying the
+        # command you type. The old page showed a project card that was inert
+        # without a project, and a "library" nothing reads.
+        pg.evaluate("go('skills')")
+        pg.wait_for_timeout(900)
+        txt=pg.evaluate("document.querySelector('#content').innerText")
+        check('every scope is in one list',
+              all(w in txt for w in ('personal','project','plugin','bundled')))
+        check('a skill row shows the command you type',
+              pg.evaluate("document.querySelectorAll('#content .skcmd').length")>=4)
+        check('a shadowed project skill says so','shadowed' in txt)
+        # THE point of the rework: two signals, never one number. "typed" is
+        # Claude Code's counter; "in N/M sessions" is measured from transcripts,
+        # and the gap between them is what made caveman read as unused.
+        check('both usage signals are shown',
+              'typed 12×' in txt and 'in 18/30 sessions' in txt)
+        check('a skill Claude may not auto-load says so','manual only' in txt)
+        check('a description too thin to match on says so','thin description' in txt)
+        # the filter box, which is the only reason a long list is usable
+        pg.evaluate("(()=>{const i=document.querySelector('#skQ');i.value='deploy';"
+                    "i.dispatchEvent(new Event('input'));})()")
+        pg.wait_for_timeout(200)
+        vis=pg.evaluate("[...document.querySelectorAll('#content .skrow')]"
+                        ".filter(e=>e.style.display!=='none').length")
+        check('the skills filter narrows the list',vis==1,
+              str(vis)+' visible; count='+str(pg.evaluate("document.querySelector('#skCount').textContent")))
+        # a scope chip is a second filter over the SAME pass — the two must not
+        # fight over `display`, which is why they share one function
+        pg.evaluate("(()=>{const i=document.querySelector('#skQ');i.value='';"
+                    "i.dispatchEvent(new Event('input'));})();skScope('plugin')")
+        pg.wait_for_timeout(200)
+        scoped=pg.evaluate("[...document.querySelectorAll('#content .skrow')]"
+                           ".filter(e=>e.style.display!=='none')"
+                           ".map(e=>e.dataset.scope)")
+        check('a scope chip narrows to that scope',
+              scoped==['plugin'],scoped)
+        pg.evaluate("skScope('all')")
+        pg.wait_for_timeout(150)
+        check('…and going back to all restores every row',
+              pg.evaluate("[...document.querySelectorAll('#content .skrow')]"
+                          ".filter(e=>e.style.display!=='none').length")==4)
+
+        # Output styles: what is active, WHERE it is pinned, and a view button
+        # that shows something for a built-in (which has no file at all).
+        pg.evaluate("go('ostyles')")
+        pg.wait_for_timeout(900)
+        txt=pg.evaluate("document.querySelector('#content').innerText")
+        check('the output-style page says what is in force','in force' in txt)
+        check('…and which file pins it','settings.json' in txt)
+        check('starters are offered','Starters from claudectl' in txt)
+        before=len(errs)
+        pg.evaluate("osView('default')")
+        pg.wait_for_timeout(500)
+        shown=pg.evaluate("document.querySelector('#drawer').classList.contains('show')")
+        body=pg.evaluate("document.querySelector('#dBody').innerText")
+        check('view opens on a built-in and is not empty',
+              shown and len(body)>20 and len(errs)==before,body[:60])
+        pg.evaluate("document.querySelector('#drawer').classList.remove('show')")
+
+        # The account's global instructions used to be the third card of the MCP
+        # page. It is the file read in EVERY session, so it has its own page.
+        pg.evaluate("go('globalmd')")
+        pg.wait_for_timeout(900)
+        check('global CLAUDE.md is editable on its own page',
+              pg.evaluate("!!document.querySelector('#gmText')"))
+
+        # A /loop lives inside a session, so the board's job is to say what is
+        # open, how often it has fired, and how to end it.
+        pg.evaluate("go('loops')")
+        pg.wait_for_timeout(900)
+        txt = pg.evaluate("document.querySelector('#content').innerText")
+        check('the loops board separates open sessions from ended ones',
+              'session open' in txt and 'ended' in txt)
+        check('…and reports iterations from the transcript', '4 turns' in txt)
+        check('loop.md is edited beside the loops',
+              pg.evaluate("!!document.querySelector('#loopMd')"))
+        # the command is built in front of you rather than guessed at
+        pg.evaluate("(()=>{const i=document.querySelector('#loopInt');i.value='15m';"
+                    "i.dispatchEvent(new Event('input'));"
+                    "const p=document.querySelector('#loopPrompt');p.value='check CI';"
+                    "p.dispatchEvent(new Event('input'));})()")
+        pg.wait_for_timeout(150)
+        check('the start form previews the exact command',
+              'check CI' in pg.evaluate("document.querySelector('#loopPreview').textContent"))
+        # the two kinds are the whole feature: one needs a session, the other
+        # runs with everything closed
+        pg.evaluate("loopKind('session')")
+        pg.wait_for_timeout(400)
+        check('switching to the session kind previews a /loop command',
+              pg.evaluate("document.querySelector('#loopPreview').textContent")
+              .startswith('/loop'))
+        pg.evaluate("loopKind('schedule')")
+        pg.wait_for_timeout(400)
+        txt=pg.evaluate("document.querySelector('#content').innerText")
+        check('the background kind states its guardrails',
+              'expiry' in txt.lower() and 'permission' in txt.lower(),txt[:0])
+        check('a scheduled row shows runs, cost and expiry',
+              'background' in txt and 'run' in txt)
+
+        # 155 agents in 10 collapsed categories is not something you scroll
+        pg.evaluate("go('agents')")
+        pg.wait_for_timeout(900)
+        check('the agent library has a filter',
+              pg.evaluate("!!document.querySelector('#agQ')"))
+        pg.evaluate("(()=>{const i=document.querySelector('#agQ');i.value='security';"
+                    "i.dispatchEvent(new Event('input'));})()")
+        pg.wait_for_timeout(200)
+        vis=pg.evaluate("[...document.querySelectorAll('#content .agrow')]"
+                        ".filter(e=>e.style.display!=='none').length")
+        opened=pg.evaluate("[...document.querySelectorAll('#content details')]"
+                           ".filter(d=>d.open&&d.style.display!=='none').length")
+        check('the agent filter narrows and opens the matching category',
+              vis==1 and opened==1,f'{vis} rows, {opened} open')
+        # go(<global page>) clears CUR; the project-tab checks below need it back
+        pg.evaluate("openProject(ST.projects[0])")
+        pg.wait_for_timeout(500)
 
         print('\n— controls, not read-outs —')
         # A toggle you can only READ is the class no route-coverage test can

@@ -210,6 +210,11 @@ TEMPLATES = {
         'entry': {'hooks': [{'type': 'command', 'command': _py_hook('concise_hook.py')}]},
         'desc': 'Cut output tokens: no narration, no re-printed code (saves tokens)',
     },
+    'suggest-subagent': {
+        'event': 'UserPromptSubmit',
+        'entry': {'hooks': [{'type': 'command', 'command': _py_hook('agentnudge_hook.py')}]},
+        'desc': 'Name the project subagent that fits your prompt (keyword match, no model call)',
+    },
     'filter-test-output': {
         'event': 'PreToolUse',
         'entry': {'matcher': 'Bash',
@@ -229,13 +234,19 @@ TEMPLATES = {
         'desc': 'Re-inject project memory right after /compact discards the context',
     },
     'memory-stale-on-change': {
-        # The scheduler polls every auto_memory_interval seconds and hashes to
-        # decide whether anything changed. FileChanged says so directly, so the
-        # poll stops being the mechanism and becomes the fallback.
-        'event': 'FileChanged',
-        'entry': {'hooks': [{'type': 'command',
-                             'command': _py_hook('worklog_hook.py')}]},
-        'desc': 'Mark project memory stale the moment a file changes (instead of polling)',
+        # This preset had never worked. It was bound to `FileChanged`, whose
+        # matcher is a list of literal FILENAMES to watch (built for `.env`-style
+        # sentinels), not a glob over a codebase — and it invoked worklog_hook,
+        # which does not touch memory at all. PostToolUse on the edit tools is
+        # the signal that actually exists: it fires after every successful edit
+        # and its payload carries the file path.
+        'event': 'PostToolUse',
+        'entry': {'matcher': 'Edit|Write|NotebookEdit',
+                  'hooks': [{'type': 'command',
+                             'command': _py_hook('memdirty_hook.py')}]},
+        'desc': ('Record the files Claude edits, so auto-memory re-extracts just '
+                 'those (edits made outside Claude Code are still caught by the '
+                 'periodic scan)'),
     },
     'log-permission-denials': {
         # feeds the permission-fatigue work: what actually gets denied, rather
@@ -499,6 +510,8 @@ _SCRIPT_LABELS = {
     'testfilter_hook.py': 'filter-test-output',
     'guard_hook.py': 'guard/block',
     'logbash_hook.py': 'log-bash-commands',
+    'agentnudge_hook.py': 'suggest-subagent',
+    'memdirty_hook.py': 'memory stale-on-edit',
 }
 
 

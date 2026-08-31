@@ -99,6 +99,11 @@ _DEFAULT_SETTINGS = {
     #: the same consent (claudectl talking to the network on your behalf) and a
     #: second switch is a second thing to desync.
     'auto_update': 'notify',
+    #: desktop notification when a background job that ran long enough finishes
+    #: — the detached memory worker has no other way to reach you at all.
+    'notifications': True,
+    #: one-time move of the pre-1.8 private skill library into <account>/skills
+    'skills_migrated': False,
     # ── GUI appearance ──
     # These MUST be declared here, not just accepted by the POST handler.
     # load_settings() drops any key it does not know, and /api/settings does
@@ -161,6 +166,7 @@ INTERNAL_SETTINGS = frozenset({
     'nav_collapsed', 'side_w', 'nav_h',           # geometry clamps
     'headless_budget_usd',                        # float clamp
     'memory_budget',                 # owned by /api/memory/toggles
+    'skills_migrated',               # a migration marker, not a preference
 })
 
 
@@ -932,6 +938,24 @@ _MEMORY_START   = '<!-- CLAUDECTL:MEMORY:START -->'
 _MEMORY_END     = '<!-- CLAUDECTL:MEMORY:END -->'
 _CONV_START     = '<!-- CLAUDECTL:CONVENTIONS:START -->'
 _CONV_END       = '<!-- CLAUDECTL:CONVENTIONS:END -->'
+#: A fence the USER owns, and the only one that points inwards. The machine
+#: blocks above protect claudectl's output from being hand-edited; this one
+#: protects hand-written prose from claudectl. Anything between these markers is
+#: cut out before an AI compression prompt is built and stitched back verbatim
+#: afterwards, so the model never sees it and therefore cannot reword, shorten
+#: or silently drop it. Nestable regions are not supported and not needed.
+_KEEP_START     = '<!-- CLAUDECTL:KEEP:START -->'
+_KEEP_END       = '<!-- CLAUDECTL:KEEP:END -->'
+#: the delegation table for the agents claudectl installed into a project.
+#: Copying agent files in is not enough on its own: Claude Code matches a
+#: subagent by its `description`, and a set of them nothing ever mentions is a
+#: set that never gets picked. CLAUDE.md is read every turn — that is the lever.
+_AGENTS_START   = '<!-- CLAUDECTL:AGENTS:START -->'
+_AGENTS_END     = '<!-- CLAUDECTL:AGENTS:END -->'
+#: what a background loop has done lately. Rewritten every run, never appended:
+#: it is read on every turn of every session in the project.
+_LOOP_START     = '<!-- CLAUDECTL:LOOP:START -->'
+_LOOP_END       = '<!-- CLAUDECTL:LOOP:END -->'
 
 _GMCP_START = '<!-- MCP:{name}:START -->'
 _GMCP_END   = '<!-- MCP:{name}:END -->'

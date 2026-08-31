@@ -43,6 +43,67 @@ markdown, written into `~/.claude/CLAUDE.md` inside a per-server sentinel block 
 re-updatable). You can also open the global CLAUDE.md directly in your editor from this
 menu. See [Global CLAUDE.md](reference.md#global-claudemd).
 
+## Notifications
+
+A desktop notification — Windows toast, macOS notification centre, `notify-send` on Linux —
+when a background job that ran longer than 20 seconds finishes, and when the detached
+memory worker is done. That worker is the reason this exists: it runs headless, outlives
+the screen that started it, and had no way to tell anyone it had finished. Quick jobs never
+notify. **⚙ Settings → Notifications** turns it off.
+
+## Loops
+
+Two kinds, because Claude Code only offers one.
+
+### In a session
+
+`/loop` re-runs a prompt inside a session — polling a deploy, babysitting a PR, working
+through a maintenance pass. Its tasks are **session-scoped**: they fire only while that
+session is open and idle, expire after seven days, and a fresh conversation clears them.
+claudectl **starts** one by opening a session whose first typed message is
+`/loop [interval] [prompt]` (with the project's usual account, agents, skills and system
+prompt), **watches** it through that session's own transcript — each iteration is a turn —
+and **ends** it by closing the session, because from outside the session there is no other
+lever. Interval and prompt are both optional and each combination means something
+different: both is a fixed schedule, prompt alone lets Claude choose the delay each time,
+neither runs your `loop.md`.
+
+### In the background
+
+For work that should carry on with claudectl closed and no session open, claudectl
+registers an entry in your **OS scheduler** — Task Scheduler on Windows, cron elsewhere —
+that runs headless `claude -p` on the interval, in the project, under the account you pick.
+This is claudectl doing locally what Claude Code's own comparison table calls a Desktop
+scheduled task.
+
+Because it runs unattended, it carries its guardrails in the runner rather than the UI:
+
+- **A permission mode you choose.** `claude -p` starts in Manual mode, so an unattended run
+  does nothing unless it is told what it may do — `auto` (a classifier reviews each action),
+  `acceptEdits` (writes files; shell and network still gated) or `dontAsk` (reports, never
+  changes). The board shows which one each loop is running under.
+- **A 7-day expiry**, the same bound Claude Code puts on its own scheduled tasks, enforced
+  by the scheduled run itself: past it, the task removes itself. **Renew** pushes it out.
+- **Your per-call budget cap** (`Settings → Budget cap`) on every run, and the cost of the
+  last run on every row.
+- **Nothing silent.** A failed run raises a desktop notification; the board keeps a log of
+  the last twenty runs with their cost and one-line outcome.
+
+Each run is a **fresh session** — resuming one forever would grow its context and its cost
+without bound. What makes it a loop rather than a repeated one-shot is a rolling record:
+after every run claudectl rewrites a `CLAUDECTL:LOOP` block in the project's `CLAUDE.md`
+with the last five outcomes, so the next run starts knowing what the previous ones did. It
+is rewritten, never appended, so it cannot grow.
+
+**Stop** removes the scheduler entry, which is exact: it cannot fire again.
+
+### `loop.md`
+
+The prompt a bare `/loop` runs, and what a background loop runs when you leave the prompt
+empty: `<project>/.claude/loop.md` wins over `<account>/loop.md`. Both are edited on the
+same page, with **Build with AI** to draft one (you approve the text before it is written).
+Edits apply from the next iteration.
+
 ## Key bindings
 
 ### Main screen (project list)

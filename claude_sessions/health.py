@@ -59,8 +59,10 @@ def _check_memory(project_path, proj_folder):
                  "press m → b to build it (Claude remembers the project)")]
     out = []
     if mem.get('pending_units'):
-        out.append(('warn', f"memory coverage incomplete ({mem['pending_units']} units pending)",
-                    'raise memory_max_calls and rebuild'))
+        # not an error any more: a cycle does what its budget allows and leaves
+        # the rest queued, and with auto-memory on the next cycle takes them
+        out.append(('info', f"{mem['pending_units']} module(s) still queued for memory",
+                    'the next auto cycle takes them — or press m → b to finish now'))
     try:
         from .workspace import load_manifest
         man = load_manifest(project_path, proj_folder) or {}

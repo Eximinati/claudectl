@@ -973,7 +973,7 @@ def connections_screen(project_path, proj_folder, project_name):
                 msg = (f"Memory built: {n_ent} entities" if n_ent
                        else "Claude returned no entities (cancelled or empty)")
                 if n_ent and pend:
-                    msg += f" — coverage incomplete ({pend} units pending, raise memory_max_calls)"
+                    msg += f" — {pend} module(s) still queued (run again to finish)"
                 flash(msg, ok=bool(n_ent), secs=2.5 if pend else 1.8)
             except Exception as e:
                 flash(f"Memory build failed: {e}", ok=False, secs=2)

@@ -231,8 +231,10 @@ def sessions_menu(sessions_in, proj_folder, project_name, project_path, extra_ac
             unlearned = len(_pend)
             if _pend and _lmode == 'auto':
                 _spawn_bg = True
-        if (_st.get('memory_auto_refresh') == 'open' and project_path
-                and proj_folder and _mem0.get('entities')):
+        # one answer for every runner (memory.auto_enabled), and no longer
+        # gated on the graph being non-empty — that guard is what stopped
+        # auto-memory ever building a project the first time
+        if project_path and proj_folder and _memory.refresh_on_open(project_path):
             _spawn_bg = True
         if _spawn_bg and project_path:
             _memory.spawn_background_worker(project_path, proj_folder)

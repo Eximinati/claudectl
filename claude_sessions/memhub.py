@@ -29,6 +29,7 @@ def _state(project_path, proj_folder):
     return {'mem': mem, 'entities': ents, 'lessons': lessons,
             'pending': [l for l in lessons if l.get('status') == 'pending'],
             'hook_on': bool(hook_on), 'rules_on': bool(s.get('memory_rules', True)),
+            'auto_on': memory.auto_enabled(project_path, enc),
             'est': est, 'settings': s, 'enc': enc}
 
 
@@ -55,8 +56,13 @@ def hub_screen(project_path, proj_folder, project_name):
             frame.append(f"  {col}● {n_l} lessons{C_RESET}"
                          + (f"  {C_WARN}({n_p} pending review — press L){C_RESET}" if n_p else ''))
         if mem.get('pending_units'):
-            frame.append(f"  {C_WARN}● coverage incomplete: {mem['pending_units']} units "
-                         f"pending{C_RESET}  {C_DIM}(raise memory_max_calls, then b){C_RESET}")
+            # a capped cycle now does what it can and leaves the rest here, so
+            # this is "still queued", not "give up and change a setting"
+            frame.append(f"  {C_WARN}● {mem['pending_units']} module(s) still queued{C_RESET}"
+                         f"  {C_DIM}(the next cycle takes them, or press b now){C_RESET}")
+        if mem.get('last_cost_usd'):
+            frame.append(f"  {C_DIM}● last cycle: {mem.get('last_extracted', 0)} module(s), "
+                         f"${mem['last_cost_usd']:.3f}{C_RESET}")
         frame += ['', render.hline(), '',
                   f"  {C_DIM}What Claude sees:{C_RESET}",
                   f"    always      CLAUDE.md index          ~{est['digest_tokens']} tok",
@@ -66,12 +72,20 @@ def hub_screen(project_path, proj_folder, project_name):
                   + (f"<={st['settings'].get('memory_budget', 600)} tok"
                      if st['hook_on'] else 'off')
                   + f"  [{'on' if st['hook_on'] else 'OFF'}]",
+                  '',
+                  # the flag was GUI-only and read by the GUI scheduler alone,
+                  # so there was no way to see or set it from here at all
+                  f"  {C_DIM}Keep updated in the background:{C_RESET} "
+                  + (f"{C_OK}on{C_RESET}" if st['auto_on'] else f"{C_DIM}off{C_RESET}")
+                  + (f"  {C_DIM}(last run {mem.get('auto_updated', '')[:16]}){C_RESET}"
+                     if st['auto_on'] and mem.get('auto_updated') else ''),
                   '', render.hline(), '',
                   render.hint_keys([('b', 'build/refresh'), ('a', 'ask project'),
                                     ('p', 'preview injection'), ('⇧L', 'lessons')]),
                   render.hint_keys([('s', 'suggestions'), ('d', 'since last session'),
                                     ('h', 'hook on/off'), ('u', 'rules on/off'),
-                                    ('⇧W', 'recent-work'), ('g', 'open graph'),
+                                    ('o', 'auto on/off'), ('⇧W', 'recent-work'),
+                                    ('g', 'open graph'),
                                     ('⇧M', 'memory files'), ('ESC', 'back')])]
         render.render_frame(frame)
         ev = wait_event()
@@ -116,6 +130,8 @@ def hub_screen(project_path, proj_folder, project_name):
             lessons_mod.review_screen(project_path, proj_folder, project_name)
         elif ch == 'h':
             _toggle_hook(project_path, st, flash)
+        elif ch == 'o':
+            _toggle_auto(project_path, st, flash)
         elif ch == 'W':
             _toggle_worklog(project_path, st, flash)
         elif ch == 'u':
@@ -191,6 +207,23 @@ def set_memory_rules(on, project_path=None, proj_folder=None, mem=None):
 def _toggle_hook(project_path, st, flash):
     new_state = set_prompt_hook(st['enc'], not st['hook_on'])
     flash(f"Per-prompt hook {'ENABLED' if new_state else 'disabled'} for this project",
+          ok=new_state, secs=1.6)
+
+
+def set_auto_memory(enc, on):
+    """Per-project background auto-memory. The SAME flag the GUI checkbox
+    writes and the GUI/TUI schedulers and the detached worker all read."""
+    from .config import load_settings, save_settings
+    s = load_settings()
+    s.setdefault('project_defaults', {}).setdefault(enc, {})['auto_memory'] = bool(on)
+    save_settings(s)
+    return bool(on)
+
+
+def _toggle_auto(project_path, st, flash):
+    new_state = set_auto_memory(st['enc'], not st['auto_on'])
+    flash('Background memory updates '
+          + ('ENABLED for this project' if new_state else 'disabled for this project'),
           ok=new_state, secs=1.6)
 
 

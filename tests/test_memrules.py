@@ -68,3 +68,68 @@ def test_setting_disables(monkeypatch, tmp_path):
                         lambda: {'memory_rules': False})
     assert memrules.sync_rules(actual, folder, _mem()) == []
     assert not os.path.isdir(os.path.join(actual, '.claude', 'rules'))
+
+
+# ── the glob is the whole point of these files ───────────────
+# `os.path.commonprefix` is a CHARACTER operation. On this repo it turned
+# {tests/, tools/} into the prefix "t" and the glob "t/**" — which matches
+# nothing, so that rule's ~375 tokens could never load — while any unit whose
+# files diverged at the first segment collapsed to "**", i.e. always loaded, in
+# a module whose docstring promises "zero always-on token cost". Both were on
+# disk at once.
+
+def test_the_glob_is_a_path_prefix_not_a_string_prefix():
+    got = memrules._unit_glob([{'source_files': ['tests/a.py']},
+                               {'source_files': ['tools/b.py']}], 'tools')
+    assert got != 't/**', 'a character prefix matches nothing'
+    assert got.startswith('tools/') or got == '*'
+
+
+def test_no_generated_rule_is_scoped_to_everything():
+    """`**` is indistinguishable from an always-on rule."""
+    for ents, mod in (([{'source_files': ['README.md']},
+                        {'source_files': ['setup.py']}], '(root)'),
+                      ([], ''),
+                      ([{'source_files': []}], '')):
+        assert memrules._unit_glob(ents, mod) != '**', (ents, mod)
+
+
+def test_a_unit_with_no_files_falls_back_to_its_own_directory():
+    assert memrules._unit_glob([], 'claude_sessions/web') == 'claude_sessions/web/**'
+
+
+def test_a_normal_nested_unit_keeps_its_full_path():
+    got = memrules._unit_glob([{'source_files': ['claude_sessions/web/app.js']},
+                               {'source_files': ['claude_sessions/web/motion.js']}],
+                              'claude_sessions/web')
+    assert got == 'claude_sessions/web/**'
+
+
+def test_written_rules_are_never_globally_scoped(tmp_path):
+    """End to end: whatever the entities look like, nothing on disk says `**`."""
+    import re as _re
+    mem = {'entities': [
+        {'name': 'A', 'type': 'module', 'summary': 's', 'repo': 'R',
+         'module': '(root)', 'source_files': ['README.md'], 'valid': True},
+        {'name': 'B', 'type': 'module', 'summary': 's', 'repo': 'R',
+         'module': '(root)', 'source_files': ['setup.py'], 'valid': True},
+    ], 'relations': [], 'summaries': {}}
+    memrules.sync_rules(str(tmp_path), None, mem)
+    rules = tmp_path / '.claude' / 'rules'
+    written = list(rules.glob('claudectl-mem-*.md')) if rules.is_dir() else []
+    assert written, 'nothing was written'
+    for p in written:
+        m = _re.search(r'globs:\s*"([^"]*)"', p.read_text(encoding='utf-8'))
+        assert m and m.group(1) != '**', p.name
+
+
+def test_a_root_level_file_is_not_dropped_from_the_prefix():
+    """A file at the repo root has an EMPTY dirname. Dropping it computed the
+    prefix from the unit's other files, so this repo's `(root)` unit — README.md
+    plus claude_sessions/__init__.py — came out scoped `claude_sessions/**`:
+    firing on a tree it is not about, never on the root files it IS about."""
+    got = memrules._unit_glob([{'source_files': ['README.md']},
+                               {'source_files': ['claude_sessions/__init__.py']}],
+                              '(root)')
+    assert not got.startswith('claude_sessions/'), got
+    assert got == '*'

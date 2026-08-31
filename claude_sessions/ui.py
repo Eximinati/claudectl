@@ -975,6 +975,7 @@ def settings_menu():
             (f"Interface   :  {s.get('ui_mode', 'tui').upper()}   {C_DIM}(TUI here / GUI in browser — or run --gui){C_RESET}", 'ui_mode'),
             (f"Failover    :  {_failover_label(s)}   {C_DIM}(retry a dead model instead of hanging){C_RESET}", 'failover'),
             (f"Updates     :  {_update_label(s)}   {C_DIM}(new claudectl releases + the model list){C_RESET}", 'auto_update'),
+            (f"Notifications: {'on' if s.get('notifications', True) else 'off'}   {C_DIM}(desktop toast when a long background job ends){C_RESET}", 'notifications'),
             (f"{'─' * W}", None),
             (f"Back", 'back'),
         ]
@@ -1036,6 +1037,14 @@ def settings_menu():
                 s['auto_update'] = pick
                 save_settings(s)
                 flash(f"Updates: {_UPDATE_LABELS.get(pick, pick)}", secs=2)
+        elif sel == 'notifications':
+            pick = menu([('On — tell me when a long background job finishes', 'on'),
+                         ('Off — no desktop notifications', 'off')],
+                        "NOTIFICATIONS")
+            if pick:
+                s['notifications'] = (pick == 'on')
+                save_settings(s)
+                flash(f"Notifications: {pick}")
         elif sel == 'ui_mode':
             pick = menu([('TUI — this terminal interface', 'tui'),
                          ('GUI — web app in your browser', 'gui')],

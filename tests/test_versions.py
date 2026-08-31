@@ -12,6 +12,7 @@ import io
 import json
 import os
 import sys
+import urllib.request
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -49,7 +50,7 @@ def _npm(monkeypatch, versions=('2.1.239', '2.1.240', '2.1.241'),
             calls.append(getattr(req, 'full_url', req))
         return _Resp(doc)
 
-    monkeypatch.setattr(v.urllib.request, 'urlopen', fake)
+    monkeypatch.setattr(urllib.request, 'urlopen', fake)
 
 
 # ── the installed version ────────────────────────────────────
@@ -102,7 +103,7 @@ def test_a_dead_network_keeps_the_cached_list_and_says_why(monkeypatch, tmp_path
 
     def boom(*a, **k):
         raise OSError('no route to host')
-    monkeypatch.setattr(v.urllib.request, 'urlopen', boom)
+    monkeypatch.setattr(urllib.request, 'urlopen', boom)
 
     out = v.released(refresh=True)
     assert out['versions'][0] == '2.1.241'           # the stale answer survives
@@ -374,7 +375,7 @@ def _pypi(monkeypatch, latest='1.7.0', calls=None):
             calls.append(getattr(req, 'full_url', req))
         return _Resp(doc)
 
-    monkeypatch.setattr(v.urllib.request, 'urlopen', fake)
+    monkeypatch.setattr(urllib.request, 'urlopen', fake)
 
 
 def test_a_checkout_reports_its_version_and_refuses_to_be_pip_upgraded(monkeypatch, tmp_path):
@@ -508,7 +509,7 @@ def test_a_dead_pypi_keeps_the_cached_answer_and_says_why(monkeypatch, tmp_path)
 
     def boom(*a, **k):
         raise OSError('no route to host')
-    monkeypatch.setattr(v.urllib.request, 'urlopen', boom)
+    monkeypatch.setattr(urllib.request, 'urlopen', boom)
     out = v.self_released(refresh=True)
     assert out['latest'] == '1.7.0'
     assert 'no route' in out['error']
@@ -548,7 +549,7 @@ def test_the_banner_notice_never_touches_the_network(monkeypatch, tmp_path):
 
     def boom(*a, **k):
         raise AssertionError('update_notice fetched')
-    monkeypatch.setattr(v.urllib.request, 'urlopen', boom)
+    monkeypatch.setattr(urllib.request, 'urlopen', boom)
     assert '1.7.0' in v.update_notice()
 
 

@@ -101,6 +101,27 @@ def test_statusline_via_the_console_script_path_stays_light():
     assert r.stdout.strip() == 'False False', r.stdout
 
 
+def test_help_does_not_pay_for_the_tui():
+    """`--help` is the first thing a fresh install types. It answers out of
+    `cli.py`, which imports the standard library and nothing else — so the whole
+    TUI stack (and anything that could be broken in it) is never loaded, and the
+    answer cannot fail for a reason that has nothing to do with the question."""
+    probe = (
+        "import sys;"
+        "sys.argv=['claudectl','--help'];"
+        "import claude_sessions.cli as c;"
+        "c.print_help();"
+        "print('MAIN' if 'claude_sessions.main' in sys.modules else 'clean',"
+        " 'SSL' if 'ssl' in sys.modules else 'nossl', file=sys.stderr)"
+    )
+    r = subprocess.run([sys.executable, '-c', probe], capture_output=True,
+                       text=True, encoding='utf-8', errors='ignore', timeout=60,
+                       cwd=ROOT)
+    assert r.returncode == 0, r.stderr
+    assert 'USAGE' in r.stdout and 'COMMANDS' in r.stdout
+    assert r.stderr.split() == ['clean', 'nossl'], r.stderr
+
+
 def _docs():
     # docs/llms.txt is the crawler-facing index of the site and carried a stale
     # "Not on PyPI yet" for a whole release, because this list was README-only.

@@ -437,12 +437,22 @@ function liveJobs(){
   return Object.keys(JOBS).filter(k=>JOBS[k].status==='running').length
     +(PE&&PE.jid?1:0);
 }
+/* WHERE you are, as one comparable string. A job outlives navigation on purpose
+   — that is the whole point of the inline banner — so its completion handler
+   must not repaint the view it belonged to over the view you moved to. The
+   NAV_ID guard inside paint() cannot catch this: onDone starts a NEW render, so
+   the token matches. Same bug one level up, so the same shape of fix: the guard
+   lives in the runner, not in fifteen call sites that each have to remember. */
+function viewKey(){return PAGE_+'/'+(PAGE_==='project'?(CUR?CUR.encoded:'')+'/'+TAB:'');}
 async function jobStart(kind,params,o){
   o=o||{};
   const r=await post('/api/job',{kind,...params});
   if(!r.ok){toast(r.error||'Could not start','err');return null;}
   const J={jid:r.job,kind,label:o.label||'Working…',status:'running',msgs:[],
     elapsed:0,sub:'',err:'',host:o.host||null,sel:o.sel||'',onDone:o.onDone||null,
+    // `redraw` is the guarded half of onDone: it runs ONLY if the user is still
+    // looking at the view the job was started from.
+    redraw:o.redraw||null,from:viewKey(),
     modal:!!o.modal||!(o.host||o.sel),
     // memory_build reports sub-step progress through its own endpoint
     memPath:kind==='memory_build'?params.path:null};
@@ -492,6 +502,12 @@ async function jobPoll(J){
     setTimeout(()=>jobPoll(J),J.elapsed>60?4000:J.elapsed>15?1500:600);return;}
   jobFinish(J,st);
 }
+/* the guarded refresh: silently skipped when you have navigated on */
+function jobRedraw(J,st){
+  if(!J.redraw)return;
+  if(viewKey()!==J.from)return;
+  J.redraw(st);
+}
 function jobFinish(J,st){
   delete JOBS[J.jid];
   stageEnergy(liveJobs(),0);      // the background settles as the work stops
@@ -499,6 +515,7 @@ function jobFinish(J,st){
   if(st.status==='done'){
     inlineClear(J);toast(J.label+' — done','ok');
     if(J.onDone)J.onDone(st);
+    jobRedraw(J,st);
   }else if(st.status==='cancelled'){
     inlineClear(J);toast('Cancelled','');
   }else{
@@ -507,6 +524,7 @@ function jobFinish(J,st){
     J.err=st.error||'Failed';
     if(!J.modal&&jobHost(J))inlineRender(J);else toast(J.err,'err');
     if(st.error&&J.onDone)J.onDone(st);
+    if(st.error)jobRedraw(J,st);
   }
 }
 /* ── inline presentation ── */
@@ -603,14 +621,16 @@ function modalGate(J,gate){
 const NAV_GROUPS=[
   ['Workspace',[
     ['usage','chart','Usage','Token spend and rate limits across every account, by day and by project.',()=>pgUsage],
-    ['searchp','search','Search','Full-text search over every session transcript on the machine.',()=>pgSearch]]],
+    ['searchp','search','Search','Full-text search over every session transcript on the machine.',()=>pgSearch],
+    ['loops','refresh','Loops','Start a /loop in its own session, watch it fire, end it — and the loop.md that says what a bare /loop does.',()=>pgLoops]]],
   ['Library',  [
     ['agents','robot','Agents','Subagent definitions: browse the library, write one by hand or have Claude draft it.',()=>pgAgents],
     ['skills','ai','Skills','SKILL.md skills — bundled templates, your library, and the ones installed in a project.',()=>pgSkills],
     ['hooks','link','Hooks','Claude Code hooks per account: install from a template, enable, disable or remove.',()=>pgHooks],
     ['plugins','folder','Plugins','Marketplaces and installed plugins, with the provenance of everything they shipped.',()=>pgPlugins],
     ['ostyles','palette','Output styles','Output styles Claude Code can wear, and which one is active.',()=>pgOStyles],
-    ['mcp','plug','MCP servers','MCP servers: status, detail, tool docs, and the global CLAUDE.md they are written into.',()=>pgMcp]]],
+    ['mcp','plug','MCP servers','MCP servers: status, detail and the tool documentation they can write into the global CLAUDE.md.',()=>pgMcp],
+    ['globalmd','doc','Global CLAUDE.md','The instructions Claude reads in every session on an account, its loop.md, and the conventions worth promoting into it.',()=>pgGlobalMd]]],
   ['System',   [
     ['accounts','group','Accounts','Every Claude login, and the sync that levels them all up to the same provisioning.',()=>pgAccounts],
     ['client','ai','Claude Code','What Claude Code records about itself: versions, disk, background agents, its own settings.',()=>pgClient],
@@ -824,6 +844,7 @@ async function toggleHidden(){
 /* ── router ── */
 function go(page){PAGE_=page;CUR=page==='project'?CUR:null;
   stopDashboard();   // a detached home view never keeps fetching/writing
+  stopLoopPoll();    // …and the loops board is the same promise
   applyTheme(ST.theme);   // drop any unsaved theme preview
   // the stage is global and never restarts across navigation — that is what
   // makes it ONE background rather than seven wallpapers — but each page tilts
@@ -865,6 +886,49 @@ function mounted(root){
   // the skin's arrival sequence, not a linear delay ramp in DOM order — see
   // SKIN_ARRIVE. Falls back to the old per-card reveal without the vendor bundle.
   MO.arrive(el,'.card,.mo-in');
+}
+/* ONE filter box for the three lists long enough to need one: the skills
+   inventory, the agent library (155 agents in 10 categories) and the project
+   agent picker. Filtering is client-side over markup already on the page —
+   these lists arrive in a single payload, so a round trip per keystroke would
+   be slower and no more correct.
+
+   Rows opt in with `data-f` (the text to match, which is usually more than the
+   row displays); a <details> category with nothing left in it hides, and one
+   with a hit opens itself, because a match you cannot see is not a match. */
+function bindFilter(inputSel,rowSel,countId,extra){
+  const inp=$('#'+inputSel.replace(/^#/,''));
+  if(!inp)return;
+  // `extra` is a second, non-text condition (the skills page's scope chips).
+  // It runs in the SAME pass rather than as a second sweep over display:
+  // two independent writers of one style property is how a row ends up hidden
+  // by the filter that is off.
+  const run=window['__f_'+inputSel]=()=>{
+    const q=(inp.value||'').toLowerCase().trim();
+    let shown=0,total=0;
+    document.querySelectorAll('#content '+rowSel).forEach(el=>{
+      const inScope=!extra||extra(el);
+      if(inScope)total++;
+      // title as well as text: a chip shows a name and carries its description
+      const hay=(el.dataset.f||(el.title+' '+el.textContent)||'').toLowerCase();
+      // something already SELECTED never hides — filtering is a way to find
+      // more, not a way to lose track of what you picked
+      const hit=inScope&&(!q||hay.includes(q)||el.classList.contains('on'));
+      el.style.display=hit?'':'none';
+      if(hit)shown++;
+    });
+    document.querySelectorAll('#content details').forEach(dt=>{
+      const rows=[...dt.querySelectorAll(rowSel)];
+      if(!rows.length)return;
+      const any=rows.some(el=>el.style.display!=='none');
+      dt.style.display=any?'':'none';
+      if(q&&any)dt.open=true;
+    });
+    const c=countId&&$('#'+countId);
+    if(c)c.textContent=q?`${shown} of ${total}`:'';
+  };
+  inp.oninput=run;
+  run();
 }
 /* Copy each table's header text onto its cells so the narrow-window stacked
    layout can label them (see the .tbl @media rule). Done in JS because the
@@ -1618,7 +1682,17 @@ const TABS=[
   ['planexec','Plan → Execute','Have one model write a plan, approve or edit it, then have another execute it.'],
   ['worktrees','Repos','Git repos, submodules and linked worktrees under this project.'],
   ['tools','Tools','Architecture, the interactive graph, Claude Code\'s own record of the project, and the loop file.']];
-async function openProject(p){CUR=p;PAGE_='project';TAB='sessions';REVIEW=null;
+/* The project a project-scoped setting targets from a GLOBAL page.
+
+   `go()` clears CUR on purpose — the header leaves project mode — so a "this
+   project" card on the Skills or Output styles page was structurally
+   unreachable: navigating to the page was itself what emptied it. That is why
+   the per-project skills section read as pointless; it could never have shown
+   anything. The last project you opened is the honest answer, and every surface
+   that uses it says which project that is. */
+let LASTPROJ=null;
+function projCtx(){return CUR||LASTPROJ;}
+async function openProject(p){CUR=p;LASTPROJ=p;PAGE_='project';TAB='sessions';REVIEW=null;
   render();
   // kick off the same background memory update the TUI does on open, then
   // watch the scan-lock so the badge shows live progress
@@ -1643,13 +1717,24 @@ function startMemBadge(){
   setMemBadge('');                   // show immediately so the user sees activity
   const tick=async()=>{
     if(!CUR||PAGE_!=='project'){stopMemBadge();return;}
-    let prog=null;
-    try{const r=await api('/api/memory/progress?'+qs({path:CUR.path}));prog=r.progress;}catch(e){}
+    let prog=null,last=null;
+    try{const r=await api('/api/memory/progress?'+qs({path:CUR.path}));
+      prog=r.progress;last=r.last;}catch(e){}
     if(prog!=null){_memSeen=true;setMemBadge(prog);_memTimer=setTimeout(tick,2000);}
     else if(!_memSeen&&_memGrace-->0){_memTimer=setTimeout(tick,2000);}  // worker not up yet
     else{ // finished (or never started) — refresh memory view if it's showing
       const wasRunning=_memSeen;stopMemBadge();
-      if(wasRunning){toast('Memory updated','ok');
+      if(wasRunning){
+        /* The lock vanishing is NOT success: a crashed cycle clears it in its
+           `finally` exactly like a completed one, so this toasted "Memory
+           updated" over a failure. The server records how the run ended. */
+        if(last&&last.ok===false)toast('Memory update failed: '+(last.error||'unknown'),'err');
+        else if(last&&last.ok){
+          const b=[];if(last.extracted)b.push(last.extracted+' module(s)');
+          if(last.lessons)b.push(last.lessons+' lesson(s)');
+          if(last.pending)b.push(last.pending+' still queued');
+          toast(b.length?'Memory updated — '+b.join(', '):'Memory already current','ok');
+        }else toast('Memory updated','ok');
         if(PAGE_==='project'&&TAB==='memory')drawMemory();}
     }
   };
@@ -1708,7 +1793,7 @@ function drawReview(){
 }
 function runReview(staged){
   inlineJob('#jban','review',{...C(),staged},{label:'Reviewing changes',
-    onDone:st=>{REVIEW=st.result||{findings:[]};if(TAB==='review')drawReview();}});
+    onDone:st=>{REVIEW=st.result||{findings:[]};},redraw:()=>drawReview()});
 }
 
 function projectSetup(){
@@ -1716,8 +1801,8 @@ function projectSetup(){
     {label:'Setting up '+CUR.name,onDone:st=>{
       const r=(st&&st.result)||{};
       toast(`Set up: CLAUDE.md + ${r.entities||0} memory entities`,'ok');
-      if(CUR)CUR.set_up=true;
-      if(PAGE_==='project'&&TAB==='sessions')drawSessions();}});
+      if(CUR)CUR.set_up=true;},
+     redraw:()=>drawSessions()});
 }
 
 /* sessions tab */
@@ -1955,11 +2040,13 @@ async function drawMemory(){
         <span class="k">Lessons</span><span>${st.n_lessons||0} (${st.n_pending||0} pending review)</span>
         <span class="k">Unscanned sessions</span><span>${st.n_unscanned||0}</span>
         <span class="k">Generated</span><span>${esc(st.generated_at||'never')}</span>
+        ${st.pending_units?`<span class="k">Still queued</span><span class="warn">${st.pending_units} module(s) — the next cycle takes them</span>`:''}
+        ${st.last_extracted||st.last_cost_usd?`<span class="k">Last cycle</span><span>${st.last_extracted||0} module(s)${st.last_cost_usd?' · $'+(+st.last_cost_usd).toFixed(3):''}</span>`:''}
       </div></div>
-      <label class="autoline" title="Refresh this project's memory in the background — on GUI start and periodically — whenever its files change, without needing this tab open.">
-        <input type="checkbox" id="autoMem" ${CUR.auto_memory?'checked':''} onchange="toggleAutoMem(this.checked)">
+      <label class="autoline" title="Refresh this project's memory in the background — periodically, from whichever interface is running — whenever its files change, without needing this tab open.">
+        <input type="checkbox" id="autoMem" ${st.auto_on?'checked':''} onchange="toggleAutoMem(this.checked)">
         <span>${ic('refresh')} Keep this project's memory updated automatically</span>
-        ${st.n_entities?'':'<span class="tag warn">build memory once first</span>'}</label>
+        ${st.auto_updated?`<span class="tag">last run ${esc(String(st.auto_updated).slice(0,16))}</span>`:''}</label>
       <label class="autoline" title="UserPromptSubmit recall: inject the task-relevant slice of this project's memory before every prompt. The hook itself is installed into every account.">
         <input type="checkbox" id="memHook" ${st.hook_on?'checked':''} onchange="memToggle({hook:this.checked})">
         <span>${ic('bolt')} Per-prompt recall for this project</span></label>
@@ -1972,7 +2059,7 @@ async function drawMemory(){
         <div style="color:var(--dim2);font-size:12px;margin-top:4px">What the recall preview above spends. 0 turns injection off.</div></div>
       <div id="memProg"></div></div>
     <div class="card"><h3>Lessons <span class="sp"></span>
-      <button class="btn sm" onclick="inlineJob('#jban','lessons_scan',C(),{label:'Learning from sessions',onDone:()=>drawMemory()})">${ic('school')} Learn from sessions${st.n_unscanned?` <span class="tag warn">${st.n_unscanned} new</span>`:''}</button>
+      <button class="btn sm" onclick="inlineJob('#jban','lessons_scan',C(),{label:'Learning from sessions',redraw:()=>drawMemory()})">${ic('school')} Learn from sessions${st.n_unscanned?` <span class="tag warn">${st.n_unscanned} new</span>`:''}</button>
       <button class="btn sm" onclick="lessonAct('','approve_all')">${ic('check')} Approve all pending</button></h3>
       ${lesRows?`<table class="tbl"><tr><th>status</th><th>lesson</th><th>conf</th><th></th></tr>${lesRows}</table>`
         :'<div style="color:var(--dim)">No lessons yet.</div>'}</div>
@@ -2022,7 +2109,7 @@ async function buildMemory(){
   // badge instead of starting a second, colliding run
   try{const r=await api('/api/memory/progress?'+qs({path:CUR.path}));
     if(r.progress!=null){startMemBadge();toast('Memory update already running','ok');return;}}catch(e){}
-  inlineJob('#jban','memory_build',C(),{label:'Building memory',onDone:()=>drawMemory()});
+  inlineJob('#jban','memory_build',C(),{label:'Building memory',redraw:()=>drawMemory()});
 }
 async function askMem(){
   const v=await ask('Ask project memory',[{label:'Question'}]);
@@ -2053,8 +2140,8 @@ async function drawClaudeMd(){
   paint(nav,`
     <div class="card"><h3>CLAUDE.md <span class="sp"></span>
       <button class="btn sm" onclick="cmScaffold()">${ic('doc')} Scaffold</button>
-      <button class="btn sm" onclick="inlineJob('#jban','ai_scaffold',C(),{label:'AI-analyzing project',onDone:()=>drawClaudeMd()})">${ic('ai')} AI analyze</button>
-      <button class="btn sm" onclick="inlineJob('#jban','ai_compress',C(),{label:'Compressing CLAUDE.md',onDone:()=>drawClaudeMd()})">${ic('shrink')} AI compress</button>
+      <button class="btn sm" onclick="inlineJob('#jban','ai_scaffold',C(),{label:'AI-analyzing project',redraw:()=>drawClaudeMd()})">${ic('ai')} AI analyze</button>
+      <button class="btn sm" onclick="inlineJob('#jban','ai_compress',C(),{label:'Compressing CLAUDE.md',redraw:()=>drawClaudeMd()})">${ic('shrink')} AI compress</button>
       <button class="btn sm" onclick="cmPrune()">${ic('cut')} Prune</button>
       <button class="btn sm" onclick="post('/api/open-editor',{file:CUR.path+'\\\\CLAUDE.md'})">${ic('edit')} Edit</button></h3>
       ${md.exists?`<div style="font:12px Consolas,monospace;white-space:pre-wrap;max-height:46vh;overflow-y:auto;background:var(--code);border-radius:8px;padding:12px">${esc(md.text)}</div>`
@@ -2066,24 +2153,33 @@ async function drawClaudeMd(){
         <span style="color:var(--dim2);font-size:11px">${esc(f.path)}</span>
         ${f.exists?`<button class="btn sm" onclick="post('/api/open-editor',{file:'${jsq(f.path)}'})">open</button>`:''}
       </div>`).join('')}</div>
-    <div class="card"><h3>${ic('refresh')} loop.md <span class="sp"></span>
-      <button class="btn sm pri" onclick="loopSave('project')">Save</button></h3>
-      <p style="color:var(--dim);font-size:13px;margin:0 0 8px">Claude Code's repeating-instruction file for THIS project, read on every turn. Saving it empty deletes it. The account-wide one lives on the MCP servers page.</p>
-      <textarea id="loopProject" style="min-height:120px;font-family:var(--mono)"></textarea>
-      <div style="color:var(--dim2);font-size:12px;margin-top:6px" id="loopProjectPath"></div></div>
+    <div class="card"><h3>${ic('refresh')} loop.md</h3>
+      <p style="color:var(--dim);font-size:13px;margin:0">What a bare <code>/loop</code> runs in this project. Both scopes are edited on the <span class="hlink" onclick="go('loops')">Loops</span> page, beside the loops themselves — two editors for one file is one too many.</p></div>
     <div class="card"><h3>System prompt</h3><div id="spBox"></div></div>`);
-  api('/api/loop-md?'+qs({...c,scope:'project',path:CUR.path})).then(l=>{
-    if($('#loopProject'))$('#loopProject').value=l.text||'';
-    if($('#loopProjectPath'))$('#loopProjectPath').textContent=l.file||'';});
   const sp=await api('/api/system-prompt?'+qs(c));
   $('#spBox').innerHTML=`<div class="fld"><textarea id="spText">${esc(sp.text)}</textarea></div>
     <div class="mrow"><button class="btn pri sm" onclick="spSave()">Save</button></div>`;
 }
 async function cmScaffold(){
   await post('/api/claude-md/scaffold',C());toast('Scaffolded','ok');drawClaudeMd();}
-async function cmPrune(){
+/* Prune drops session entries past the cap. The TUI has always confirmed; the
+   GUI destroyed silently. Same operation, so same contract — and the preview
+   names what goes, because a token delta is not something you can check. */
+async function cmPrune(redraw){
+  const p=await api('/api/ctxaudit/prune-preview?'+qs(C()));
+  if(!p.ok){toast(p.error||'Nothing to prune','err');return;}
+  if(!p.changed){toast('Already pruned — nothing would change','ok');return;}
+  const drop=(p.dropped||[]);
+  const body=`~${p.old_tokens} → ~${p.new_tokens} tok every turn.`
+    +(drop.length?`\n\nDrops ${drop.length} session entr${drop.length===1?'y':'ies'}:\n· `
+      +drop.slice(0,12).join('\n· ')+(drop.length>12?`\n· …and ${drop.length-12} more`:'')
+      +'\n\nThe transcripts themselves are untouched — only their lines in CLAUDE.md.'
+     :'\n\nNo session entries are dropped.');
+  if(!await confirmBox('Prune CLAUDE.md?',body))return;
   const r=await post('/api/ctxaudit/prune',C());
-  toast(`Pruned: ~${r.old_tokens} → ~${r.new_tokens} tok`,'ok');drawClaudeMd();}
+  if(!r.ok){toast(r.error||'Prune failed','err');return;}
+  toast(`Pruned: ~${r.old_tokens} → ~${r.new_tokens} tok · undo from History`,'ok');
+  (redraw||drawClaudeMd)();}
 async function spSave(){
   await post('/api/system-prompt',{...C(),text:$('#spText').value});
   toast('System prompt saved','ok');}
@@ -2101,15 +2197,65 @@ async function drawAudit(){
   paint(nav,`
     <div class="card"><h3>Context weight — ~${d.total||0} tok loaded every turn
       <span class="sp"></span>
-      <button class="btn sm" onclick="cmPrune().then(()=>drawAudit())">${ic('cut')} Prune sessions</button>
-      <button class="btn sm" onclick="post('/api/ctxaudit/compact',{path:CUR.path}).then(()=>{toast('Compact section added','ok');drawAudit()})">${ic('add')} Compact instructions</button></h3>
+      <button class="btn sm" onclick="cmPrune(drawAudit)">${ic('cut')} Prune sessions</button>
+      <button class="btn sm" onclick="post('/api/ctxaudit/compact',{path:CUR.path}).then(()=>{toast('Compact section added','ok');drawAudit()})">${ic('add')} Compact instructions</button>
+      <button class="btn sm" onclick="cmProtect()" title="Fence a section of CLAUDE.md so AI compression can never reword, shorten or drop it. The fenced text is not even sent to the model.">${ic('check')} Protect a section</button></h3>
       <table class="tbl"><tr><th>item</th><th>tokens</th><th>warnings</th></tr>${rows}</table></div>
+    <div class="card"><h3>${ic('refresh')} History <span class="sp"></span>
+      <span style="color:var(--dim2);font-size:12px">every version claudectl replaced</span></h3>
+      <p style="color:var(--dim);font-size:13px;margin:0 0 8px">Compress, prune and memory eviction all snapshot what they were about to
+        overwrite. Nothing claudectl shrinks is gone until it falls off the end of this list.
+        Restoring is itself snapshotted, so you can walk back out again.</p>
+      <div id="histOut"><span class="spin"></span></div></div>
     <div class="card"><h3>Deny rules (token-heavy paths) <span class="sp"></span>
       <button class="btn sm pri" onclick="post('/api/deny/apply',{path:CUR.path}).then(r=>{toast(r.added+' added, '+r.existed+' existed','ok');drawAudit()})">Apply all</button></h3>
       ${(deny.patterns||[]).map(p=>`<div style="display:flex;gap:10px;padding:2px 0">
         <code style="color:var(--cyan)">${esc(p.pattern)}</code>
         <span style="color:var(--dim);font-size:12px">${esc(p.why)}</span></div>`).join('')
       ||'<div style="color:var(--dim)">Nothing heavy found.</div>'}</div>`);
+  drawHistory();
+}
+async function cmProtect(){
+  const v=await ask('Protect a section of CLAUDE.md',
+    [{label:'Text from the section to keep',ph:'e.g. Deployment checklist'}],
+    'The heading it sits under, and everything down to the next heading, is '
+    +'fenced. AI compression never sees fenced text, so it cannot reword, '
+    +'shorten or drop it.');
+  if(v===null||!v[0].trim())return;
+  const r=await post('/api/ctxaudit/protect',{path:CUR.path,text:v[0].trim()});
+  toast(r.ok?'Section protected':(r.error||'Failed'),r.ok?'ok':'err');
+  if(r.ok)drawAudit();
+}
+async function drawHistory(){
+  const d=await api('/api/history?'+qs(C()));const b=$('#histOut');if(!b)return;
+  const rows=(d.keys||[]).filter(k=>(k.versions||[]).length).map(k=>
+    `<div class="lbl" style="margin-top:8px">${esc(k.title)}</div>`
+    +k.versions.map(v=>`<div class="agrow">
+      <span style="min-width:130px;color:var(--dim)">${esc(v.age)}</span>
+      <span style="flex:1"><span style="color:var(--ok)">+${v.added}</span>
+        <span style="color:var(--err)">-${v.removed}</span></span>
+      <button class="btn sm" onclick="histDiff('${jsq(k.key)}',${v.ts})">diff</button>
+      <button class="btn sm pri" onclick="histRestore('${jsq(k.key)}',${v.ts},'${jsq(k.title)}','${jsq(v.age)}')">restore</button>
+      </div>`).join('')).join('');
+  b.innerHTML=rows||'<div class="empty">No version has been replaced yet — nothing to roll back to.</div>';
+}
+async function histDiff(key,ts){
+  const d=await api('/api/history/diff?'+qs({...C(),key,ts}));
+  $('#dTitle').textContent=(d.title||key)+' — what this restore would bring back';
+  $('#dBody').innerHTML=`<div class="diff">${(d.diff||[]).map(l=>
+    `<div class="${l.startsWith('+')&&!l.startsWith('+++')?'a':
+       (l.startsWith('-')&&!l.startsWith('---')?'d':
+       (l.startsWith('@@')?'h':''))}">${esc(l)}</div>`).join('')
+    ||'<div class="empty">Identical to what is on disk now.</div>'}</div>`;
+  $('#drawer').classList.add('show');
+}
+async function histRestore(key,ts,title,age){
+  if(!await confirmBox(`Restore ${title}?`,
+    `Puts back the version from ${age}. What is on disk now is snapshotted first, `
+    +`so this is reversible too.`))return;
+  const r=await post('/api/history/restore',{...C(),key,ts});
+  toast(r.ok?(r.message||'Restored'):(r.error||'Restore failed'),r.ok?'ok':'err');
+  if(r.ok)drawAudit();
 }
 
 /* project usage tab */
@@ -2131,7 +2277,10 @@ function drawTools(){
     <div class="card"><h3>${ic('check')} Project health</h3>
       <p style="color:var(--dim);font-size:13px;margin-bottom:10px">The checks the TUI's workspace screen runs — they had no GUI trace at all.</p>
       <div id="hOut"><span class="spin"></span></div></div>
-    <div class="card"><h3>${ic('ai')} What to work on</h3>
+    <div class="card"><h3>${ic('ai')} What to work on <span class="sp"></span>
+      <button class="btn sm" title="One Claude call over the memory graph, recorded lessons and recent diff — returns bugs, vulnerabilities, slow paths and functions worth building. Findings are stored, so this list stays instant afterwards."
+        onclick="inlineJob('#jban','work_scan',C(),{label:'Scanning for work',onDone:st=>toast(((st.result||{}).items||[]).length+' finding(s)','ok'),redraw:()=>drawBrief()})">${ic('ai')} Find work</button></h3>
+      <p style="color:var(--dim);font-size:12px;margin:2px 0 8px">Free signals — stale context, TODO markers, deferred shortcuts, untested modules — are always listed. Press <b>Find work</b> to add what a model can see that a grep cannot.</p>
       <div id="bOut"><span class="spin"></span></div></div>
     <div class="card"><h3>${ic('inject')} New chat with injected context</h3>
       <p style="color:var(--dim);font-size:13px;margin-bottom:10px">Start a new session seeded with another session's transcript — from any account, into any account.</p>
@@ -2197,12 +2346,30 @@ function drawTools(){
         <div class="cmdchips">${bash.map(b=>
           `<span class="cmdchip"><b>${esc(b.command)}</b><i>${+b.count}</i></span>`).join('')}</div>
         </div>`:'');});
-  api('/api/brief?'+qs(C())).then(d=>{const b=$('#bOut');if(!b)return;
-    const sug=(d.suggestions||[]);
-    b.innerHTML=(sug.length
-      ?sug.map(s=>`<div class="lrow"><span class="tag">${esc(s.tag)}</span><div class="clamp3">${esc(s.text)}</div></div>`).join('')
-      :'<div class="empty">Nothing to suggest yet.</div>')
-      +sinceHtml(d);});
+  drawBrief();
+}
+/* tags that mean "something is wrong" get the warn colour; the rest are
+   neutral, so a list of ideas does not read as a list of alarms */
+const BRIEF_ALERT={vuln:1,bug:1,fix:1,health:1,stale:1};
+/* Only a scan finding is dismissible. A local item (a stale check, a TODO, an
+   untested module) disappears when you FIX it — offering to hide it instead
+   would let the list quietly lie about the state of the project. */
+const BRIEF_SCAN={vuln:1,bug:1,perf:1,idea:1};
+async function drawBrief(){
+  const d=await api('/api/brief?'+qs(C()));const b=$('#bOut');if(!b)return;
+  const sug=(d.suggestions||[]);
+  b.innerHTML=(sug.length
+    ?sug.map(s=>`<div class="lrow">
+        <span class="tag${BRIEF_ALERT[s.tag]?' warn':''}">${esc(s.tag)}</span>
+        <div class="clamp3">${esc(s.text)}</div>
+        ${BRIEF_SCAN[s.tag]?`<button class="btn sm" title="Stop showing this"
+          onclick="briefDismiss('${jsq(s.text)}')">${ic('close')}</button>`:''}</div>`).join('')
+    :'<div class="empty">Nothing to suggest yet — press Find work, or build memory first.</div>')
+    +(d.scan_at?`<div style="color:var(--dim2);font-size:11px;margin-top:6px">last scan ${esc(d.scan_at)}</div>`:'')
+    +sinceHtml(d);
+}
+async function briefDismiss(text){
+  await post('/api/brief/dismiss',{...C(),text});drawBrief();
 }
 function archRefresh(){drawArch(true);}
 async function drawArch(force){
@@ -2613,8 +2780,16 @@ async function drawAgentPicker(){
     api('/api/agents/session?'+qs(C()))]);
   const on=new Set(cur.refs||[]);
   window._agLimit=cur.limit||10;
-  const chip=(ref,label,desc)=>`<span class="chip${on.has(ref)?' on':''}" data-ref="${esc(ref)}"
-    title="${esc(desc||'')}" onclick="this.classList.toggle('on');agCount()">${esc(label)}</span>`;
+  const used=cur.usage||{};
+  /* Claude Code's own `agentLastUsed`, which is the only honest answer to "is
+     this doing anything?". An agent installed and never delegated to is the one
+     to remove — the picker used to give no way to tell those apart. */
+  const chip=(ref,label,desc)=>{
+    const u=used[label]||used[ref.split('/').pop()];
+    return `<span class="chip${on.has(ref)?' on':''}${u?' used':''}" data-ref="${esc(ref)}"
+      data-f="${esc(ref+' '+(desc||''))}"
+      title="${esc((desc||'')+(u?'  ·  last used '+u+' ago':'  ·  never used'))}"
+      onclick="this.classList.toggle('on');agCount()">${esc(label)}${u?' <i>'+esc(u)+'</i>':''}</span>`;};
   const sug=(cur.suggested||[]).map(s=>chip(s.ref,'★ '+s.ref.split('/').pop(),s.reason)).join('');
   const cats=(lib.categories||[]).map(c=>{
     const nSel=c.agents.filter(a=>on.has(c.category+'/'+a.name)).length;
@@ -2626,11 +2801,28 @@ async function drawAgentPicker(){
         ${c.agents.map(a=>chip(c.category+'/'+a.name,a.name,a.desc)).join('')}</div></details>`;}).join('');
   $('#agSel').innerHTML=(sug?`<div class="lbl">Suggested for this project</div>
       <div class="chips" style="margin-bottom:10px">${sug}</div>`:'')
+    // the same box as the Agents page: ten collapsed categories over 150-odd
+    // agents is not something you scroll, it is something you search
+    +`<div class="fld"><input id="agPickQ" placeholder="Filter agents…" spellcheck="false">
+        <div style="color:var(--dim2);font-size:12px;margin-top:4px" id="agPickCount"></div></div>`
     +(cats||'<div style="color:var(--dim)">Agent library is empty.</div>')
     +`<div class="mrow" style="align-items:center">
       <span id="agTot" style="flex:1;color:var(--dim);font-size:12px"></span>
       <button class="btn sm" onclick="agClear()">Clear all</button>
-      <button class="btn sm pri" onclick="applyAgents()">Apply to project</button></div>`;
+      <button class="btn sm pri" onclick="applyAgents()">Apply to project</button></div>
+     <div style="border-top:1px solid var(--line);margin-top:8px;padding-top:8px">
+      <div class="lbl">Getting them actually used</div>
+      <p style="color:var(--dim);font-size:12px;margin:2px 0 6px">Copying agent files in only makes them <i>available</i>. Claude Code picks a subagent by matching your task against its <b>description</b> — nothing reads the body — so a set nothing ever mentions is a set that never fires. Three levers, strongest first: a sharp description, the table below (kept in the project's CLAUDE.md, the one file read on every turn), and the optional prompt hook that names a match deterministically.</p>
+      <div class="mrow" style="margin:0 0 8px">
+        <button class="btn sm" onclick="go('agents')" title="Sharpening is a machine-wide action now — it lives on the Agents page and rewrites every copy of an agent at once">${ic('ai')} Sharpen descriptions…</button>
+        <button class="btn sm" onclick="go('hooks')" title="Install the suggest-subagent hook: a keyword match on your prompt, no model call">${ic('link')} Prompt-match hook</button>
+      </div>
+      ${(cur.routing||[]).length
+        ?`<div class="clog">${(cur.routing||[]).map(r=>
+            `<div><b>${esc(r.name)}</b> — ${esc(r.trigger||'')}</div>`).join('')}</div>`
+        :'<div class="empty">Nothing installed yet, so no table is written.</div>'}
+     </div>`;
+  bindFilter('agPickQ','#agSel details .chip','agPickCount');
   agCount();
 }
 function agRefs(){return [...new Set([...document.querySelectorAll('#agSel .chip.on')]
@@ -2649,9 +2841,23 @@ function agClear(){
   document.querySelectorAll('#agSel .chip.on').forEach(c=>c.classList.remove('on'));
   agCount();
 }
+/* Machine-wide by default. The same agent lives in a dozen projects and in
+   every account's user directory; sharpening it a dozen times was a dozen
+   model calls and a dozen chances to get a dozen different answers. */
+function agSharpen(scope,redraw){
+  inlineJob('#jban','agent_desc_ai',{...C(),scope:scope||'all'},
+    {label:scope==='project'?'Sharpening agent descriptions'
+                            :'Sharpening every agent description',
+     onDone:st=>{const r=st.result||{},u=r.updated||[];
+       toast(u.length?`Rewrote ${u.length} description(s) in ${r.locations} location(s)`
+                     :(r.rejected?'Rejected — nothing written':'Nothing changed'),
+             u.length||r.rejected?'ok':'ok');},
+     redraw:redraw||(()=>drawPage('agents'))});
+}
 async function applyAgents(){
   const r=await post('/api/agents/session',{...C(),refs:agRefs()});
-  toast(r.active+' agent(s) active','ok');
+  toast(`${r.active} agent(s) active · ${r.routed} in the CLAUDE.md table`,'ok');
+  drawAgentPicker();
 }
 
 /* ── manager pages ── */
@@ -2965,11 +3171,9 @@ function gResume(i){const r=window._gmatch[i];
    the reader and the writer used to be able to disagree about which. */
 let MCPACCT='';
 async function pgMcp(nav){
-  const [d,gm]=await Promise.all([
-    api('/api/mcp?'+qs(MCPACCT?{cfgdir:MCPACCT}:{})),
-    api('/api/global-claude-md?'+qs(MCPACCT?{cfgdir:MCPACCT}:{}))]);
+  const d=await api('/api/mcp?'+qs(MCPACCT?{cfgdir:MCPACCT}:{}));
   const srv=d.servers||[],up=srv.filter(x=>x.status==='ok').length;
-  const accts=gm.accounts||[];
+  const accts=(ST.accounts||[]);
   const picker=accts.length>1?`<div class="chips" style="margin-bottom:10px">
       ${accts.map(a=>`<span class="chip${(MCPACCT||'')===(a.dir||'')?' on':''}"
         onclick='mcpAcct(${JSON.stringify(a.dir||'')})'>${esc(a.name)}</span>`).join('')}
@@ -2989,57 +3193,248 @@ async function pgMcp(nav){
       <button class="btn sm" onclick='mcpDetail(${JSON.stringify(s.name)})'>${ic('eye')} Detail</button>
       <button class="btn sm" onclick='mcpDocs(${JSON.stringify(s.name)})'>${ic('search')} Tool docs</button>
       <button class="btn sm danger" onclick='mcpRemove(${JSON.stringify(s.name)})'>Remove</button>
-    </div>`).join('')||'<div style="color:var(--dim)">No MCP servers configured.</div>'}</div>
-    <div class="card"><h3>${ic('link')} Cross-project conventions <span class="sp"></span>
-      <button class="btn sm" onclick="convSync()">${ic('download')} Promote into global CLAUDE.md</button></h3>
-      <p style="color:var(--dim);font-size:13px;margin:0 0 8px">Rules that repeat across your projects' CLAUDE.md files. Promoting writes them into a sentinel block in the global file below — only that block is touched.</p>
-      <div id="convOut"><span class="spin"></span></div></div>
-    <div class="card"><h3>${ic('refresh')} loop.md <span class="sp"></span>
-      <button class="btn sm pri" onclick="loopSave('user')">Save</button></h3>
-      <p style="color:var(--dim);font-size:13px;margin:0 0 8px">Claude Code's repeating-instruction file for this account — read on every turn. Saving it empty deletes it. The per-project one lives on the project's CLAUDE.md tab.</p>
-      <textarea id="loopUser" style="min-height:120px;font-family:var(--mono)"></textarea>
-      <div style="color:var(--dim2);font-size:12px;margin-top:6px" id="loopUserPath"></div></div>
-    <div class="card"><h3>${ic('edit')} Global CLAUDE.md <span class="sp"></span>
-      <button class="btn sm" onclick='post("/api/open-editor",{path:${JSON.stringify(gm.path||'')}}).then(r=>toast(r.ok?"Opened in your editor":"Could not open it","ok"))'>${ic('edit')} Open in editor</button>
-      <button class="btn sm pri" onclick="gmSave()">Save</button></h3>
-      <p style="color:var(--dim);font-size:13px;margin:0 0 8px">Claude reads this file in <b>every</b> session on this account. Analyzing an MCP server above writes its tool docs into a sentinel block here.
-        ${gm.exists?'':'<span class="tag warn">does not exist yet</span>'}</p>
-      <textarea id="gmText" style="min-height:220px;font-family:var(--mono)">${esc(gm.text||'')}</textarea>
-      <div style="color:var(--dim2);font-size:12px;margin-top:6px">${esc(gm.path||'')}</div></div>`))return;
+    </div>`).join('')||'<div style="color:var(--dim)">No MCP servers configured.</div>'}
+    <p style="color:var(--dim);font-size:12.5px;margin:10px 0 0">Analyzing a server writes its tool documentation into a sentinel block of the account's <b>global CLAUDE.md</b>, which now has its own page.</p></div>`))return;
   if(srv.length){
     INST.set('mcp',{v:up/srv.length,tone:up===srv.length?'ok':up?'warn':'err'});
     setRead('mcp',up);
     setUnit('mcp','/'+srv.length);
   }
-  api('/api/conventions').then(c=>{const b=$('#convOut');if(!b)return;
-    const rows=(c.conventions||[]);
-    b.innerHTML=rows.length
-      ?`<div class="clog">${rows.map(r=>`<div>${esc(typeof r==='string'?r:(r.text||JSON.stringify(r)))}</div>`).join('')}</div>`
-      :'<div class="empty">Nothing repeats across enough projects yet.</div>';});
-  api('/api/loop-md?'+qs(Object.assign({scope:'user'},MCPACCT?{cfgdir:MCPACCT}:{}))).then(l=>{
-    if($('#loopUser'))$('#loopUser').value=l.text||'';
-    if($('#loopUserPath'))$('#loopUserPath').textContent=l.file||'';});
 }
-async function convSync(){
-  const r=await post('/api/conventions/sync',{cfgdir:MCPACCT||undefined});
-  toast(r.ok?'Promoted into the global CLAUDE.md':'Nothing to promote',r.ok?'ok':'err');
-  drawPage('mcp');
+
+/* ── the account's global instructions ───────────────────────────────────────
+   This was three cards at the BOTTOM of the MCP servers page, under the server
+   list and a conventions table. It is the file Claude reads in every session on
+   the account — the single most consequential piece of text claudectl can edit
+   — and it was findable only by scrolling past something unrelated. Its own
+   page, reachable from the sidebar. No new endpoints: the three it uses all
+   already existed and worked. */
+let GMDACCT='';
+async function pgGlobalMd(nav){
+  const gm=await api('/api/global-claude-md?'+qs(GMDACCT?{cfgdir:GMDACCT}:{}));
+  const accts=gm.accounts||[];
+  const picker=accts.length>1?`<div class="chips" style="margin-bottom:10px">
+      ${accts.map(a=>`<span class="chip${(GMDACCT||'')===(a.dir||'')?' on':''}"
+        onclick='gmdAcct(${JSON.stringify(a.dir||'')})'>${esc(a.name)}</span>`).join('')}
+    </div>`:'';
+  const words=(gm.text||'').trim()?(gm.text.trim().split(/\s+/).length):0;
+  if(!paint(nav,`
+    <div class="card"><h3>${ic('doc')} Global CLAUDE.md <span class="sp"></span>
+      <button class="btn sm" onclick='post("/api/open-editor",{path:${JSON.stringify(gm.path||'')}}).then(r=>toast(r.ok?"Opened in your editor":"Could not open it","ok"))'>${ic('edit')} Open in editor</button>
+      <button class="btn sm pri" onclick="gmSave()">Save</button></h3>
+      ${picker}
+      <p style="color:var(--dim);font-size:13px;margin:0 0 8px">Claude reads this file in <b>every</b> session on this account, so every word is paid for on every turn — roughly ${Math.round(words*1.3)} tokens as it stands.
+        ${gm.exists?'':'<span class="tag warn">does not exist yet</span>'}</p>
+      <textarea id="gmText" style="min-height:300px;font-family:var(--mono)">${esc(gm.text||'')}</textarea>
+      <div style="color:var(--dim2);font-size:12px;margin-top:6px">${esc(gm.path||'')}</div></div>
+    <div class="card"><h3>${ic('link')} Cross-project conventions <span class="sp"></span>
+      <button class="btn sm" onclick="convSync()">${ic('download')} Promote into global CLAUDE.md</button></h3>
+      <p style="color:var(--dim);font-size:13px;margin:0 0 8px">Preferences, corrections and decisions claudectl learned in <b>one</b> project and saw again in others — read from every account's memory, not from CLAUDE.md files. Promoting writes them into a sentinel block above; only that block is touched.</p>
+      <div id="convOut"><span class="spin"></span></div></div>`))return;
+  drawConv();
 }
-/* One writer for both scopes. It used to read #loopUser regardless of the
-   `scope` it was handed, so a project loop.md could only ever have been saved
-   into the account-wide file. */
-async function loopSave(scope){
-  const el=$(scope==='project'?'#loopProject':'#loopUser');
-  if(!el)return;
-  const body={scope,text:el.value};
-  if(scope==='project'){Object.assign(body,C(),{path:CUR.path,scope,text:el.value});}
-  else body.cfgdir=MCPACCT||undefined;
+async function drawConv(){
+  const c=await api('/api/conventions');const b=$('#convOut');if(!b)return;
+  const rows=(c.conventions||[]),near=(c.near||[]);
+  const promoted=rows.length
+    ?`<div class="clog">${rows.map(r=>`<div>${esc(r.text||'')}
+        <span class="tag">${r.projects} project${r.projects===1?'':'s'}</span>
+        ${r.pinned?'<span class="tag">pinned</span>':''}</div>`).join('')}</div>`
+    :'<div class="empty">Nothing qualifies yet — but these are close:</div>';
+  /* The old empty state was a dead end: it stated a fact and offered no way to
+     change it, so the card stayed empty forever. A near-miss with its own Pin
+     button is the difference between a report and a control. */
+  const cand=near.length?`<div class="lbl" style="margin-top:10px">Almost there</div>`
+    +near.map(n=>`<div class="lrow">
+        <div class="clamp3">${esc(n.text)}
+          <div style="color:var(--dim2);font-size:11px">${esc(n.why)}</div></div>
+        <button class="btn sm" onclick="convPin('${jsq(n.text)}')">Pin</button></div>`).join('')
+    :(rows.length?'':'<div class="empty">No preference or correction lessons recorded in any project yet — they are extracted when you review sessions.</div>');
+  b.innerHTML=promoted+cand;
+}
+async function convPin(text){
+  const r=await post('/api/conventions/pin',{text});
+  toast(r.ok?`Pinned in ${r.pinned} place(s) — now promotable`:'Nothing matched',r.ok?'ok':'err');
+  drawConv();
+}
+function gmdAcct(dir){GMDACCT=dir;drawPage('globalmd');}
+
+/* ── Loops ───────────────────────────────────────────────────────────────────
+   A `/loop` is SESSION-SCOPED: its tasks live in one conversation, fire only
+   while that session is open and idle, and die with it. There is no daemon to
+   talk to, so this page does the only three things that are real —
+
+     start   open a session whose first typed message is `/loop …`
+     watch   its transcript: each iteration is a turn
+     stop    end that session (Esc inside the session clears the next wakeup;
+             from out here, closing the session is the honest option)
+
+   — and says so, rather than implying a scheduler claudectl does not own.
+
+   loop.md is the other half: the prompt a BARE `/loop` runs. Project file wins
+   over the account one, which is why both are editable here, side by side. */
+let LOOPSCOPE='project',_loopTimer=null,LOOPKIND='schedule',LOOPPERM='auto',LOOPACCT='';
+async function pgLoops(nav){
+  const P=projCtx();
+  const path=P?P.path:'';
+  const scope=path?LOOPSCOPE:'user';
+  const [d,md]=await Promise.all([
+    api('/api/loops?'+qs(LOOPACCT?{cfgdir:LOOPACCT}:(P?{cfgdir:P.primary_cfgdir}:{}))),
+    api('/api/loop-md?'+qs(Object.assign({scope},path?{path}:{},
+        P?{cfgdir:P.primary_cfgdir}:{})))]);
+  const rows=(d.loops||[]);
+  const live=rows.filter(r=>r.running);
+  const accts=d.accounts||[];
+  const cost=v=>v?`<span class="tag">$${(+v).toFixed(2)}</span>`:'';
+  const row=r=>`<div class="hrow">
+      <span style="color:${r.running?'var(--ok)':'var(--dim)'}">${ic(r.running?'refresh':'check')}</span>
+      <div class="info"><b>${esc(r.name)}</b>
+        <span class="tag">${r.kind==='schedule'?'background':'in a session'}</span>
+        <div style="color:var(--dim);font-size:12px"><code>${esc(r.text)}</code>${
+          r.kind==='schedule'?` · every ${esc(r.interval||'?')} · ${esc(r.perm||'auto')}`:''}</div>
+        ${r.last_result||r.last_error?`<div style="color:${r.last_error?'var(--warn)':'var(--dim2)'};font-size:12px;margin-top:2px">${esc((r.last_error||r.last_result).slice(0,160))}</div>`:''}</div>
+      <span class="tag${r.running?' ok':''}">${r.kind==='schedule'
+        ?(r.running?'scheduled':(r.expired?'expired':'stopped'))
+        :(r.running?'session open':'ended')}</span>
+      ${r.kind==='schedule'
+        ?`${r.runs?`<span class="tag">${r.runs} run${r.runs===1?'':'s'}</span>`:''}${cost(r.last_cost)}
+          ${r.running?`<span class="tag${r.expires_in<86400?' warn':''}">expires ${fmtAge(r.expires_in)}</span>`:''}`
+        :`${r.iterations?`<span class="tag ok">${r.iterations} turns</span>`:''}
+          ${r.last_activity?`<span class="tag">quiet ${fmtAge(r.last_activity)}</span>`:''}`}
+      <span style="color:var(--dim2);font-size:12px">${fmtAge(r.age)} ago</span>
+      ${r.journal&&r.journal.length?`<button class="btn sm" onclick='loopLog(${JSON.stringify(r.id)})'>log</button>`:''}
+      ${r.running&&r.kind==='schedule'?`<button class="btn sm" onclick='loopRenew(${JSON.stringify(r.id)})'>renew</button>`:''}
+      ${r.running
+        ?`<button class="btn sm danger" onclick='loopStop(${JSON.stringify(r.id)})'>${r.kind==='schedule'?'Unschedule':'End session'}</button>`
+        :`<button class="btn sm" onclick='loopForget(${JSON.stringify(r.id)})'>${ic('del')}</button>`}
+    </div>`;
+  window._loopRows=rows;
+  const permNote=(d.perms||[]).find(x=>x.id===LOOPPERM);
+  if(!paint(nav,`
+    <div class="card"><h3>${ic('refresh')} Loops <span class="sp"></span>
+      <span class="tag${live.length?' ok':''}">${live.length} live</span></h3>
+      <p style="color:var(--dim);font-size:13px;margin:0 0 8px">Two kinds, because Claude Code only offers one. <b>In a session</b> is a real <code>/loop</code>: it fires while that session is open and idle, and dies with it. <b>In the background</b> is claudectl's own — an entry in ${esc(navigator.platform.startsWith('Win')?'Task Scheduler':'cron')} that runs headless <code>claude -p</code> on the interval, with claudectl closed and no session anywhere.</p>
+      ${rows.length?rows.map(row).join(''):'<div class="empty">No loops started from claudectl yet.</div>'}</div>
+
+    <div class="card"><h3>${ic('play')} Start a loop</h3>
+      ${path?'':'<div class="empty">Open a project first — a loop runs inside one.</div>'}
+      ${path?`
+      <div class="chips" style="margin:0 0 10px">
+        <span class="chip${LOOPKIND==='schedule'?' on':''}" onclick="loopKind('schedule')">in the background</span>
+        <span class="chip${LOOPKIND==='session'?' on':''}" onclick="loopKind('session')">in a session</span>
+      </div>
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">${LOOPKIND==='schedule'
+        ?`Runs <b>${esc(P.name)}</b> unattended on a timer, spending money without anyone watching — so it carries an expiry of ${d.ttl_days||7} days (renewable), your per-call budget cap, and the permission mode below. Each run is a fresh session that reads a rolling record of what the previous ones did, kept in the project's CLAUDE.md.`
+        :`Opens a session in <b>${esc(P.name)}</b> and types the command for you. It fires while that session is open; closing it ends the loop.`}</p>
+      <div class="grid2">
+        <div class="fld"><label for="loopInt">Interval${LOOPKIND==='schedule'?'':' — blank = Claude decides'}</label>
+          <input id="loopInt" placeholder="15m" spellcheck="false"></div>
+        <div class="fld"><label for="loopPrompt">Prompt — blank = loop.md</label>
+          <input id="loopPrompt" placeholder="check CI and fix what is red" spellcheck="false"></div>
+      </div>
+      ${LOOPKIND==='schedule'?`
+      <div class="fld"><label>What it may do without asking</label>
+        <div class="chips">${(d.perms||[]).map(pm=>`<span class="chip${LOOPPERM===pm.id?' on':''}"
+          onclick='loopPerm(${JSON.stringify(pm.id)})' title="${esc(pm.note)}">${esc(pm.id)}</span>`).join('')}</div>
+        <div style="color:var(--dim);font-size:12px;margin-top:4px">${esc(permNote?permNote.note:'')}</div></div>
+      ${accts.length>1?`<div class="fld"><label>Account it runs under</label>
+        <div class="chips">${accts.map(a=>`<span class="chip${(LOOPACCT||(P?P.primary_cfgdir:''))===(a.dir||'')?' on':''}"
+          onclick='loopAcct(${JSON.stringify(a.dir||'')})'>${esc(a.name)}</span>`).join('')}</div></div>`:''}`:''}
+      <div class="mrow"><span id="loopPreview" style="flex:1;color:var(--dim);font-size:12px;font-family:var(--mono)"></span>
+        <button class="btn pri" onclick="loopStart()">${ic('play')} ${LOOPKIND==='schedule'?'Schedule it':'Start in a new session'}</button></div>`:''}</div>
+
+    <div class="card"><h3>${ic('doc')} loop.md <span class="sp"></span>
+      <button class="btn sm" onclick="loopAI()">${ic('ai')} Build with AI</button>
+      <button class="btn sm pri" onclick="loopSaveHere()">Save</button></h3>
+      <p style="color:var(--dim);font-size:13px;margin:0 0 8px">What a bare <code>/loop</code> does, and what a background loop runs when you leave the prompt empty. The project file wins wherever both exist, edits apply from the next iteration, and saving it empty deletes the file. Keep it short — anything past 25,000 bytes is truncated.</p>
+      ${path?`<div class="chips" style="margin:0 0 10px">
+        <span class="chip${scope==='project'?' on':''}" onclick="loopScope('project')">${esc(P.name)}${CUR?'':' (last opened)'}</span>
+        <span class="chip${scope==='user'?' on':''}" onclick="loopScope('user')">account — every project</span></div>`:''}
+      <textarea id="loopMd" style="min-height:200px;font-family:var(--mono)">${esc(md.text||'')}</textarea>
+      <div style="color:var(--dim2);font-size:12px;margin-top:6px">${esc(md.file||'')}${md.exists?'':' — does not exist yet'}</div></div>`))return;
+  const upd=()=>{const e=$('#loopPreview');if(!e)return;
+    const i=($('#loopInt').value||'').trim(),p=($('#loopPrompt').value||'').trim();
+    e.textContent=LOOPKIND==='schedule'
+      ?`claude -p ${p?JSON.stringify(p):'<loop.md>'} --permission-mode ${LOOPPERM}  ·  every ${i||'?'}`
+      :['/loop',i,p].filter(Boolean).join(' ');};
+  if($('#loopInt')){$('#loopInt').oninput=upd;$('#loopPrompt').oninput=upd;upd();}
+  // one poll while the page is open, and it stops with the page — the same
+  // discipline as the dashboard: nothing keeps fetching for a detached view
+  stopLoopPoll();
+  if(live.length)_loopTimer=setTimeout(()=>{if(PAGE_==='loops')drawPage('loops');},15000);
+}
+function loopKind(k){LOOPKIND=k;drawPage('loops');}
+function loopPerm(p){LOOPPERM=p;drawPage('loops');}
+function loopAcct(d){LOOPACCT=d;drawPage('loops');}
+function loopLog(id){
+  const r=(window._loopRows||[]).find(x=>x.id===id);if(!r)return;
+  drawerText('Loop · '+r.name,(r.journal||[]).map(e=>
+    `${new Date((e.at||0)*1000).toLocaleString()}  ${e.ok?'ok':'FAILED'}  ${e.cost?'$'+(+e.cost).toFixed(3)+'  ':''}${e.secs}s\n${e.text||''}\n`
+  ).join('\n')||'(no runs yet)');
+}
+async function loopRenew(id){
+  const P=projCtx();
+  const r=await post('/api/loops/stop',{id,renew:true,cfgdir:LOOPACCT||(P?P.primary_cfgdir:'')});
+  toast(r.message||'',r.ok?'ok':'err');drawPage('loops');
+}
+function stopLoopPoll(){if(_loopTimer){clearTimeout(_loopTimer);_loopTimer=null;}}
+function loopScope(sc){LOOPSCOPE=sc;drawPage('loops');}
+async function loopStart(){
+  const P=projCtx();if(!P){toast('Open a project first','err');return;}
+  const r=await post('/api/loops/start',{path:P.path,enc:P.encoded,
+    cfgdir:LOOPACCT||P.primary_cfgdir,project_name:P.name,
+    kind:LOOPKIND,perm:LOOPPERM,
+    interval:($('#loopInt').value||'').trim(),
+    prompt:($('#loopPrompt').value||'').trim()});
+  toast(r.ok?(r.message||('Started: '+r.text)):('Failed: '+(r.error||'')),r.ok?'ok':'err');
+  drawPage('loops');
+}
+async function loopStop(id){
+  const r0=(window._loopRows||[]).find(x=>x.id===id)||{};
+  const ask=r0.kind==='schedule'
+    ?['Remove this loop from the scheduler?','It cannot fire again. Nothing that has already run is undone.']
+    :['End the session this loop runs in?','A /loop is session-scoped, so stopping it from outside means closing its session — anything else that session was doing ends too.'];
+  if(!await confirmBox(ask[0],ask[1]))return;
+  const P=projCtx();
+  const r=await post('/api/loops/stop',{id,cfgdir:LOOPACCT||(P?P.primary_cfgdir:'')});
+  toast(r.message||'',r.ok?'ok':'err');drawPage('loops');
+}
+async function loopForget(id){
+  const P=projCtx();
+  await post('/api/loops/stop',{id,forget:true,cfgdir:P?P.primary_cfgdir:''});
+  drawPage('loops');
+}
+async function loopSaveHere(){
+  const P=projCtx();
+  const scope=(P&&LOOPSCOPE==='project')?'project':'user';
+  const body={scope,text:$('#loopMd').value};
+  if(scope==='project'){body.path=P.path;body.cfgdir=P.primary_cfgdir;}
+  else body.cfgdir=P?P.primary_cfgdir:undefined;
   const r=await post('/api/loop-md',body);
   toast(r.removed?'loop.md removed':'Saved','ok');
+  drawPage('loops');
+}
+async function loopAI(){
+  const P=projCtx();
+  const scope=(P&&LOOPSCOPE==='project')?'project':'user';
+  const v=await ask('Build loop.md with AI',
+    [{label:'What should each iteration do?',type:'textarea',
+      ph:'check the release PR: if CI is red pull the failing log and push a minimal fix'}],
+    'Claude drafts the file; you approve the text before anything is written.');
+  if(v===null||!v[0].trim())return;
+  inlineJob('#jban','loop_ai',{scope,description:v[0],
+      path:P?P.path:'',cfgdir:P?P.primary_cfgdir:''},
+    {label:'Writing loop.md',redraw:()=>drawPage('loops')});
+}
+
+async function convSync(){
+  const r=await post('/api/conventions/sync',{cfgdir:GMDACCT||undefined});
+  toast(r.ok?'Promoted into the global CLAUDE.md':'Nothing to promote',r.ok?'ok':'err');
+  drawPage('globalmd');
 }
 function mcpAcct(dir){MCPACCT=dir;drawPage('mcp');}
 async function gmSave(){
-  const r=await post('/api/global-claude-md',{cfgdir:MCPACCT||undefined,text:$('#gmText').value});
+  const r=await post('/api/global-claude-md',{cfgdir:GMDACCT||undefined,text:$('#gmText').value});
   toast(r.ok?'Saved':'Write failed',r.ok?'ok':'err');}
 async function mcpDetail(name){
   const r=await api('/api/mcp/detail?'+qs(Object.assign({name},MCPACCT?{cfgdir:MCPACCT}:{})));
@@ -3081,26 +3476,35 @@ async function pgAgents(nav){
   await loadProv();
   const d=await api('/api/agents/library');
   const own=(d.own||[]).map(a=>`
-    <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
+    <div class="agrow" data-f="${esc(a.name+' '+a.desc+' '+a.scope)}">
       <b style="min-width:160px">${esc(a.name)}</b>${provTag('agent',a.name)}
       <span class="tag">${esc(a.scope)}</span>
-      <span style="flex:1;color:var(--dim);font-size:12px">${esc(a.desc)}</span>
+      <span class="skdesc">${esc(a.desc)}</span>
       <button class="btn sm" onclick='agView(${JSON.stringify(a.path)})'>view</button>
       <button class="btn sm" onclick='post("/api/open-editor",{file:${JSON.stringify(a.path)}})'>edit</button>
       <button class="btn sm danger" onclick='agDel(${JSON.stringify(a.path)})'>${ic('del')}</button></div>`).join('');
+  const nLib=(d.categories||[]).reduce((n,c)=>n+c.agents.length,0);
   const lib=(d.categories||[]).map(c=>`
     <details style="margin-bottom:6px"><summary style="cursor:pointer;font-weight:600">${esc(c.category)} (${c.agents.length})</summary>
-    ${c.agents.map(a=>`<div style="display:flex;gap:10px;padding:3px 0 3px 16px;align-items:center">
+    ${c.agents.map(a=>`<div class="agrow" data-f="${esc(a.name+' '+a.desc+' '+c.category)}" style="padding-left:16px">
       <b style="min-width:170px">${esc(a.name)}</b>
-      <span style="flex:1;color:var(--dim);font-size:12px">${esc(a.desc)}</span>
+      <span class="skdesc">${esc(a.desc)}</span>
       <button class="btn sm" onclick='agView(${JSON.stringify(a.path)})'>view</button></div>`).join('')}
     </details>`).join('');
-  paint(nav,`
-    <div class="card"><h3>My agents <span class="sp"></span>
+  if(!paint(nav,`
+    <div class="card"><h3>My agents <span class="tag">${(d.own||[]).length}</span><span class="sp"></span>
       <button class="btn sm" onclick="agNew()">${ic('add')} New agent</button>
-      <button class="btn sm" onclick="agAI()">${ic('ai')} AI-generate</button></h3>
+      <button class="btn sm" onclick="agAI()">${ic('ai')} AI-generate</button>
+      <button class="btn sm" title="Rewrite every agent's description into trigger form (Use PROACTIVELY when …) — across every account, every project and the library. You approve the whole diff first; bodies and every other frontmatter field are untouched."
+        onclick="agSharpen('all')">${ic('ai')} Sharpen descriptions</button></h3>
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">Claude Code picks a subagent by matching your task against its <b>description</b> — nothing reads the body. Sharpening rewrites that one field everywhere the agent is installed, so a fix lands once instead of per project.</p>
       ${own||'<div style="color:var(--dim)">No user/project agents yet.</div>'}</div>
-    <div class="card"><h3>Agent library</h3>${lib||'<div style="color:var(--dim)">Library is empty.</div>'}</div>`);
+    <div class="card"><h3>Agent library <span class="tag">${nLib}</span></h3>
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">Too many to read down: type to narrow. The filter covers both lists and opens the categories that match.</p>
+      <div class="fld"><input id="agQ" placeholder="Filter agents…" spellcheck="false">
+        <div style="color:var(--dim2);font-size:12px;margin-top:4px" id="agQCount"></div></div>
+      ${lib||'<div style="color:var(--dim)">Library is empty.</div>'}</div>`))return;
+  bindFilter('agQ','.agrow','agQCount');
 }
 /* the existing #drawer, shown with plain text. Everything that used to have no
    way to display its own output — `claude mcp get`, an MCP tool-doc analysis —
@@ -3137,7 +3541,7 @@ async function agAI(){
   const v=await ask('AI-generate agent',[{label:'Describe what the agent should do',type:'textarea'}]);
   if(v===null||!v[0].trim())return;
   inlineJob('#jban','agent_ai',{path:CUR?CUR.path:'',description:v[0]},
-    {label:'Generating agent',onDone:()=>drawPage('agents')});
+    {label:'Generating agent',redraw:()=>drawPage('agents')});
 }
 async function agDel(path){
   if(!await confirmBox('Delete this agent?'))return;
@@ -3325,13 +3729,13 @@ async function verPick(){
 }
 function claudeUpdate(target){
   inlineJob('#verCard','claude_update',{target:target||''},
-            {onDone:()=>drawPage('plugins')});
+            {redraw:()=>drawPage('plugins')});
 }
 function pluginUpdate(key){
-  inlineJob('#pluginCard','plugin_update',{key},{onDone:()=>drawPage('plugins')});
+  inlineJob('#pluginCard','plugin_update',{key},{redraw:()=>drawPage('plugins')});
 }
 function mktRefresh(){
-  inlineJob('#pluginCard','marketplace_refresh',{},{onDone:()=>drawPage('plugins')});
+  inlineJob('#pluginCard','marketplace_refresh',{},{redraw:()=>drawPage('plugins')});
 }
 function plAcct(dir){PLACCT=dir;drawPage('plugins');}
 /* Adding registers the marketplace on EVERY account — a source you trust is a
@@ -3469,33 +3873,101 @@ async function wtMerge(repoPath,branch){
    different job — and it is set per project OR per account, which is precisely
    the pair claudectl already knows at launch. Clicking a card writes the
    `outputStyle` key and leaves every other key in that settings.json alone. */
+/* ── Output styles ───────────────────────────────────────────────────────────
+   The page was one undifferentiated grid of cards. It never said what a style
+   IS (it replaces the behavioural half of the system prompt — not the tools,
+   not CLAUDE.md, not a skill), where each one lives, or which of two files was
+   actually in force. Clicking a card silently wrote the PROJECT settings.json,
+   and with no project open that threw on `CUR.path`. `view` showed "(empty)"
+   for the three built-ins, because those ship inside Claude Code and have no
+   file — which reads as a broken button.
+
+   Now: what is active and where it is pinned, then your styles by scope, then
+   the built-ins, then claudectl's starters to copy. The scope of every write is
+   a choice you can see. */
+let OSSCOPE='user';
 async function pgOStyles(nav){
-  const path=CUR?CUR.path:'';
-  const d=await api('/api/output-styles?'+qs({path,cfgdir:CUR?CUR.primary_cfgdir:''}));
-  const cards=(d.styles||[]).map(st=>`
+  const P=projCtx();
+  const path=P?P.path:'';
+  if(!path)OSSCOPE='user';        // no project in play: there is only one target
+  const d=await api('/api/output-styles?'+qs({path,cfgdir:P?P.primary_cfgdir:''}));
+  const where=d.active_scope==='project'?`this project's <code>.claude/settings.json</code>`
+    :d.active_scope==='user'?`your account's <code>settings.json</code>`:'';
+  const card=st=>`
     <div class="preset${st.active?' on':''}" onclick='osPick(${JSON.stringify(st.name)})'>
       <b>${esc(st.name)}</b>
       <span>${esc(st.description||'No description.')}</span>
-      <div style="display:flex;align-items:center;gap:6px;margin-top:6px">
-        <span class="tag">${esc(st.scope)}</span>
-        ${st.active?'<span class="tag ok">active</span>':''}
-        <button class="btn sm" onclick='event.stopPropagation();osView(${JSON.stringify(st.name)},${JSON.stringify(st.scope||"")})'>view</button>
-        ${st.builtin?'':`<button class="btn sm danger" onclick='event.stopPropagation();osDel(${JSON.stringify(st.name)})'>${ic('del')}</button>`}
-      </div></div>`).join('');
+      <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
+        ${st.active?'<span class="tag ok">in force</span>':''}
+        ${st.lines?`<span class="tag">${st.lines} lines</span>`:''}
+        <button class="btn sm" onclick='event.stopPropagation();osView(${JSON.stringify(st.name)})'>view</button>
+        ${st.builtin||st.scope==='starter'?'':`<button class="btn sm danger" onclick='event.stopPropagation();osDel(${JSON.stringify(st.name)})'>${ic('del')}</button>`}
+      </div></div>`;
+  const starter=st=>`
+    <div class="preset">
+      <b>${esc(st.name)}</b>
+      <span>${esc(st.description)}</span>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
+        <button class="btn sm" onclick='osView(${JSON.stringify(st.name)})'>view</button>
+        <button class="btn sm pri" onclick='osInstall(${JSON.stringify(st.name)})'>copy to ${OSSCOPE}</button>
+      </div></div>`;
+  const of=sc=>(d.styles||[]).filter(x=>x.scope===sc);
+  const grid=(rows,empty)=>rows.length
+    ?`<div class="presetrow">${rows.map(card).join('')}</div>`
+    :`<div class="empty">${empty}</div>`;
+  const scopePick=path?`<div class="chips" style="margin:0 0 10px">
+      <span class="chip${OSSCOPE==='user'?' on':''}" onclick="osScope('user')">account — every project</span>
+      <span class="chip${OSSCOPE==='project'?' on':''}" onclick="osScope('project')">${esc(P.name)} only${CUR?'':' (last opened)'}</span>
+    </div>`:'';
+
   paint(nav,`
     <div class="card"><h3>${ic('palette')} Output styles <span class="sp"></span>
       <button class="btn sm pri" onclick="osNew()">${ic('add')} New style</button></h3>
-      <p style="color:var(--dim);font-size:12.5px;margin:0 0 10px">A style replaces the behavioural half of Claude Code's system prompt — the tools and permissions are untouched. Clicking one writes <code>outputStyle</code> into this project's <code>.claude/settings.json</code>; everything else in that file is preserved, and <b>default</b> removes the key rather than pinning a value that really means "no override".</p>
-      <div class="presetrow">${cards}</div></div>`);
+      <p style="color:var(--dim);font-size:13px;margin:0 0 8px">A style replaces the <b>behavioural</b> half of Claude Code's system prompt — how it talks and works. Tools, permissions, CLAUDE.md and skills are untouched: this is voice and method, not knowledge. It is a markdown file with YAML frontmatter, and selecting one writes <code>outputStyle</code> into a settings.json, leaving every other key in that file alone.</p>
+      <div class="pghd" style="margin-bottom:8px"><div class="pghdt">
+        <b>${esc(d.active||'default')}</b> is in force${where?' — pinned in '+where:' (nothing pins a style, so Claude Code uses its own default)'}
+        <div class="sub">A project's settings.json shadows your account's, so a project pin wins wherever both name a style.</div></div></div>
+      <p style="color:var(--dim);font-size:12.5px;margin:0">Writes below go to: ${scopePick?'':'<b>your account</b> — open a project to target it instead.'}</p>
+      ${scopePick}</div>
+
+    <div class="card"><h3>Your styles <span class="tag">account</span></h3>
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px"><code>${esc(d.user_dir||'')}</code> — available in every project on this account.</p>
+      ${grid(of('user'),'None yet. Copy a starter below, or write one.')}</div>
+
+    ${path?`<div class="card"><h3>This project <span class="tag">${esc(P.name)}</span></h3>
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px"><code>${esc(d.project_dir||'')}</code> — only here, and committed with the repo if you commit it.</p>
+      ${grid(of('project'),'No project-specific styles.')}</div>`:''}
+
+    <div class="card"><h3>Built into Claude Code</h3>
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">Shipped inside Claude Code, so there is no file to edit — copy a starter or write your own to replace one.</p>
+      ${grid(of('built-in'),'None reported.')}</div>
+
+    <div class="card"><h3>${ic('download')} Starters from claudectl</h3>
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">Four jobs Claude Code does not ship a style for. Copying one writes a normal markdown file you own and can edit — nothing stays linked to claudectl.</p>
+      <div class="presetrow">${(d.starters||[]).map(starter).join('')}</div></div>`);
 }
-async function osView(name,scope){
-  const d=await api('/api/output-style/read?'+qs({name,scope,
-    path:CUR?CUR.path:'',cfgdir:CUR?CUR.primary_cfgdir:''}));
-  drawerText('Output style · '+name,d.body||d.text||'(empty)');
+function osScope(sc){OSSCOPE=sc;drawPage('ostyles');}
+async function osView(name){
+  const P=projCtx();
+  const d=await api('/api/output-style/read?'+qs({name,
+    path:P?P.path:'',cfgdir:P?P.primary_cfgdir:''}));
+  drawerText('Output style · '+name,d.body||'(this style has no text)');
+}
+/* Every write names its scope explicitly. It used to pass scope:'project'
+   unconditionally and read CUR.path — which threw on a page that is reachable
+   with no project open at all. */
+function osTarget(){
+  const P=projCtx();
+  return OSSCOPE==='project'&&P
+    ?{scope:'project',path:P.path,cfgdir:P.primary_cfgdir}
+    :{scope:'user',cfgdir:P?P.primary_cfgdir:''};
 }
 async function osPick(name){
-  const r=await post('/api/output-style/select',
-    {name,scope:'project',path:CUR.path,cfgdir:CUR.primary_cfgdir});
+  const r=await post('/api/output-style/select',{name,...osTarget()});
+  toast(r.message||'',r.ok?'ok':'err');drawPage('ostyles');
+}
+async function osInstall(name){
+  const r=await post('/api/output-style/install',{name,...osTarget()});
   toast(r.message||'',r.ok?'ok':'err');drawPage('ostyles');
 }
 async function osNew(){
@@ -3505,13 +3977,15 @@ async function osNew(){
     {label:'Instructions',type:'textarea'}],
     'Saved as a markdown file with YAML frontmatter — the format Claude Code reads.');
   if(!v||!v[0])return;
-  const r=await post('/api/output-style/save',{name:v[0],description:v[1],body:v[2],
-    scope:'project',path:CUR.path,cfgdir:CUR.primary_cfgdir});
+  const r=await post('/api/output-style/save',
+    {name:v[0],description:v[1],body:v[2],...osTarget()});
   toast(r.message||'',r.ok?'ok':'err');drawPage('ostyles');
 }
 async function osDel(name){
   if(!await confirmBox('Delete output style '+name+'?'))return;
-  const r=await post('/api/output-style/delete',{name,path:CUR.path,cfgdir:CUR.primary_cfgdir});
+  const P=projCtx();
+  const r=await post('/api/output-style/delete',
+    {name,path:P?P.path:'',cfgdir:P?P.primary_cfgdir:''});
   toast(r.message||'',r.ok?'ok':'err');drawPage('ostyles');
 }
 
@@ -3558,56 +4032,137 @@ async function ckptDiff(sid,file,a,b,cfgdir){
     'Read-only. Restoring is /rewind inside the session.');
 }
 
-/* ── Skills ── */
+/* ── Skills ─────────────────────────────────────────────────────────────────
+   The scopes here are CLAUDE CODE'S, not ours. It loads personal
+   (<account>/skills), project (<project>/.claude/skills), plugin skills and its
+   own bundled ones — and nothing else. The old page led with a "Project skills"
+   card that was inert unless a project happened to be open, and offered "copy to
+   library", which wrote into ~/.claude/claudectl-skills: a directory nothing
+   reads. So it listed files that could never run and said nothing about what
+   actually does.
+
+   Every row now carries the command you type and its real usage count, straight
+   from Claude Code's own skillUsage counters. */
+let SKACCT='',SKSCOPE='all';
 async function pgSkills(nav){
+  const P=projCtx();
+  const path=P?P.path:'';
   await loadProv();          // badge rows a plugin brought in — see provTag
-  const path=CUR?CUR.path:'';
-  const d=await api('/api/skills'+(path?'?'+qs({path}):''));
-  const proj=(d.project||[]).map(s=>`
-    <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
-      <b style="min-width:170px">${esc(s.name)}</b>${provTag('skill',s.name)}
-      <span style="flex:1;color:var(--dim);font-size:12px">${esc(s.desc)}</span>
-      <button class="btn sm" onclick='skView(${JSON.stringify(s.dir)})'>view</button>
-      <button class="btn sm" onclick='skSave(${JSON.stringify(s.dir)})' title="Copy into your skill library so it is available in every project">copy to library</button>
-      <button class="btn sm" onclick='post("/api/open-editor",{file:${JSON.stringify(s.dir+"\\\\SKILL.md")}})'>edit</button>
-      <button class="btn sm danger" onclick='skRemove(${JSON.stringify(s.dir)})'>${ic('del')}</button></div>`).join('');
-  const tmpl=(d.templates||[]).map(s=>`
-    <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
-      <b style="min-width:170px">${esc(s.name)}</b>${provTag('skill',s.name)}
-      <span class="tag">${esc(s.source)}</span>
-      <span style="flex:1;color:var(--dim);font-size:12px">${esc(s.desc)}</span>
-      <button class="btn sm" onclick='skView(${JSON.stringify(s.dir)})'>view</button>
-      <button class="btn sm" onclick='skSave(${JSON.stringify(s.dir)})' title="Copy into your skill library so it is available in every project">copy to library</button>
-      ${path?`<button class="btn sm pri" onclick='skInstall(${JSON.stringify(s.dir)})'>install</button>`:''}</div>`).join('');
-  paint(nav,`
-    <div class="card"><h3>Project skills <span class="sp"></span>
-      <button class="btn sm" onclick="skNew()">${ic('add')} New skill</button>
-      <button class="btn sm" onclick="skAI()">${ic('ai')} AI-generate</button></h3>
-      <p style="color:var(--dim);font-size:12px;margin:0 0 8px">${path?`Installed in <code>${esc(path)}\\.claude\\skills</code> — Claude loads each on demand.`:'Open a project to install skills into it.'}</p>
-      ${proj||'<div style="color:var(--dim)">No project skills yet — install a template below.</div>'}</div>
-    <div class="card"><h3>Starter templates &amp; library</h3>
-      <p style="color:var(--dim);font-size:12px;margin:0 0 8px">Bundled starters (credited in the README) plus your saved skills.</p>
-      ${tmpl||'<div style="color:var(--dim)">No templates found.</div>'}</div>
-    <div class="card"><h3>${ic('download')} Install from GitHub</h3>
-      <p style="color:var(--dim);font-size:13px;margin-bottom:10px">Clone a skill+agents bundle straight from its repo — e.g.
-        <a href="https://github.com/olsenbrands/fable-foreman" target="_blank" rel="noopener"
-           style="color:var(--cyan);text-decoration:none">fable-foreman</a> (MIT, Jordan Olsen), which delegates
-        execution to worker/verifier subagents. If a free execute model is set under Settings, its agents'
-        <code>model:</code> pin is rewritten to that model automatically.</p>
-      <div class="fld"><input id="skGitUrl" value="https://github.com/olsenbrands/fable-foreman"></div>
-      <div class="mrow"><button class="btn pri sm" onclick="skGitInstall()">${ic('download')} Clone &amp; install</button></div></div>`);
+  const d=await api('/api/skills?'+qs(Object.assign(path?{path}:{},SKACCT?{cfgdir:SKACCT}:{})));
+  const accts=d.accounts||[];
+  const all=[].concat(d.personal||[],d.project||[],d.plugin||[],d.bundled||[]);
+  const n=sc=>sc==='all'?all.length:all.filter(r=>r.scope===sc).length;
+
+  /* TWO signals, never one number. `typed` is Claude Code's own counter and it
+     counts ONE thing: the times you wrote /name. `in N/M sessions` is measured
+     from the transcripts — how often something by that name actually ran. The
+     gap between them is the whole point: caveman reads as "used twice, 56 days
+     ago" and is in fact active in most of your sessions, because it arrives
+     through a hook, and hooks touch no counter. */
+  const usage=r=>{
+    const typed=r.uses
+      ?`<span class="tag ok" title="You typed /${esc(r.command)} ${r.uses} time(s). This counter only counts explicit invocation.">typed ${r.uses}×${r.last_used?' · '+esc(r.last_used):''}</span>`
+      :'<span class="tag" title="Never invoked by name. A skill Claude loads on its own does not increment this.">never typed</span>';
+    const live=r.sessions
+      ?`<span class="tag ok" title="Measured from your transcripts${r.via?' — the '+esc(r.via)+' plugin\'s hook ran':''}">in ${r.sessions}/${r.of_sessions} sessions</span>`
+      :'';
+    return typed+live;
+  };
+  const warn=r=>(r.auto===false
+      ?'<span class="tag warn" title="disable-model-invocation: true — Claude may never load this on its own; only you can, by typing it">manual only</span>':'')
+    +(r.weak?'<span class="tag warn" title="Claude picks a skill by matching your task against its description. A missing or one-word description can only be found by name.">thin description</span>':'')
+    +(r.shadowed?'<span class="tag warn" title="A personal skill of the same name wins — this one never runs">shadowed</span>':'');
+
+  const act=r=>{
+    const b=[];
+    if(r.dir)b.push(`<button class="btn sm" onclick='skView(${JSON.stringify(r.dir)})'>view</button>`);
+    if(r.scope==='personal'||r.scope==='project')
+      b.push(`<button class="btn sm" onclick='post("/api/open-editor",{file:${JSON.stringify(r.dir+"\\\\SKILL.md")}})'>edit</button>`);
+    if(r.scope!=='personal'&&r.dir)
+      b.push(`<button class="btn sm" onclick='skSave(${JSON.stringify(r.dir)})' title="Copy into the personal scope of every account">→ personal</button>`);
+    if(r.scope!=='project'&&r.dir&&path)
+      b.push(`<button class="btn sm" onclick='skInstall(${JSON.stringify(r.dir)},"project")' title="Copy into ${esc(P.name)} only">→ project</button>`);
+    if(r.scope==='personal'||r.scope==='project')
+      b.push(`<button class="btn sm danger" onclick='skRemove(${JSON.stringify(r.dir)},${JSON.stringify(r.scope)})'>${ic('del')}</button>`);
+    return b.join('');
+  };
+  const row=r=>`<div class="skrow" data-scope="${esc(r.scope)}"
+      data-f="${esc(r.command+' '+r.name+' '+r.desc+' '+r.scope)}">
+      <code class="skcmd">/${esc(r.command)}</code>
+      <span class="tag">${esc(r.scope)}</span>${provTag('skill',r.name)}
+      ${usage(r)}${warn(r)}
+      <span class="skdesc" title="${esc(r.desc)}">${esc(r.desc)}</span>${act(r)}</div>`;
+
+  const chip=(id,label)=>`<span class="chip skchip${SKSCOPE===id?' on':''}"
+      data-sc="${id}" onclick='skScope(${JSON.stringify(id)})'>${label} ${n(id)}</span>`;
+  const acctChips=accts.length>1?`<div class="chips" style="margin:0 0 8px">
+      ${accts.map(a=>`<span class="chip${(SKACCT||'')===(a.dir||'')?' on':''}"
+        onclick='skAcct(${JSON.stringify(a.dir||'')})'>${esc(a.name)}</span>`).join('')}
+    </div>`:'';
+
+  if(!paint(nav,`
+    <div class="card"><h3>${ic('ai')} Skills <span class="sp"></span>
+      <span class="tag">${all.length} loadable</span></h3>
+      <p style="color:var(--dim);font-size:13px;margin:0 0 8px">Everything Claude Code can load here, in the order it resolves them — <b>personal</b> (every project on an account) beats <b>project</b>, plugins are namespaced, and the bundled ones live inside Claude Code. The command is the folder name.</p>
+      ${acctChips}
+      <div class="chips" style="margin:0 0 8px">${chip('all','all')}${chip('personal','personal')}${
+        path?chip('project','project'):''}${chip('plugin','plugin')}${chip('bundled','built-in')}</div>
+      <div class="fld" style="margin:0"><input id="skQ" placeholder="Filter by name, description or scope…" spellcheck="false">
+        <div style="color:var(--dim2);font-size:12px;margin-top:4px" id="skCount"></div></div></div>
+
+    <div class="card">${all.length?all.map(row).join(''):'<div class="empty">No skills anywhere yet — add one below.</div>'}
+      <p style="color:var(--dim2);font-size:12px;margin:10px 0 0">Personal: <code>${esc(d.personal_dir||'')}</code>${
+        path?` · Project: <code>${esc(d.project_dir||'')}</code>`:''} · session counts from your last ${d.sessions_scanned||0} sessions across every account.</p></div>
+
+    <div class="card"><h3>${ic('add')} Add a skill</h3>
+      <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">Everything here lands in <b>personal — all ${accts.length||1} account${(accts.length||1)===1?'':'s'}</b> unless you pick the project.${path?'':' Open a project to install into one.'}</p>
+      <div class="mrow" style="align-items:flex-end;flex-wrap:wrap">
+        <div class="fld" style="flex:1;min-width:220px;margin:0"><label for="skTmpl">Starter shipped with claudectl</label>
+          <select id="skTmpl">${(d.templates||[]).map(t=>
+            `<option value="${esc(t.dir)}">${esc(t.command)} — ${esc((t.desc||'').slice(0,70))}</option>`).join('')}</select></div>
+        <button class="btn sm" onclick="skTmplView()">view</button>
+        <button class="btn pri sm" onclick="skTmplInstall('personal')">Install → personal</button>
+        ${path?`<button class="btn sm" onclick="skTmplInstall('project')">→ ${esc(P.name)}</button>`:''}
+      </div>
+      <div class="mrow" style="margin-top:10px;flex-wrap:wrap">
+        <button class="btn sm" onclick="skNew()">${ic('add')} Write one</button>
+        <button class="btn sm" onclick="skAI()">${ic('ai')} Have Claude write one</button>
+        <span class="sp"></span>
+        <div class="fld" style="flex:1;min-width:260px;margin:0"><label for="skGitUrl">Clone a skill+agents bundle from GitHub — risk-scanned and shown to you first</label>
+          <input id="skGitUrl" value="https://github.com/olsenbrands/fable-foreman"></div>
+        <button class="btn sm" onclick="skGitInstall()">${ic('download')} Clone</button>
+      </div></div>`))return;
+  bindFilter('skQ','.skrow','skCount',
+    el=>SKSCOPE==='all'||el.dataset.scope===SKSCOPE);
 }
+/* A chip is a filter, not a navigation: it re-runs the one filter pass and
+   moves the highlight. Redrawing the page instead would re-fetch the whole
+   inventory to hide four rows. */
+function skScope(sc){
+  SKSCOPE=sc;
+  document.querySelectorAll('#content .skchip').forEach(c=>
+    c.classList.toggle('on',c.dataset.sc===sc));
+  const run=window['__f_skQ'];if(run)run();
+}
+function skTmplDir(){const s=$('#skTmpl');return s?s.value:'';}
+function skTmplView(){const d=skTmplDir();if(d)skView(d);}
+function skTmplInstall(scope){const d=skTmplDir();if(d)skInstall(d,scope);}
+function skAcct(dir){SKACCT=dir;drawPage('skills');}
 async function skSave(dir){
   const r=await post('/api/skills/library',{dir});
-  toast(r.ok?'Copied to your library':'Failed: '+(r.error||''),r.ok?'ok':'err');
+  toast(r.ok?`Personal — installed for ${(r.accounts||[]).length||1} account(s)`
+            :'Failed: '+(r.error||''),r.ok?'ok':'err');
   drawPage('skills');
 }
 function skGitInstall(){
   const url=($('#skGitUrl').value||'').trim();
   if(!url){toast('Enter a git URL','err');return;}
-  inlineJob('#jban','skill_git_install',{path:CUR?CUR.path:'',url},{label:'Installing skill',onDone:st=>{
-    toast((st.result&&st.result.message)||'Installed','ok');drawPage('skills');
-  }});
+  const scope=($('#skGitProj')&&$('#skGitProj').checked)?'project':'personal';
+  const P=projCtx();
+  inlineJob('#jban','skill_git_install',{path:P?P.path:'',url,scope,cfgdir:SKACCT||undefined},
+    {label:'Installing skill',
+     onDone:st=>toast((st.result&&st.result.message)||'Installed','ok'),
+     redraw:()=>drawPage('skills')});
 }
 async function skView(dir){
   const d=await api('/api/skills/read?dir='+encodeURIComponent(dir));
@@ -3617,30 +4172,56 @@ async function skView(dir){
     <div class="msg"><div class="body">${esc(d.body)}</div></div>`;
   $('#drawer').classList.add('show');
 }
-async function skInstall(dir){
-  const r=await post('/api/skills/install',{dir,path:CUR?CUR.path:''});
-  toast(r.ok?'Installed into project':'Install failed',r.ok?'ok':'err');drawPage('skills');
+async function skInstall(dir,scope){
+  const P=projCtx();
+  const r=await post('/api/skills/install',
+    {dir,scope,path:P?P.path:'',cfgdir:SKACCT||undefined});
+  toast(r.ok?(scope==='project'?'Installed into this project'
+              :`Personal — installed for ${(r.accounts||[]).length||1} account(s)`)
+            :'Install failed',r.ok?'ok':'err');
+  drawPage('skills');
 }
-async function skRemove(dir){
-  if(!await confirmBox('Remove this skill from the project?'))return;
-  const r=await post('/api/skills/remove',{dir});
-  toast(r.ok?'Removed':'Failed',r.ok?'ok':'err');drawPage('skills');
+async function skRemove(dir,scope){
+  const many=scope==='personal'&&(ST.accounts||[]).length>1;
+  if(!await confirmBox('Delete this skill folder?',
+    many?`It was installed for every account, so it is removed from all ${(ST.accounts||[]).length} of them.`
+        :'Claude Code stops loading it immediately.'))return;
+  const r=await post('/api/skills/remove',{dir,scope});
+  toast(r.ok?(r.accounts&&r.accounts.length>1?`Deleted from ${r.accounts.length} accounts`:'Deleted')
+            :'Failed',r.ok?'ok':'err');
+  drawPage('skills');
+}
+/* Where a new skill lands is a CHOICE, not a side effect of whether a project
+   happens to be open — that guess is what put skills where they only worked in
+   one place. */
+function skScopeField(){
+  return projCtx()?{label:'Where',type:'select',
+    options:[['personal','personal — every project'],
+             ['project','only '+(projCtx()||{}).name]]}:null;
 }
 async function skNew(){
+  const sc=skScopeField();
   const v=await ask('New skill',[{label:'Name (e.g. commit-message)'},
     {label:'Description — when should Claude use it?'},
+    ...(sc?[sc]:[]),
     {label:'Instructions (markdown)',type:'textarea'}]);
   if(v===null||!v[0].trim())return;
+  const scope=sc?v[2]:'personal';
+  const P=projCtx();
   const r=await post('/api/skills/create',{name:v[0],description:v[1],
-    body:v[2],path:CUR?CUR.path:''});
+    body:sc?v[3]:v[2],scope,path:P?P.path:'',cfgdir:SKACCT||undefined});
   toast(r.ok?'Skill created':'Failed',r.ok?'ok':'err');drawPage('skills');
 }
 async function skAI(){
+  const sc=skScopeField();
   const v=await ask('AI-generate skill',[{label:'Name'},
+    ...(sc?[sc]:[]),
     {label:'Describe what the skill should do',type:'textarea'}]);
   if(v===null||!v[0].trim())return;
-  inlineJob('#jban','skill_ai',{path:CUR?CUR.path:'',name:v[0],description:v[1]},
-    {label:'Generating skill',onDone:()=>drawPage('skills')});
+  const P=projCtx();
+  inlineJob('#jban','skill_ai',{path:P?P.path:'',name:v[0],
+      description:sc?v[2]:v[1],scope:sc?v[1]:'personal',cfgdir:SKACCT||undefined},
+    {label:'Generating skill',redraw:()=>drawPage('skills')});
 }
 
 /* which account's hooks are on screen. '' = the active one. An install still
@@ -3713,7 +4294,7 @@ async function hookAI(){
   const v=await ask('AI-generate hook',[{label:'What should the hook do?',type:'textarea'}]);
   if(v===null||!v[0].trim())return;
   inlineJob('#jban','hook_ai',{description:v[0]},
-    {label:'Generating hook',onDone:()=>drawPage('hooks')});
+    {label:'Generating hook',redraw:()=>drawPage('hooks')});
 }
 
 async function pgAccounts(nav){
@@ -3795,10 +4376,10 @@ async function drawSync(){
 async function syncApply(){
   if(!await confirmBox('Copy the missing items into every account?',
     'Hooks and plugins run code on every turn. Each plugin install is reviewed first.'))return;
-  inlineJob('#jban','sync_accounts',{},{label:'Syncing accounts',onDone:st=>{
-    const r=(st&&st.result)||{};
-    toast(r.clean?'Nothing to do':`Synced ${(r.done||[]).length} item(s)`,'ok');
-    drawPage('accounts');}});
+  inlineJob('#jban','sync_accounts',{},{label:'Syncing accounts',
+    onDone:st=>{const r=(st&&st.result)||{};
+      toast(r.clean?'Nothing to do':`Synced ${(r.done||[]).length} item(s)`,'ok');},
+    redraw:()=>drawPage('accounts')});
 }
 async function acctAdd(){
   const v=await ask('Add account',[{label:'Name (e.g. work, personal)'},
@@ -3939,6 +4520,19 @@ async function pgSettings(nav){
     <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Model used for claudectl's <b>own</b> internal Claude calls — memory extraction, lessons, CLAUDE.md / agent / hook / skill generation. Defaults to Haiku to cut cost. Your actual coding sessions are unaffected. <i>default</i> = your account's model.</p>
     ${fld('sExtract','Economy model')}
     <div class="mrow"><button class="btn pri" onclick="setExtractSave()">Save</button></div></div>
+  <div class="card"><h3>${ic('bolt')} Memory limits</h3>
+    <p style="color:var(--dim);font-size:13px;margin-bottom:8px">What one memory cycle may spend, and how much the graph may hold. These lived only in <code>claudectl.json</code> — while the memory hub and the health check both told you to raise <code>memory_max_calls</code>, a setting with no control on either surface.</p>
+    <div class="grid2">
+      <div class="fld"><label>Max Claude calls per cycle <span style="color:var(--dim2)">— 0 = unlimited</span></label>
+        <input id="sMemCalls" type="number" min="0" max="500" step="1"></div>
+      <div class="fld"><label>Max entities kept <span style="color:var(--dim2)">— least-connected are evicted first</span></label>
+        <input id="sMemEnts" type="number" min="50" max="20000" step="50"></div>
+    </div>
+    <div class="grid2">
+      <div class="fld"><label>Refresh when a project is opened</label><div class="chips" id="sMemOpen"></div></div>
+      <div class="fld"><label>Learn lessons from sessions</label><div class="chips" id="sMemLessons"></div></div>
+    </div>
+    <div class="mrow"><button class="btn pri" onclick="setMemLimitsSave()">Save</button></div></div>
   <div class="card"><h3>${ic('map')} Plan → Execute</h3>
     <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Model that writes the plan (runs once, headless) vs the model that executes it interactively. Keep the plan model accurate — the expensive reasoning happens once.</p>
     ${fld('sPlanMod','Plan model')}${fld('sExecMod','Execute model')}
@@ -4002,7 +4596,9 @@ async function pgSettings(nav){
   <div class="card"><h3>Interface</h3>
     <p style="color:var(--dim);font-size:13px">Default interface on startup — the toggle in the bottom-left does the same. <code>--tui</code>/<code>--gui</code> flags always override.</p>
     ${fld('sUpd','Updates')}
-    <p style="color:var(--dim);font-size:13px;margin:0">One switch for everything claudectl fetches on your behalf: whether a newer release exists, and the current Claude model list. <b>Install on quit</b> runs the upgrade in its own window after claudectl closes — pip cannot rewrite the script it is running from. <b>Off</b> stops both checks.</p></div>
+    <p style="color:var(--dim);font-size:13px;margin:0 0 10px">One switch for everything claudectl fetches on your behalf: whether a newer release exists, and the current Claude model list. <b>Install on quit</b> runs the upgrade in its own window after claudectl closes — pip cannot rewrite the script it is running from. <b>Off</b> stops both checks.</p>
+    ${fld('sNotif','Notifications')}
+    <p style="color:var(--dim);font-size:13px;margin:0">A desktop notification when a background job that ran longer than ${20}s finishes — memory builds, plans, reviews — and when the detached memory worker is done, which has no window of its own at all. Quick jobs never notify.</p></div>
   <div class="card"><h3>${ic('refresh')} Auto-memory <span class="sp"></span>
     <span class="fld" style="margin:0"><select id="amInt" onchange="amSaveInterval(this.value)" style="width:auto"></select></span></h3>
     <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Projects checked below have their memory refreshed in the background — on GUI start and on the interval — whenever their files change. Only changed projects use Claude; nothing runs while unchanged.</p>
@@ -4022,6 +4618,13 @@ async function pgSettings(nav){
   if($('#sClaudeExe'))$('#sClaudeExe').value=ST.claude_exe||'';
   if($('#sCfgDir'))$('#sCfgDir').value=ST.claude_config_dir||'';
   if($('#sBudget'))$('#sBudget').value=ST.headless_budget_usd||0;
+  if($('#sMemCalls'))$('#sMemCalls').value=ST.memory_max_calls||0;
+  if($('#sMemEnts'))$('#sMemEnts').value=ST.memory_max_entities||500;
+  chipsFill($('#sMemOpen'),['open','off'],['yes, on open','no'],
+    ST.memory_auto_refresh||'open');
+  chipsFill($('#sMemLessons'),['auto','prompt','off'],
+    ['learn automatically','learn, but let me review','off'],
+    ST.memory_lessons||'prompt');
   slRefresh();
   chipsFill($('#sExtract'),o.models,o.model_labels,ST.extract_model||'');
   chipsFill($('#sShell'),['auto','qt','edge','browser'],
@@ -4034,6 +4637,10 @@ async function pgSettings(nav){
     ['tell me','install on quit','off'],ST.auto_update||'notify',
     async v=>{await post('/api/settings',{auto_update:v});ST.auto_update=v;
               toast('Updates: '+v,'ok');});
+  chipsFill($('#sNotif'),['on','off'],['on','off'],
+    ST.notifications===false?'off':'on',
+    async v=>{const on=v==='on';await post('/api/settings',{notifications:on});
+              ST.notifications=on;toast('Notifications: '+v,'ok');});
   drawThemeGallery();
   chipsFill($('#sPlanMod'),o.models,o.model_labels,ST.plan_model||'');
   chipsFill($('#sExecMod'),o.models,o.model_labels,ST.exec_model||'');
@@ -4505,6 +5112,15 @@ async function setSave(){
     theme:chipVal($('#sTheme'))});
   ST=await api('/api/state');applyTheme(ST.theme);
   localStorage.setItem('ctl_theme',chipVal($('#sTheme')));toast('Settings saved','ok');
+}
+async function setMemLimitsSave(){
+  await post('/api/settings',{
+    // 0 in the box means "no cap", which the backend spells as null
+    memory_max_calls:(+$('#sMemCalls').value||0)||null,
+    memory_max_entities:+($('#sMemEnts').value||500),
+    memory_auto_refresh:chipVal($('#sMemOpen')),
+    memory_lessons:chipVal($('#sMemLessons'))});
+  ST=await api('/api/state');toast('Memory limits saved','ok');
 }
 async function setPathsSave(){
   const r=await post('/api/settings',{editor:$('#sEditor').value.trim(),
