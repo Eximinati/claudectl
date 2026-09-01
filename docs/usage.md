@@ -1,212 +1,92 @@
 ---
 description: >-
-  claudectl's screens, the complete key-binding reference for every terminal UI screen, and
-  the command line.
+  How claudectl reduces the per-turn context cost of Claude Code — a bounded always-on
+  index, path-scoped rules, task-scoped injection, the context weight audit, deny rules and
+  economy model routing.
 ---
 
-# Usage
+# Usage & cost
 
-## Main screen
+What you spend per turn, and how to spend less.
 
-On launch, claudectl shows all projects Claude Code has ever opened, sorted by most recently
-used.
+`CLAUDE.md` and memory files ride in the model's context on **every** message, so their size
+is a permanent per-turn tax. claudectl makes that cost visible and cuts it.
 
-![claudectl TUI — project picker](img/tui-main.png)
+Without claudectl, a big project either starves the agent (no context) or floods it (a huge
+CLAUDE.md loaded every message). claudectl spends the *minimum* tokens for the *maximum*
+relevant context:
 
-- Quick-resume items appear at the top (★ = most recent session, ☆ = older sessions). These are the 5 most recently used sessions across all projects; selecting one resumes that exact session without navigating into the project's list.
-- All other projects follow, sorted by recency — type to filter live
-- The MCP status footer shows connected MCP servers once the background check completes
-- Bottom menu: **🔍 Search all sessions**, **📦 Hide / restore projects**, **⚙ Usage stats**, **⚙ MCP servers**, **⚙ Agents**, **⚙ Hooks**, **⚙ Global CLAUDE.md**, **⚙ Settings**, **? Help**
+| | |
+|---|---|
+| **Flat always-on cost** | The CLAUDE.md block is a ≤250-token index, not a full dump; it does **not** grow as the codebase grows (consolidation + rollups keep it bounded). |
+| **On-demand detail** | Per-module knowledge lives in path-scoped `.claude/rules/` (loads only when Claude touches those files) and in `claudectl recall`, so nothing is paid for until it's relevant. |
+| **Task-scoped injection** | The optional prompt hook injects only the subgraph your prompt actually needs (budgeted, default ≤600 tok), instead of everything. |
+| **No stale weight** | Superseded facts are invalidated, not carried; dead entities are evicted; only current, useful knowledge is ever sent. |
+| **Cheaper model for the grunt work** | [Plan → Execute](plan-execute.md) runs the expensive model once for the plan and a cheap one for execution; the token-burn advisor nudges you off Opus for routine work. |
 
-## Built-in screens
+The mechanics behind the first four rows are on the [Project memory](memory.md) page.
 
-**🔍 Search all sessions** — indexes session names, AI titles, and previews across every
-project (cached — instant after the first scan). Type to filter, ENTER resumes the selected
-session directly, no matter which project it belongs to.
+## Measuring and cutting the cost
 
-**⚙ Usage stats** — per-project table of sessions, messages, tokens (in / out / cache) and
-estimated API-equivalent cost, parsed from local transcripts. ENTER drills into per-session
-rows. Costs are estimates at published API rates — useful as a value/consumption gauge if
-you're on a subscription plan. First scan shows progress and can be stopped with ESC
-(partial results); later opens are instant thanks to a persistent cache.
+### Context weight audit (`⇧W`)
 
-**📦 Hide / restore projects** — takes a project out of the project list and out of the GUI
-sidebar, for the folders you never want to launch from again. ENTER toggles the row under
-the cursor. It is a view flag, not an archive: nothing on disk moves, the project's
-sessions stay resumable, and restoring is one keypress. The main screen says how many rows
-are being filtered; in the GUI a project page has a **Hide** button and the sidebar grows a
-**Show N hidden projects** button while any are hidden.
+One screen estimating the tokens auto-loaded on every turn for this project: CLAUDE.md
+broken into its blocks (manual / autogen / session topics / memory digest), the global
+`~/.claude/CLAUDE.md`, `.claude/rules/*` (marked *lazy* when glob-scoped, so they cost
+nothing until a matching file is touched), `system-prompt.txt`, SessionStart hook
+injections, and MCP servers — with a running always-on total and inline warnings (CLAUDE.md
+over 200 lines, an unbounded session-topics block, a global CLAUDE.md that loads in every
+project).
 
-**⚙ Global CLAUDE.md / MCP Analysis** — lists all connected MCP servers; select one to run
-Claude with a prompt that calls the MCP's `tools/list` endpoint and formats the result as
-markdown, written into `~/.claude/CLAUDE.md` inside a per-server sentinel block (cleanly
-re-updatable). You can also open the global CLAUDE.md directly in your editor from this
-menu. See [Global CLAUDE.md](reference.md#global-claudemd).
+### Prune the unbounded bits (`p` in the audit)
 
-## Notifications
+The CLAUDE.md session-topics log used to grow forever; it's now capped to the most recent N
+entries (`claude_md_sessions_cap`, default 10) and the autogen commit list is configurable
+(`claude_md_commits`). Prune rebuilds them in place without touching your manual prose or
+the memory block.
 
-A desktop notification — Windows toast, macOS notification centre, `notify-send` on Linux —
-when a background job that ran longer than 20 seconds finishes, and when the detached
-memory worker is done. That worker is the reason this exists: it runs headless, outlives
-the screen that started it, and had no way to tell anyone it had finished. Quick jobs never
-notify. **⚙ Settings → Notifications** turns it off.
+### Compress CLAUDE.md with AI (`⇧C`)
 
-## Loops
+Rewrites the hand-written part into a lean lookup-table style (targets under 500 tokens),
+shows a before→after token count and a git-style diff to approve, keeps a `CLAUDE.md.bak`,
+and preserves the machine-maintained blocks verbatim.
 
-Two kinds, because Claude Code only offers one.
+### Launch economy controls
 
-### In a session
+The launch-options screen adds a **Think cap** (`MAX_THINKING_TOKENS`) and **Subagents**
+model (`CLAUDE_CODE_SUBAGENT_MODEL`) field, plus an **`e` economy preset** (Sonnet · 8k
+thinking cap · Haiku subagents) in one key. Set defaults in Settings or per project.
 
-`/loop` re-runs a prompt inside a session — polling a deploy, babysitting a PR, working
-through a maintenance pass. Its tasks are **session-scoped**: they fire only while that
-session is open and idle, expire after seven days, and a fresh conversation clears them.
-claudectl **starts** one by opening a session whose first typed message is
-`/loop [interval] [prompt]` (with the project's usual account, agents, skills and system
-prompt), **watches** it through that session's own transcript — each iteration is a turn —
-and **ends** it by closing the session, because from outside the session there is no other
-lever. Interval and prompt are both optional and each combination means something
-different: both is a fixed schedule, prompt alone lets Claude choose the delay each time,
-neither runs your `loop.md`.
+### Deny heavy reads (`d` in the audit)
 
-### In the background
+Scans the project and writes `permissions.deny` rules (`node_modules/**`, `dist/**`,
+lockfiles, …) into the project's `.claude/settings.json` so a stray read can't pull thousands
+of tokens of generated content into context. Merges without clobbering existing settings.
 
-For work that should carry on with claudectl closed and no session open, claudectl
-registers an entry in your **OS scheduler** — Task Scheduler on Windows, cron elsewhere —
-that runs headless `claude -p` on the interval, in the project, under the account you pick.
-This is claudectl doing locally what Claude Code's own comparison table calls a Desktop
-scheduled task.
+### Token-saver hooks
 
-Because it runs unattended, it carries its guardrails in the runner rather than the UI:
+`concise-output` (a SessionStart rule: no narration, no re-printed code) and
+`filter-test-output` (rewrites `pytest`/`npm test`/`go test` commands to pipe through a
+failures-only filter before the output hits context) join the [hooks manager](hooks.md)
+alongside the existing code-minimization hook.
 
-- **A permission mode you choose.** `claude -p` starts in Manual mode, so an unattended run
-  does nothing unless it is told what it may do — `auto` (a classifier reviews each action),
-  `acceptEdits` (writes files; shell and network still gated) or `dontAsk` (reports, never
-  changes). The board shows which one each loop is running under.
-- **A 7-day expiry**, the same bound Claude Code puts on its own scheduled tasks, enforced
-  by the scheduled run itself: past it, the task removes itself. **Renew** pushes it out.
-- **Your per-call budget cap** (`Settings → Budget cap`) on every run, and the cost of the
-  last run on every row.
-- **Nothing silent.** A failed run raises a desktop notification; the board keeps a log of
-  the last twenty runs with their cost and one-line outcome.
+### Compact instructions
 
-Each run is a **fresh session** — resuming one forever would grow its context and its cost
-without bound. What makes it a loop rather than a repeated one-shot is a rolling record:
-after every run claudectl rewrites a `CLAUDECTL:LOOP` block in the project's `CLAUDE.md`
-with the last five outcomes, so the next run starts knowing what the previous ones did. It
-is rewritten, never appended, so it cannot grow.
+Scaffolded/AI-generated CLAUDE.md includes a `# Compact instructions` section that steers
+Claude Code's auto-compaction toward what matters; the audit offers to add one (`i`) if it's
+missing.
 
-**Stop** removes the scheduler entry, which is exact: it cannot fire again.
+## Economy model routing
 
-### `loop.md`
+claudectl's own internal Claude calls (memory extraction, lessons, CLAUDE.md / agent / hook
+/ skill generation) default to **Haiku** to cut cost, while your actual coding sessions keep
+whatever model you choose. Change it in **⚙ Settings → Economy model** (`extract_model`).
 
-The prompt a bare `/loop` runs, and what a background loop runs when you leave the prompt
-empty: `<project>/.claude/loop.md` wins over `<account>/loop.md`. Both are edited on the
-same page, with **Build with AI** to draft one (you approve the text before it is written).
-Edits apply from the next iteration.
+For free execution rather than cheap, see
+[Plan → Execute & OmniRoute](plan-execute.md).
 
-## Key bindings
+## Related workflow features
 
-### Main screen (project list)
-
-| Key | Action |
-|-----|--------|
-| ↑ / ↓ | Navigate |
-| ENTER | Select project / resume / open menu item |
-| Type text | Filter projects live |
-| ESC | Clear filter, then exit |
-
-### Sessions screen (session list for a project)
-
-![claudectl TUI — sessions](img/tui-sessions.png)
-
-| Key | Action |
-|-----|--------|
-| ↑ / ↓ | Navigate |
-| ENTER | Select / confirm |
-| ESC | Back / cancel (clears filter first if active) |
-| r | Rename session |
-| d | Archive or delete session |
-| f | Fork session |
-| v | View transcript |
-| e | Export transcript to markdown |
-| i | Session info (tokens, cost, models, branch) |
-| F | Changed files (from session tool calls) |
-| t | Tag session |
-| u | Project usage stats |
-| m | Memory hub (build · ask · preview injection · lessons · toggles) |
-| L | Lessons review (approve / pin / evict session learnings) |
-| / | Action palette — every action, type-to-filter |
-| ! | One-key project setup (first open: CLAUDE.md + memory + rules) |
-| M | Memory map (CLAUDE.md hierarchy) |
-| A | Toggle archived sessions view |
-| c | Scaffold CLAUDE.md (git + sessions) |
-| a | AI-generate CLAUDE.md (Claude CLI) |
-| s | Edit / generate system prompt |
-| g | Pick project agents (library checklist → `.claude/agents/`) |
-| n | Architecture graph + project memory screen (then `o` open graph · `m` build memory · `a` ask · `r` rebuild) |
-| w | Workspace status (provenance & freshness) |
-| ⇧K | New chat seeded with context from another session, any account ([hand-off](context-handoff.md)) |
-| ⇧W | Context weight audit — token cost of everything auto-loaded per turn |
-| ⇧C | Compress CLAUDE.md with AI (cut per-turn tokens) |
-| ⇧X | Plan → Execute (plan on one model, execute on another) |
-| ⇧R | Code review of the working diff |
-| p | Manage extra PATH entries |
-| x | Manage --add-dir directories |
-| ? | Help / keyboard reference |
-| BACKSPACE | Delete last filter character |
-| Type text | Filter sessions live by name or preview |
-
-### Transcript viewer (`v`)
-
-| Key | Action |
-|-----|--------|
-| ↑ / ↓ | Scroll line by line |
-| ← / → / SPACE | Page up / down |
-| / | Search inside the conversation |
-| n / p | Jump to next / previous match (wraps) |
-| i | Toggle session info header (tokens, cost, models, branch) |
-| e | Export to markdown |
-| ESC | Clear search, then exit |
-
-The footer shows your position as `msg N/M` — counting conversation messages, not raw lines.
-
-### Launch options screen
-
-| Key | Action |
-|-----|--------|
-| ↑ / ↓ | Switch fields (Effort / Model / Permissions / Lead agent / Account / Think cap / Subagents / Worktree / Name) |
-| ← / → | Cycle values; edit Name/Worktree |
-| e | Economy preset (Sonnet · 8k thinking cap · Haiku subagents) |
-| ENTER | Launch with selected options |
-| ESC | Back to main menu (no launch) |
-
-Worktree & Name appear only for new sessions; Lead agent appears when `~/.claude/agents/`
-has agents; Account appears when you've added extra accounts. **Think cap** sets
-`MAX_THINKING_TOKENS` and **Subagents** sets `CLAUDE_CODE_SUBAGENT_MODEL` for the launched
-session. Project agents picked with `g` are shown read-only here.
-
-### Multi-select / confirm
-
-- Checkbox pickers (MCP tools, agent tools): `SPACE` toggle, `a` all, `n` none, `v` view (agent `.md`, where available), `ENTER` confirm, `ESC` cancel.
-- Confirm dialogs: `←→` choose, `ENTER` confirm, `ESC`/`y`/`n`.
-
-## Command line
-
-| Command | What it does |
-|---------|--------------|
-| `claudectl` | Open the TUI (or the GUI, if `ui_mode` is set to `gui`) |
-| `claudectl --help` | Every command, what the tool does, and where its state lives |
-| `claudectl --version` | The installed claudectl version |
-| `claudectl --gui` / `--tui` | Force one interface for this run, ignoring the setting |
-| `claudectl workspace status` | Freshness report for the repo in the current directory |
-| `claudectl recall "<topic>"` | Print the task-relevant subgraph of this project's memory |
-| `claudectl review [--staged\|--branch]` | Review the working diff, staged diff, or the whole branch |
-| `claudectl sync-accounts [--yes\|--dry-run]` | Level every account up to what you have provisioned |
-| `claudectl statusline` | Render one status line from the JSON payload on stdin |
-| `claudectl --failover-serve [port]` | Run the model-failover proxy in the foreground |
-| `claudectl --failover-stop` | Terminate the failover daemon named in the lock file |
-
-`python -m claude_sessions <same args>` works identically and is what the installed status
-line and the background memory worker use.
-
-The [desktop GUI](gui.md) has the same operations as every screen above.
+- **Skills** — `.claude/skills/<name>/SKILL.md` files load on demand instead of bloating `CLAUDE.md`. See [Agents & skills](agents.md#skills).
+- **Code review** — `claudectl review [--staged] [--branch <base>]` reviews your working diff against your `CLAUDE.md` rules + learned memory lessons and reports **confidence-scored** findings (only ≥80% shown). Also on the project **Review** tab (GUI) and the `⇧R` key in the session menu.
+- **Recent-work memory** — a token-free one-line summary per session, injected as a compact digest on the next `SessionStart`. See [Project memory](memory.md#recent-work-memory).

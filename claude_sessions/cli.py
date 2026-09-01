@@ -66,7 +66,7 @@ FILES
                                 overrides it, and claudectl follows it.
   <project>/.claudectl/memory   that project's memory graph
 
-DOCS   https://claudectl.space/
+DOCS   https://docs.claudectl.space/
 """
 
 

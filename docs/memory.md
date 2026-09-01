@@ -24,7 +24,7 @@ the GUI.
 
 ## How it works
 
-- **Whole-project extraction** — `claude.exe` summarizes every repo and module (incrementally by file hash), merged with the **real dependency graph** (cross-module edges + importance rank) from the [connections engine](graph.md). Stored in `.claudectl/memory/graph.json`.
+- **Whole-project extraction** — `claude.exe` summarizes every repo and module (incrementally by file hash), merged with the **real dependency graph** (cross-module edges + importance rank) from the [connections engine](architecture.md). Stored in `.claudectl/memory/graph.json`.
 - **Bounded & self-consolidating** — the graph stays lean *as the project grows*: duplicate entities merge across modules, and a global importance cap (`memory_max_entities`, default 500) evicts the least-connected. So the always-on token cost stays flat while accuracy rises — the memory gets *leaner and sharper* the more you build, not heavier.
 - **Nothing shrinks without a way back.** Every operation that can *reduce* memory is fenced, pinnable, previewed and reversible:
     - **Pin** any entity or lesson and the importance cap can never evict it — if you pin more than the cap allows, the pins win and the cap gives way.
@@ -76,5 +76,5 @@ files touched at the end of each session and injects a compact digest on the nex
 ## Keeping it honest
 
 Everything memory generates is tracked for provenance and freshness — see
-[Workspace status](reference.md#workspace-status). Where the token budget goes, and how to
-cut it further, is on the [Token economy](token-economy.md) page.
+[Workspace status](projects.md#workspace-status). Where the token budget goes, and how to
+cut it further, is on the [Token economy](usage.md) page.

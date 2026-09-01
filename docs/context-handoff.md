@@ -8,7 +8,7 @@ description: >-
 # Context hand-off between sessions
 
 `⇧K` in the sessions menu ("Inject context from another chat"), or the **Tools** tab of a
-project in the [desktop GUI](gui.md).
+project in the [desktop GUI](desktop.md).
 
 Start a **new** session that already knows what the previous one was doing — and launch it
 under **any account you like**, not necessarily the one that produced the transcript.

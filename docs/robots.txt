@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://claudectl.space/sitemap.xml
+Sitemap: https://docs.claudectl.space/sitemap.xml

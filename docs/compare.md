@@ -77,5 +77,5 @@ Stated plainly, because a comparison page that only lists strengths is not usefu
 - **Several repos, months of history, more than one account, or a `CLAUDE.md` you have
   stopped wanting to pay for** → claudectl.
 
-[Install](install.md){ .md-button .md-button--primary }
-[Features](features.md){ .md-button }
+[Install](installation.md){ .md-button .md-button--primary }
+[Features](https://claudectl.space/features/){ .md-button }

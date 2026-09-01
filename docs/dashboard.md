@@ -22,7 +22,7 @@ itself — do not edit by hand. Refreshed weekly by `.github/workflows/metrics.y
 | License | MIT |
 | Runtime dependencies | **0** |
 
-[Download](download.md) · [Changelog](changelog.md)
+[Download](https://claudectl.space/download/) · [Changelog](https://claudectl.space/changelog/)
 
 ## Downloads
 

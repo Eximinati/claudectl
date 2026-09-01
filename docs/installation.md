@@ -1,10 +1,10 @@
 ---
 description: >-
   Install claudectl with pipx or pip, run it from a checkout, add it to a Claude Code
-  session as a plugin, and set up the desktop GUI window and shortcuts.
+  session as a plugin, and set up the desktop app window and shortcuts.
 ---
 
-# Install
+# Installation
 
 ## Requirements
 
@@ -48,28 +48,20 @@ pip install -e .        # or: pipx install .
 
 ### Inside a Claude Code session
 
-claudectl also ships as a Claude Code plugin, which puts its three most useful commands and
-its eight skills inside the session itself:
+claudectl also ships as a Claude Code plugin, which puts its three slash commands and its
+eight skills inside the session itself:
 
 ```
 /plugin marketplace add babarmuhammad/claudectl
 /plugin install claudectl@claudectl
 ```
 
-| | |
-|---|---|
-| `/claudectl:recall <topic>` | This project's task-relevant memory, scored locally — no model call |
-| `/claudectl:status` | Memory age, repositories and worktrees, health checks |
-| `/claudectl:review` | Review the current diff against this project's own learned conventions |
-
-The commands shell out to the `claudectl` CLI, so install that too; the skills work on their
-own. The plugin deliberately ships **no hooks** — claudectl's own [hook manager](hooks.md)
-owns those, and two owners for one `settings.json` entry means the recall hook runs twice
-per prompt.
+It is independent of the CLI install, and it deliberately ships no hooks. See
+[Claude Code plugin](plugin.md).
 
 ### GUI setup
 
-The [desktop GUI](gui.md) needs no extra dependencies for the Edge/browser shells. For the
+The [desktop app](desktop.md) needs no extra dependencies for the Edge/browser shells. For the
 native window install PyQt6 (optional):
 
 ```
@@ -154,6 +146,7 @@ $lnk.Save()
 
 ## Next steps
 
-- [Usage](usage.md) — the screens, every key binding, and the command line
+- [Quickstart](quickstart.md) — install to first session in five minutes
+- [Terminal UI](tui.md) — every screen and every key binding
+- [Command line](cli.md) — every command, for scripts and hooks
 - [Installing the agent library](agent-library.md) — bulk-install 154 community subagents
-- [Features](features.md) — everything claudectl does

@@ -1,6 +1,6 @@
 # claudectl
 
-> The workspace layer for Claude Code. A terminal UI and desktop GUI that give Claude Code
+> The workspace layer for Claude Code. A terminal UI and desktop app that give Claude Code
 > persistent per-project memory, a browsable and searchable session archive, MCP server
 > awareness, an interactive architecture graph and per-project launch control. Pure Python
 > standard library, zero runtime dependencies, MIT licensed. Runs on Windows, macOS and
@@ -10,49 +10,59 @@ claudectl does not replace Claude Code — it configures and launches it, and ma
 project context between sessions. It uses your existing Claude Code authentication.
 Install with `pipx install claudectl`, or clone the repository and run it.
 
-## Getting started
+This is the documentation site. The product site is at https://claudectl.space/.
 
-- [Install](https://claudectl.space/install/): requirements, pipx/pip, running from a checkout, the Claude Code plugin, GUI setup and Windows shortcuts.
-- [Download](https://claudectl.space/download/): every way to get it — PyPI, the GitHub release page, the Claude Code plugin marketplace, a source checkout — what each release contains and the versioning policy.
-- [Usage](https://claudectl.space/usage/): screens, full key bindings and the command line.
+## Install & first run
 
-## Features
+- [Getting started](https://docs.claudectl.space/getting-started/): what claudectl is, the three surfaces it offers (terminal UI, desktop app, Claude Code plugin), and where to go next.
+- [Installation](https://docs.claudectl.space/installation/): requirements, pipx/pip, running from a checkout, the desktop window and Windows shortcuts.
+- [Quickstart](https://docs.claudectl.space/quickstart/): install, launch, pick a project, seed its context, start a first session — the five-minute path.
 
-- [Features overview](https://claudectl.space/features/): one page per feature area.
-- [Sessions and search](https://claudectl.space/sessions/): browse, search, tag, fork, resume, archive and export sessions; usage analytics; per-project launch control.
-- [Project memory](https://claudectl.space/memory/): the semantic memory graph, its three token-budgeted injection surfaces, session lessons and recall.
-- [Architecture graph](https://claudectl.space/graph/): the interactive, expandable dependency graph rendered as self-contained HTML.
-- [Plan to Execute and OmniRoute](https://claudectl.space/plan-execute/): plan on an accurate model, execute on a cheap or free one; OmniRoute setup and troubleshooting.
-- [Multiple accounts](https://claudectl.space/accounts/): running two or more Claude accounts, per-launch account selection, cross-account context injection.
-- [Context hand-off](https://claudectl.space/context-handoff/): starting a new session seeded with a previous session's transcript, optionally under a different account — for when the context window fills up or an account hits its rate limit.
-- [MCP servers](https://claudectl.space/mcp/): add, remove and inspect MCP servers; connection state; tool documentation.
-- [Agents and skills](https://claudectl.space/agents/): the agent library, per-project subagent selection, adaptive suggestions, the skills manager.
-- [Hooks](https://claudectl.space/hooks/): 19 Claude Code hook templates plus AI-generated hooks.
-- [Status line, failover and checkpoints](https://claudectl.space/statusline/): the per-turn status line, the model failover proxy, the read-only checkpoint view.
-- [Desktop GUI](https://claudectl.space/gui/): the local web GUI, its shells, and the 29 palettes / 7 skins / 4 worlds theme system.
+## The interfaces
 
-## Guides
+- [Command line](https://docs.claudectl.space/cli/): every command — `workspace status`, `recall`, `review`, `sync-accounts`, `statusline`, the failover proxy — and where claudectl's state lives.
+- [Terminal UI](https://docs.claudectl.space/tui/): every screen, notifications, the two kinds of loop, and the complete key-binding reference.
+- [Desktop app](https://docs.claudectl.space/desktop/): the local web GUI, its shells, and the 29 palettes / 7 skins / 4 worlds theme system.
+- [Claude Code plugin](https://docs.claudectl.space/plugin/): the three slash commands and eight skills the plugin adds inside a session, and why it ships no hooks.
 
-- [Token economy](https://claudectl.space/token-economy/): how it reduces per-message context cost — bounded index, path-scoped rules, task-scoped injection, context weight audit, deny rules, economy model routing.
-- [Project health and auto-fixes](https://claudectl.space/health/): pre-launch health card, context-loss insurance, permission-fatigue killer.
-- [Installing the agent library](https://claudectl.space/agent-library/): bulk-installing the awesome-claude-code-subagents catalog.
+## Working with projects
+
+- [Configuration](https://docs.claudectl.space/configuration/): every file claudectl reads and writes — its own settings, per-project files, the global CLAUDE.md, the repository layout.
+- [Projects](https://docs.claudectl.space/projects/): pre-launch health card, context-loss insurance, permission-fatigue killer, and the workspace provenance/freshness manifest.
+- [Sessions](https://docs.claudectl.space/sessions/): browse, search, tag, fork, resume, archive and export sessions; usage analytics; per-project launch control.
+- [Project memory](https://docs.claudectl.space/memory/): the semantic memory graph, its three token-budgeted injection surfaces, session lessons and recall.
+- [Architecture graph](https://docs.claudectl.space/architecture/): the interactive, expandable dependency graph rendered as self-contained HTML.
+- [Usage & cost](https://docs.claudectl.space/usage/): what a turn costs across every surface and how to cut it — bounded index, path-scoped rules, task-scoped injection, context weight audit, deny rules, economy model routing.
+- [Troubleshooting](https://docs.claudectl.space/troubleshooting/): common problems and fixes.
 
 ## Reference
 
-- [Files, layout and encoding](https://claudectl.space/reference/): per-project files, workspace status, CLAUDE.md auto-generation, session encoding, file layout.
-- [API reference](https://claudectl.space/api/): the local HTTP API the desktop GUI is built on, generated from the route tables.
-
-## About
-
-- [FAQ](https://claudectl.space/faq/): platform support, dependencies, multiple accounts, how it differs from /resume.
-- [Compare](https://claudectl.space/compare/): honest comparison against bare Claude Code, hand-written CLAUDE.md and terminal multiplexers, including what claudectl does not do.
-- [Troubleshooting](https://claudectl.space/troubleshooting/): common problems and fixes.
-- [Project dashboard](https://claudectl.space/dashboard/): release version, PyPI download counts, stars, test count, source size and commit activity.
-- [Changelog](https://claudectl.space/changelog/): release history.
+- [API reference](https://docs.claudectl.space/api/): the local HTTP API the desktop app is built on, generated from the route tables.
+- [Download](https://claudectl.space/download/): every way to get it — PyPI, the GitHub release page, the Claude Code plugin marketplace, a source checkout — what each release contains and the versioning policy.
+- [Project dashboard](https://docs.claudectl.space/dashboard/): release version, PyPI download counts, stars, test count, source size and commit activity.
+- [Multiple accounts](https://docs.claudectl.space/accounts/): running two or more Claude accounts, per-launch account selection, cross-account context injection.
+- [Context hand-off](https://docs.claudectl.space/context-handoff/): starting a new session seeded with a previous session's transcript, optionally under a different account — for when the context window fills up or an account hits its rate limit.
+- [MCP servers](https://docs.claudectl.space/mcp/): add, remove and inspect MCP servers; connection state; tool documentation.
+- [Agents and skills](https://docs.claudectl.space/agents/): the agent library, per-project subagent selection, adaptive suggestions, the skills manager.
+- [Agent library install](https://docs.claudectl.space/agent-library/): bulk-installing the awesome-claude-code-subagents catalog.
+- [Hooks](https://docs.claudectl.space/hooks/): 19 Claude Code hook templates plus AI-generated hooks.
+- [Plan to Execute and OmniRoute](https://docs.claudectl.space/plan-execute/): plan on an accurate model, execute on a cheap or free one; OmniRoute setup and troubleshooting.
+- [Status line, failover and checkpoints](https://docs.claudectl.space/statusline/): the per-turn status line, the model failover proxy, the read-only checkpoint view.
+- [Files, layout and encoding](https://docs.claudectl.space/reference/): CLAUDE.md auto-generation and how Claude Code encodes project paths into folder names.
 - [Code of conduct](https://claudectl.space/code-of-conduct/): the Contributor Covenant this project follows.
-- [Credits](https://claudectl.space/credits/): the projects and ideas claudectl builds on.
+
+## Moving to the product site
+
+These pages are still served here and will move to https://claudectl.space/ once that site
+carries them.
+
+- [Features overview](https://claudectl.space/features/): one page per feature area.
+- [FAQ](https://claudectl.space/faq/): platform support, dependencies, multiple accounts, how it differs from /resume.
+- [Compare](https://docs.claudectl.space/compare/): honest comparison against bare Claude Code, hand-written CLAUDE.md and terminal multiplexers, including what claudectl does not do.
+- [Changelog](https://claudectl.space/changelog/): release history.
+- [Credits](https://docs.claudectl.space/credits/): the projects and ideas claudectl builds on.
 
 ## Optional
 
-- [Full documentation as one file](https://claudectl.space/llms-full.txt): every page above concatenated, for reading without crawling.
+- [Full documentation as one file](https://docs.claudectl.space/llms-full.txt): every page above concatenated, for reading without crawling.
 - [Source](https://github.com/babarmuhammad/claudectl): the repository.

@@ -4,7 +4,7 @@ description: >-
   zero Python dependencies, plus 29 palettes, 7 skins and 4 themed worlds.
 ---
 
-# Desktop GUI
+# Desktop app
 
 `claudectl --gui`.
 
@@ -32,7 +32,7 @@ three.js and anime.js (both MIT, served from `/vendor/`, never a CDN).
   built-in), each row showing the command you type and how often Claude Code has used it,
   with a filter over the lot. See [Agents & skills](agents.md#skills).
 - **Loops** — start a `/loop` in its own session, watch it fire, end it, and edit the
-  `loop.md` behind a bare `/loop`. See [Loops](usage.md#loops).
+  `loop.md` behind a bare `/loop`. See [Loops](tui.md#loops).
 - **Global CLAUDE.md** — its own page: the instructions read in every session on an
   account, its `loop.md` sibling and the cross-project conventions worth promoting into it.
 - **Output styles** — by scope, with the active one and the file that pins it named, plus
@@ -61,7 +61,7 @@ default skin. Live preview before saving.
 A **world** commits to a whole look instead: it owns its palette, skin, background scene,
 icon set, overlay and cursor together, and disables the palette/skin pickers while worn.
 Four ship — `anime`, `cyber`, `deck` and `graph`, the last an homage to claudectl's own
-[architecture graph](graph.md).
+[architecture graph](architecture.md).
 
 The background is a single full-viewport scene driven by real state (running jobs,
 navigation, today's burn), capped and calmed by design, and it stops five ways — hidden tab,
@@ -71,7 +71,7 @@ blurred window, `motion:off`, `stage:off`, or `prefers-reduced-motion`. Set `sta
 ## Setup
 
 The Edge and browser shells need nothing extra. For the native window, see
-[GUI setup](install.md#gui-setup).
+[GUI setup](installation.md#gui-setup).
 
 The GUI is a local HTTP server on loopback with a per-run secret; the routes it exposes are
 documented in the [API reference](api.md).

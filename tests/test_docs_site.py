@@ -10,7 +10,11 @@ import subprocess
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOCS = os.path.join(ROOT, 'docs')
-SITE_URL = 'https://claudectl.space/'
+# The manual moved to its own subdomain; the apex is the marketing site and is a
+# different deployment. test_every_docs_page_the_readme_links_to_exists derives the
+# slugs it checks from this, so it now covers the README's docs links only — links
+# to pages that belong to the apex are deliberately out of its scope.
+SITE_URL = 'https://docs.claudectl.space/'
 
 # Moved to notes/ so they are outside docs_dir. Inside it they would be built and
 # listed in sitemap.xml even without a nav entry.
@@ -123,7 +127,7 @@ def test_site_url_is_set_because_canonicals_and_the_sitemap_derive_from_it():
 def test_the_site_sources_are_tracked_by_git():
     """A page that exists locally but was never committed builds fine here and
     404s in production. Same failure the plugin bundle already guards against."""
-    want = [os.path.join('docs', 'index.md'), os.path.join('docs', 'faq.md'),
+    want = [os.path.join('docs', 'index.md'), os.path.join('docs', 'usage.md'),
             os.path.join('docs', 'compare.md'), os.path.join('mkdocs.yml'),
             os.path.join('overrides', 'main.html'),
             os.path.join('docs', 'stylesheets', 'extra.css'),
@@ -135,6 +139,41 @@ def test_the_site_sources_are_tracked_by_git():
     assert r.returncode != 0, 'gitignored site files: %s' % r.stdout
     for rel in want:
         assert os.path.isfile(os.path.join(ROOT, rel)), rel
+
+
+def test_no_redirect_shadows_a_page_that_still_exists():
+    """Vercel evaluates `redirects` BEFORE serving a static file, so a redirect on a
+    live path makes that page unreachable — the built HTML is never consulted.
+
+    The trap is specific and was hit while writing these rules: `/usage/` used to be
+    the TUI manual, which is now `/tui/`, so the obvious rule is
+    `/usage/ -> /tui/`. But the token-economy guide MOVED ONTO `/usage/`, so that
+    rule would hide it and would also swallow `/token-economy/ -> /usage/` one hop
+    later. A renamed path may only be redirected if nothing was renamed back onto it."""
+    import json
+    v = json.loads(_read(os.path.join(ROOT, 'vercel.json')))
+    pages = {'/%s/' % p[:-3] for p in _doc_pages()}
+    pages.add('/')  # index.md
+    bad = [r['source'] for r in v.get('redirects', [])
+           if (r['source'].rstrip('/') + '/') in pages]
+    assert not bad, 'these redirects shadow a page that exists: %s' % bad
+
+
+def test_every_renamed_page_still_answers_on_its_old_url():
+    """A rename is invisible to `mkdocs build --strict` — the old URL simply stops
+    existing, in production, with nothing failing anywhere."""
+    import json
+    v = json.loads(_read(os.path.join(ROOT, 'vercel.json')))
+    srcs = {r['source'] for r in v.get('redirects', [])}
+    for old in ('/install', '/gui', '/graph', '/health', '/token-economy'):
+        assert old in srcs and old + '/' in srcs, \
+            '%s was renamed but has no redirect (needs both slash forms)' % old
+    # An absolute destination leaves this deployment — those are the pages that
+    # moved to the apex marketing site, and this host cannot check them.
+    dests = {r['destination'] for r in v.get('redirects', [])
+             if not r['destination'].startswith('http')}
+    missing = [d for d in dests if d.strip('/') + '.md' not in _doc_pages()]
+    assert not missing, 'redirects point at pages that do not exist: %s' % missing
 
 
 def test_the_docs_toolchain_stays_out_of_the_shipped_package():

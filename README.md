@@ -10,13 +10,13 @@
   <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-0078D6">
   <img alt="Dependencies" src="https://img.shields.io/badge/runtime%20deps-zero%20(stdlib)-brightgreen">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-1367-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-1706-brightgreen">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
   <img alt="Claude Code" src="https://img.shields.io/badge/for-Claude%20Code-8A5CF6">
 </p>
 
 <p align="center">
-  <b>📖 Full documentation → <a href="https://claudectl.space/">claudectl.space</a></b><br>
+  <b>📖 Full documentation → <a href="https://docs.claudectl.space/">docs.claudectl.space</a></b><br>
   <sub>Everything below is the short version. Every feature, key binding and file is
   documented in detail on the docs site.</sub>
 </p>
@@ -71,7 +71,7 @@ It also ships as a Claude Code plugin, if you'd rather stay inside the session:
 /plugin install claudectl@claudectl
 ```
 
-→ [Full install guide](https://claudectl.space/install/)
+→ [Full install guide](https://docs.claudectl.space/installation/)
 
 ## What it looks like
 
@@ -110,7 +110,7 @@ The terminal UI is the same tool, keyboard-first:
 
 <sub>Also: 29 palettes, 7 skins and 4 themed worlds — a skin changes the shape of the app,
 not just its colours.
-<a href="https://claudectl.space/gui/">See them →</a></sub>
+<a href="https://docs.claudectl.space/desktop/">See them →</a></sub>
 
 ---
 
@@ -134,28 +134,34 @@ Without claudectl, a big project either starves the agent (no context) or floods
 - **No stale weight** — superseded facts are invalidated, dead entities evicted.
 - **Cheaper model for the grunt work** — Plan→Execute runs the expensive model once for the plan and a cheap (or free) one for execution.
 
-→ [How the token economy works](https://claudectl.space/token-economy/)
+→ [How the token economy works](https://docs.claudectl.space/usage/)
 
 ---
 
 ## Documentation
 
-The full manual lives at **[claudectl.space](https://claudectl.space/)**.
+The full manual lives at **[docs.claudectl.space](https://docs.claudectl.space/)**.
 
 | | |
 |---|---|
-| [Install](https://claudectl.space/install/) | pipx, pip, checkout, plugin, GUI window, Windows shortcuts |
-| [Download](https://claudectl.space/download/) | every way to get it, what a release contains, versioning |
-| [Usage](https://claudectl.space/usage/) | every screen, every key binding, the command line |
-| [Features](https://claudectl.space/features/) | one page per area — start here to see the whole surface |
-| [Project memory](https://claudectl.space/memory/) | the three injection surfaces, lessons, recall |
-| [Architecture graph](https://claudectl.space/graph/) | the interactive dependency view |
-| [Plan → Execute](https://claudectl.space/plan-execute/) | two-model runs and free execution via OmniRoute |
-| [Token economy](https://claudectl.space/token-economy/) | measuring and cutting the per-turn cost |
-| [Reference](https://claudectl.space/reference/) | per-project files, workspace status, session encoding, layout |
-| [API reference](https://claudectl.space/api/) | the local HTTP API the GUI is built on |
-| [FAQ](https://claudectl.space/faq/) · [Compare](https://claudectl.space/compare/) · [Troubleshooting](https://claudectl.space/troubleshooting/) | honest answers, including what claudectl does *not* do |
-| [Project dashboard](https://claudectl.space/dashboard/) | downloads, stars, test count, commit activity |
+| [Getting started](https://docs.claudectl.space/getting-started/) | what it is, the three surfaces, where to go next |
+| [Installation](https://docs.claudectl.space/installation/) | pipx, pip, checkout, plugin, GUI window, Windows shortcuts |
+| [Quickstart](https://docs.claudectl.space/quickstart/) | install to first session in five minutes |
+| [Command line](https://docs.claudectl.space/cli/) | every command, for scripts and hooks |
+| [Terminal UI](https://docs.claudectl.space/tui/) | every screen and every key binding |
+| [Desktop app](https://docs.claudectl.space/desktop/) | the same workspace as a local app, plus the theme system |
+| [Configuration](https://docs.claudectl.space/configuration/) | every file claudectl reads and writes, and where |
+| [Project memory](https://docs.claudectl.space/memory/) | the three injection surfaces, lessons, recall |
+| [Architecture graph](https://docs.claudectl.space/architecture/) | the interactive dependency view |
+| [Usage & cost](https://docs.claudectl.space/usage/) | measuring and cutting the per-turn cost |
+| [API reference](https://docs.claudectl.space/api/) | the local HTTP API the GUI is built on |
+| [Troubleshooting](https://docs.claudectl.space/troubleshooting/) | when something does not work |
+
+Product pages — [Features](https://claudectl.space/features/) ·
+[Compare](https://docs.claudectl.space/compare/) · [FAQ](https://claudectl.space/faq/) ·
+[Download](https://claudectl.space/download/) ·
+[Changelog](https://claudectl.space/changelog/) — are on
+[claudectl.space](https://claudectl.space/).
 
 ## Credits
 
@@ -163,7 +169,7 @@ claudectl is built on ideas from the wider Claude Code ecosystem — cognee and 
 repo-map behind the memory graph, Anthropic's `code-review` plugin behind `claudectl review`,
 claude-mem behind recent-work memory, OmniRoute behind free execution, and VoltAgent's
 subagent catalog behind the agent library. Every one is credited, with links, on the
-[Credits page](https://claudectl.space/credits/).
+[Credits page](https://docs.claudectl.space/credits/).
 
 ## License
 

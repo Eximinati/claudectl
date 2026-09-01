@@ -3,11 +3,12 @@ site_description: >-
   The workspace layer for Claude Code — persistent project memory, an interactive
   architecture graph, MCP server management, and per-project launch control, in a fast
   terminal UI or a native desktop GUI. Zero runtime dependencies.
-# Canonical host. The site is built by Vercel and mirrored on GitHub Pages; both
-# copies emit this URL, so search and answer engines index one of them rather
-# than splitting the same content across two domains. Asset and page links stay
-# relative, which is why one site_url serves both.
-site_url: https://claudectl.space/
+# Canonical host. The manual lives on its own subdomain; the apex is the marketing
+# site and is a different deployment entirely. The site is built by Vercel and
+# mirrored on GitHub Pages; both copies emit this URL, so search and answer engines
+# index one of them rather than splitting the same content across two domains.
+# Asset and page links stay relative, which is why one site_url serves both.
+site_url: https://docs.claudectl.space/
 site_author: Babar Muhammad Anas
 repo_url: https://github.com/babarmuhammad/claudectl
 repo_name: babarmuhammad/claudectl
@@ -67,43 +68,49 @@ markdown_extensions:
   - toc:
       permalink: true
 
-# Grouped into sections (navigation.sections is on above) rather than a flat list:
-# the README used to be the manual and the site a set of include-stubs, so twelve
-# flat entries were enough. Now the detail lives here, and a reader has to be able
-# to find one feature without scrolling one giant page.
+# Two sections (navigation.sections is on above). The first is the manual, read
+# top to bottom: what it is, how to install it, then one page per surface, then
+# what things cost and what to do when they break. The second is everything you
+# look something up in rather than read.
+#
+# The product pitch is NOT here — it belongs to the marketing site on the apex.
+# features/faq/compare/credits/changelog are the last of it and are parked at the
+# end of Reference until those pages exist there; moving them first would 404
+# links that are already live.
 nav:
-  - Getting started:
+  - Manual:
       - Home: index.md
-      - Install: install.md
-      - Download: download.md
-      - Usage: usage.md
-  - Features:
-      - Overview: features.md
-      - Sessions & search: sessions.md
+      - Getting started: getting-started.md
+      - Installation: installation.md
+      - Quickstart: quickstart.md
+      - Command line: cli.md
+      - Terminal UI: tui.md
+      - Desktop app: desktop.md
+      - Claude Code plugin: plugin.md
+      - Configuration: configuration.md
+      - Projects: projects.md
+      - Sessions: sessions.md
       - Project memory: memory.md
-      - Architecture graph: graph.md
-      - Plan → Execute & OmniRoute: plan-execute.md
+      - Architecture graph: architecture.md
+      - Usage & cost: usage.md
+      - Troubleshooting: troubleshooting.md
+  - Reference:
+      - API reference: api.md
+      - Project dashboard: dashboard.md
       - Multiple accounts: accounts.md
       - Context hand-off: context-handoff.md
       - MCP servers: mcp.md
       - Agents & skills: agents.md
+      - Agent library install: agent-library.md
       - Hooks: hooks.md
+      - Plan → Execute & OmniRoute: plan-execute.md
       - Status line, failover & checkpoints: statusline.md
-      - Desktop GUI: gui.md
-  - Guides:
-      - Token economy: token-economy.md
-      - Project health & auto-fixes: health.md
-      - Installing the agent library: agent-library.md
-  - Reference:
       - Files, layout & encoding: reference.md
-      - API reference: api.md
-  - About:
-      - FAQ: faq.md
+      # Features, FAQ, Download, Changelog and the code of conduct live on the
+      # apex marketing site now — one page per URL, on one host. vercel.json
+      # redirects their old docs URLs there. What stays here is what the apex
+      # has no equivalent for.
       - Compare: compare.md
-      - Troubleshooting: troubleshooting.md
-      - Project dashboard: dashboard.md
-      - Changelog: changelog.md
-      - Code of conduct: code-of-conduct.md
       - Credits: credits.md
 
 extra:

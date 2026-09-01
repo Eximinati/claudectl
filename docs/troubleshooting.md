@@ -19,4 +19,4 @@ description: >-
 | OmniRoute free execution not working | See the [Plan → Execute troubleshooting](plan-execute.md#troubleshooting) section |
 
 Still stuck? [Open an issue](https://github.com/babarmuhammad/claudectl/issues) — and check
-the [FAQ](faq.md) first.
+the [FAQ](https://claudectl.space/faq/) first.

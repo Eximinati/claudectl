@@ -19,7 +19,7 @@ description: >-
 ## Adaptive agent selection (`g`)
 
 The agents screen opens with a **"Suggested for this project"** section — library agents
-ranked against the project's languages (from the [dependency graph](graph.md)), memory
+ranked against the project's languages (from the [dependency graph](architecture.md)), memory
 entities, and name. Local scoring, instant, free. Setting `agents_auto: 'auto'` applies
 suggestions automatically on first open (your manual picks are never touched).
 

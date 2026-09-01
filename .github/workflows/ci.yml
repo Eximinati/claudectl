@@ -142,6 +142,25 @@ jobs:
       - name: The generated API reference is current
         run: python tools/gen_api_docs.py --check
 
+  www:
+    # The marketing site at claudectl.space. Vercel builds it on every push, but
+    # a build that only fails in the deploy is a build nobody sees fail on a PR —
+    # the same reason the `docs` job exists alongside pages.yml.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: www
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: www/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
   gui-smoke:
     # Scheduled only — needs a Chromium download and a software GL stack.
     if: github.event_name == 'schedule'

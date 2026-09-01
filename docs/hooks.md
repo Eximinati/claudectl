@@ -17,12 +17,12 @@ so your existing hooks, permissions and output style survive every edit. With mu
 account's config dir.
 
 SessionStart hook injections are counted by the
-[context weight audit](token-economy.md) — a hook that injects on every session is a
+[context weight audit](usage.md) — a hook that injects on every session is a
 per-turn cost like any other.
 
 !!! note "The plugin ships no hooks, on purpose"
 
     claudectl's hook manager already places the recall, worklog and guard hooks per account.
-    Bundling the same hooks in the [Claude Code plugin](install.md#inside-a-claude-code-session)
+    Bundling the same hooks in the [Claude Code plugin](plugin.md)
     would give one `settings.json` entry two owners: installing both runs the recall hook
     twice on every prompt, and uninstalling either leaves the other behind looking broken.
