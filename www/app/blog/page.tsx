@@ -3,6 +3,7 @@ import { allPosts } from '@/lib/blog';
 import { humanDate, readingTime } from '@/components/blog/prose';
 import { breadcrumbs, jsonLd, meta } from '@/lib/meta';
 import { SITE, url } from '@/lib/site';
+import { Spine } from '@/components/site/Spine';
 
 const TITLE = 'Blog';
 const DESCRIPTION =
@@ -57,9 +58,14 @@ export default function BlogIndex() {
       {posts.length === 0 ? (
         <p className="mt-14 text-dim2">No posts yet.</p>
       ) : (
-        <ul className="rise mt-14 space-y-4">
-          {posts.map((post) => (
-            <li key={post.slug} className="reveal">
+        <Spine
+          dense
+          items={posts.map((post) => ({
+            key: post.slug,
+            // A longer post is a bigger solid: same derived-weight rule the rest
+            // of the site uses, no hand-kept ordering.
+            weight: post.text.length,
+            node: (
               <Link
                 href={`/blog/${post.slug}`}
                 className="panel block p-5 no-underline transition-transform duration-200 hover:-translate-y-0.5 sm:p-6"
@@ -90,9 +96,9 @@ export default function BlogIndex() {
                   </p>
                 )}
               </Link>
-            </li>
-          ))}
-        </ul>
+            ),
+          }))}
+        />
       )}
     </div>
   );

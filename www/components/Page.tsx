@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import type { Doc } from '@/lib/content';
 import { SectionView } from '@/components/doc/Blocks';
+import { Spine } from '@/components/site/Spine';
 
 /**
  * The chrome every apex route opens with, so the nine of them read as one site.
@@ -53,13 +54,30 @@ export function DocSections({
   after?: Record<string, ReactNode>;
 }) {
   return (
-    <div className="mx-auto max-w-4xl space-y-16 px-5 py-16">
-      {doc.sections.map((s) => (
-        <div key={s.id} className="space-y-8">
-          <SectionView section={s} />
-          {after?.[s.id]}
-        </div>
-      ))}
+    <div className="py-16">
+      <Spine
+        items={doc.sections.map((s) => ({
+          key: s.id,
+          // Weight is how much the section actually contains — a table of six
+          // rows outweighs a one-paragraph aside. Derived rather than authored,
+          // so nobody has to keep a second list of importances in step.
+          weight: s.blocks.reduce(
+            (n, b) =>
+              n +
+              (b.kind === 'ul' ? b.items.length
+                : b.kind === 'dl' ? b.items.length * 2
+                : b.kind === 'table' ? b.rows.length * 2
+                : 1),
+            0,
+          ),
+          node: (
+            <div className="space-y-8">
+              <SectionView section={s} />
+              {after?.[s.id]}
+            </div>
+          ),
+        }))}
+      />
     </div>
   );
 }

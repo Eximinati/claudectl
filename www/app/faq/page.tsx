@@ -2,6 +2,7 @@ import { FAQ, faqJsonLd } from '@/lib/faq';
 import { breadcrumbs, jsonLd, meta } from '@/lib/meta';
 import { SITE } from '@/lib/site';
 import { Cta, PageBody, PageHeader } from '@/components/Page';
+import { Spine } from '@/components/site/Spine';
 
 export const metadata = meta({
   title: 'Frequently asked questions',
@@ -43,9 +44,15 @@ export default function FaqPage() {
       <PageBody>
         {/* <details> is the platform's disclosure widget: keyboard and screen
             reader behaviour for free, and no client component. */}
-        <div className="space-y-3">
-          {FAQ.map(({ q, a }) => (
-            <details key={q} className="panel group px-5 py-4">
+        <Spine
+          dense
+          items={FAQ.map(({ q, a }) => ({
+            key: q,
+            // A long answer is a question people ask more about; it gets the
+            // bigger solid. Derived, so there is no second list of importances.
+            weight: a.length,
+            node: (
+            <details className="panel group px-5 py-4">
               <summary className="flex cursor-pointer list-none items-start justify-between gap-4 text-[0.98rem] font-semibold leading-[1.5] text-text [&::-webkit-details-marker]:hidden">
                 <span>{q}</span>
                 <svg
@@ -65,8 +72,9 @@ export default function FaqPage() {
               </summary>
               <p className="mt-3 max-w-3xl text-[0.93rem] leading-[1.72] text-dim">{a}</p>
             </details>
-          ))}
-        </div>
+            ),
+          }))}
+        />
       </PageBody>
     </>
   );

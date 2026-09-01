@@ -226,11 +226,6 @@ body::after {
 html.journey-on #journey {
   opacity: 1;
 }
-/* Every route that is not the landing page. The scene is the same; it just sits
-   further back behind text somebody is there to read. */
-html.journey-on.scene-ambient #journey {
-  opacity: 0.42;
-}
 
 /* The only rule from lenis/dist/lenis.css this page needs — the other four
    selectors never match here (no iframes, no [data-lenis-prevent], stop() is
@@ -281,12 +276,51 @@ html.lenis body {
   animation-range: entry 2% cover 20%;
 }
 
+/* ── the skill tree on the content routes ───────────────────────────────────
+   The landing page connects its sections in 3D; these connect in the DOM. The
+   rail draws itself with stroke-dashoffset on the same view timeline the reveal
+   uses — `pathLength: 1` makes the dash arithmetic unit-independent, so one rule
+   works for a two-line section and a two-screen one. */
+@keyframes spine-draw {
+  from { transform: translateX(-50%) scaleY(0); }
+  to   { transform: translateX(-50%) scaleY(1); }
+}
+
+.spine-rail {
+  background: linear-gradient(
+    180deg,
+    var(--color-cyan) 0%,
+    color-mix(in srgb, var(--color-cyan) 35%, transparent) 55%,
+    color-mix(in srgb, var(--color-line) 80%, transparent) 100%
+  );
+  transform-origin: top;
+  transform: translateX(-50%) scaleY(0);
+  animation: spine-draw 1s linear both;
+  animation-timeline: view();
+  animation-range: entry 0% cover 42%;
+}
+
+/* The node lights as its own row arrives. Scale and opacity only — the ring is a
+   box-shadow spread, which composites like any other shadow and needs no filter. */
+@keyframes spine-light {
+  from { opacity: 0.25; transform: scale(0.55); box-shadow: 0 0 0 0 currentColor; }
+  to   { opacity: 1; transform: scale(1); box-shadow: 0 0 0 5px rgba(125, 207, 255, 0.08); }
+}
+
+.spine-node {
+  animation: spine-light 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-timeline: view();
+  animation-range: entry 4% cover 16%;
+}
+
 @media (prefers-reduced-motion: reduce) {
   /* Back onto the document timeline, where the block above has already collapsed
      every duration to nothing. A view timeline ignores duration, so without this
      the reveal would stay scroll-linked — which is the motion being declined. */
   .station-in,
-  .reveal {
+  .reveal,
+  .spine-rail,
+  .spine-node {
     animation-timeline: none;
   }
   #journey {

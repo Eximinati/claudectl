@@ -86,6 +86,16 @@ const uniforms = (): U => ({
   u_shot: { value: 0 },
   u_pkt: { value: 0 },
   u_web: { value: 0 },
+  // The per-section solids: which section is current (continuous), and where on
+  // the glass that section sits, in camera-space units.
+  u_sec: { value: 0 },
+  u_sx: { value: 0 },
+  u_sy: { value: 0 },
+  // How big a solid is allowed to be, in camera-space units, derived from the
+  // empty half of the viewport. Sizing in world units instead makes the solid
+  // arbitrary: correct on the display it was authored on and clipped everywhere
+  // else.
+  u_fs: { value: 1 },
   u_res: { value: new THREE.Vector2(1, 1) },
   u_acc: { value: new THREE.Color(HUES[0]) },
   u_acc2: { value: new THREE.Color(HUES[1]) },
@@ -110,8 +120,31 @@ function dodecVertices(): THREE.Vector3[] {
 
 export type Journey = {
   group: THREE.Group;
-  /** Writes every uniform and the camera. The only per-frame CPU work. */
-  update(camera: THREE.PerspectiveCamera, t: number, progress: number, lit: number): void;
+  /** Writes every uniform and the camera. The only per-frame CPU work.
+   *  `px`/`py` are the damped pointer offset in -1..1, already smoothed by the
+   *  caller — the scene never reads an input device itself. */
+  update(
+    camera: THREE.PerspectiveCamera,
+    t: number,
+    progress: number,
+    lit: number,
+    px?: number,
+    py?: number,
+    /** Continuous section index — 2.4 means "40% of the way from section 2 to 3".
+     *  Drives the focal solid's size, colour and reassembly. */
+    section?: number,
+    /** Which half the section left empty: +1 right, -1 left. Damped by the
+     *  caller, so the solid crosses the page instead of jumping. */
+    side?: number,
+  ): void;
+  /** Per-section weights, in document order. Each section gets its own solid,
+   *  sized by its weight, so a section that matters is a bigger object. An empty
+   *  list means this page has no sections and the layer stays off. */
+  setSections(weights: number[], dense?: boolean): void;
+  /** The six-station journey belongs to the landing page. Every other route
+   *  hides it and shows only its own section solids — two constellations at once
+   *  is what made the content pages unreadable. */
+  setStations(on: boolean): void;
   resize(w: number, h: number): void;
   dispose(): void;
 };
@@ -121,6 +154,11 @@ export function buildJourney(): Journey {
   const group = new THREE.Group();
   const disposables: { dispose(): void }[] = [];
   const track = <T extends { dispose(): void }>(x: T) => (disposables.push(x), x);
+
+  /* The six-station journey. It is the landing page; every other route hides it
+     and shows only the per-section solids, which are that page's own subject. */
+  const stations = new THREE.Group();
+  group.add(stations);
 
   /* ── 1. the six solids, one merged LineSegments ─────────────────────────── */
   const base = new THREE.DodecahedronGeometry(1, 0);
@@ -189,7 +227,7 @@ export function buildJourney(): Journey {
   );
   mEdges.frustumCulled = false;
   mEdges.renderOrder = 2;
-  group.add(mEdges);
+  stations.add(mEdges);
 
   /* ── 2. the lit joint at every vertex ───────────────────────────────────── */
   const verts = dodecVertices();
@@ -250,7 +288,7 @@ export function buildJourney(): Journey {
   );
   mJoint.frustumCulled = false;
   mJoint.renderOrder = 3;
-  group.add(mJoint);
+  stations.add(mJoint);
 
   /* ── 3. the link: a tube along the same curve, drawn by scroll ───────────
      TubeGeometry parameterises by ARC LENGTH, but scroll progress is in
@@ -258,8 +296,10 @@ export function buildJourney(): Journey {
      vertex carries the station-space t of its ring and the reveal compares
      like with like. Getting this wrong makes the link lag the camera by a
      different amount on every segment. */
+  // Radius 0.05 was a hairline that read as an artefact rather than a spine.
+  // This is the trunk of the tree; it has to carry that.
   const TUBULAR = 320;
-  const gTube = track(new THREE.TubeGeometry(CURVE, TUBULAR, 0.05, 6, false));
+  const gTube = track(new THREE.TubeGeometry(CURVE, TUBULAR, 0.09, 6, false));
   const uv = gTube.getAttribute('uv');
   const tMap = new Map<number, number>();
   const aT = new Float32Array(uv.count);
@@ -312,15 +352,18 @@ export function buildJourney(): Journey {
                      + packet(vT, fract(u_t * sp * 0.63 + 0.47), w) * 0.7;
           data *= drawn;
           vec3 col = mix(u_acc, mix(u_acc2, vec3(1.0), 0.5), clamp(data + head, 0.0, 1.0));
-          float a = drawn * (0.10 + 0.10 * vD + 0.62 * data) + head * 0.5;
+          float a = drawn * (0.20 + 0.18 * vD + 0.62 * data) + head * 0.6;
           a *= (0.9 + 0.5 * u_web);
+          // On a reading page the trunk is the loudest thing in the scene and it
+          // runs straight through the middle of the column. The constellation and
+          // its chords carry the "connected" reading on their own there.
           gl_FragColor = vec4(col, a);
         }`,
     })),
   );
   mTube.frustumCulled = false;
   mTube.renderOrder = 1;
-  group.add(mTube);
+  stations.add(mTube);
 
   /* ── 4. station 03: the node blooms into a live graph ────────────────────
      Children on the deterministic golden-angle spiral, links solving into
@@ -382,7 +425,7 @@ export function buildJourney(): Journey {
   })));
   mMem.frustumCulled = false;
   mMem.renderOrder = 4;
-  group.add(mMem);
+  stations.add(mMem);
 
   // links: parent→child, plus a chord to a near neighbour, so the field reads
   // as a graph rather than a starburst
@@ -413,7 +456,7 @@ export function buildJourney(): Journey {
   })));
   mMemLink.frustumCulled = false;
   mMemLink.renderOrder = 3;
-  group.add(mMemLink);
+  stations.add(mMemLink);
 
   /* ── 5. station 04: a node face becomes a framed screenshot ──────────────── */
   const shotC = STATIONS[3];
@@ -434,7 +477,7 @@ export function buildJourney(): Journey {
   const mShot = new THREE.Mesh(gShot, shotMat);
   mShot.position.set(shotC.x + 0.4, shotC.y - 0.2, shotC.z + 2.4);
   mShot.renderOrder = 5;
-  group.add(mShot);
+  stations.add(mShot);
 
   const fr = [
     [-SW / 2, -SH / 2], [SW / 2, -SH / 2], [SW / 2, SH / 2], [-SW / 2, SH / 2],
@@ -455,7 +498,7 @@ export function buildJourney(): Journey {
   })));
   mFrame.position.copy(mShot.position);
   mFrame.renderOrder = 6;
-  group.add(mFrame);
+  stations.add(mFrame);
 
   /* ── 6. the finale: chords between every station, resolving ──────────────── */
   const cp: number[] = [], ct: number[] = [];
@@ -485,12 +528,230 @@ export function buildJourney(): Journey {
       void main(){
         float pk = pow(max(0.0, 1.0 - abs(vT - fract(u_t * 0.09)) * 12.0), 2.0);
         vec3 col = mix(u_acc, u_acc2, vT);
-        gl_FragColor = vec4(col, (0.10 + 0.34 * pk) * vD * u_web);
+        // Present from the first frame, not only at the finale. These chords are
+        // what make six solids read as ONE connected structure — a skill tree
+        // rather than six separate objects that happen to share a page. The
+        // finale still resolves them: it is the difference between a faint
+        // lattice you sense and one you are looking at.
+        gl_FragColor = vec4(col, (0.10 + 0.34 * pk) * vD * (0.24 + 0.76 * u_web));
       }`,
   })));
   mWeb.frustumCulled = false;
   mWeb.renderOrder = 1;
-  group.add(mWeb);
+  stations.add(mWeb);
+
+  /* ── 7. ONE SOLID PER SECTION, arriving from the background ───────────────
+     Not a background field, and not one object that morphs. Every section owns
+     its own dodecahedron, sized by that section's weight and coloured by its
+     place in the palette. The solid you are reading is in the foreground beside
+     the copy; the others wait behind it, further back the further away their
+     section is, and each travels forward as you reach it.
+
+     All of it happens in the vertex shader from one uniform (`u_sec`), and all
+     of them are one merged buffer — so N sections still cost two draw calls, and
+     nothing is animated on the CPU. The group is re-anchored to the camera every
+     frame, which makes these positions CAMERA-SPACE: the solids hold their place
+     on screen no matter what the journey camera is doing. */
+  const secGroup = new THREE.Group();
+  group.add(secGroup);
+
+  /** How the section index becomes a place in front of the camera. Shared by the
+   *  edges and the joints so the two can never disagree about where a solid is. */
+  const PLACE = /* glsl */ `
+    // d < 0: already read. d > 0: still coming. |d| is how far off it is.
+    vec3 place(vec3 local, float sid, float w){
+      float d = sid - u_sec;
+      float ad = abs(d);
+      // Depth: the current section's solid sits at the front, the rest recede
+      // fast. Sqrt so the first step back is big and the far ones bunch up,
+      // which is what makes arrival read as travel rather than a slide.
+      float z = -(7.4 + 17.0 * sqrt(ad));
+      // Lateral: the current one is beside the column; the others drift off the
+      // side they came from, so a section arrives from its own direction. The
+      // spread is wide on purpose — the first pass bunched them into a knot and
+      // the chain between them was unreadable.
+      // Outward from the empty half, never back across the copy: u_sx already
+      // carries the side, so ad pushes a read section further out on whichever
+      // side it was on.
+      float x = u_sx + sign(u_sx) * ad * 2.4;
+      float y = u_sy - d * 5.2;
+      // Sized to the space beside the section, not in world units — u_fs comes
+      // from the frustum, so the solid fills the gap on a laptop and on a 4K
+      // display rather than being cropped on one and lost on the other.
+      float s = w * u_fs / (1.0 + 0.30 * ad);
+      return vec3(x, y, z) + local * s;
+    }`;
+
+  /** Unit dodecahedron edges and vertices, reused for every section's solid. */
+  const sBase = new THREE.DodecahedronGeometry(1, 0);
+  const sWire = new THREE.EdgesGeometry(sBase);
+  const swp = sWire.getAttribute('position');
+  const S_EDGE = Array.from({ length: swp.count }, (_, i) =>
+    new THREE.Vector3().fromBufferAttribute(swp, i));
+  sBase.dispose();
+  sWire.dispose();
+  const S_VERT = dodecVertices();
+
+  const gSecE = track(new THREE.BufferGeometry());
+  const gSecJ = track(new THREE.BufferGeometry());
+
+  const secUniforms = {
+    uniforms: u,
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    blending: THREE.AdditiveBlending,
+  } as const;
+
+  const mSecE = new THREE.LineSegments(gSecE, track(new THREE.ShaderMaterial({
+    ...secUniforms,
+    vertexShader: /* glsl */ `
+      attribute float sid; attribute float sw; attribute vec3 shue;
+      varying float vA; varying vec3 vC;
+      uniform float u_t, u_sec, u_sx, u_sy, u_fs;
+      ${SPIN}
+      ${PLACE}
+      void main(){
+        float ad = abs(sid - u_sec);
+        vC = shue;
+        // Visible for about three sections either side, brightest when current.
+        vA = smoothstep(3.4, 0.0, ad);
+        vec3 local = spin(position, sid * 1.7, u_t * 0.55);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(place(local, sid, sw), 1.0);
+      }`,
+    fragmentShader: /* glsl */ `
+      varying float vA; varying vec3 vC;
+      void main(){ gl_FragColor = vec4(vC, 0.10 + 0.42 * vA * vA); }`,
+  })));
+  mSecE.frustumCulled = false;
+  mSecE.renderOrder = 8;
+  secGroup.add(mSecE);
+
+  const mSecJ = new THREE.Points(gSecJ, track(new THREE.ShaderMaterial({
+    ...secUniforms,
+    vertexShader: /* glsl */ `
+      attribute float sid; attribute float sw; attribute vec3 shue;
+      varying float vA; varying vec3 vC;
+      uniform float u_t, u_sec, u_sx, u_sy, u_fs; uniform vec2 u_res;
+      ${SPIN}
+      ${PLACE}
+      void main(){
+        float ad = abs(sid - u_sec);
+        vC = shue;
+        vA = smoothstep(3.4, 0.0, ad);
+        vec3 local = spin(position, sid * 1.7, u_t * 0.55);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(place(local, sid, sw), 1.0);
+        gl_PointSize = (1.6 + 2.6 * vA) * (u_res.y / 900.0 + 0.6);
+      }`,
+    fragmentShader: /* glsl */ `
+      varying float vA; varying vec3 vC;
+      void main(){
+        float d = length(gl_PointCoord - 0.5);
+        if (d > 0.5) discard;
+        vec3 col = mix(vC, vec3(1.0), smoothstep(0.30, 0.0, d) * 0.5);
+        gl_FragColor = vec4(col, (1.0 - smoothstep(0.28, 0.5, d)) * (0.25 + 0.7 * vA));
+      }`,
+  })));
+  mSecJ.frustumCulled = false;
+  mSecJ.renderOrder = 9;
+  secGroup.add(mSecJ);
+
+  /* The chain. One segment per adjacent pair, each end placed by the same
+     `place()` the solids use — so the link cannot drift away from what it links,
+     whatever the spacing is later tuned to. This is what makes the sections read
+     as a tree rather than as a row of separate objects. */
+  const gSecL = track(new THREE.BufferGeometry());
+  const mSecL = new THREE.LineSegments(gSecL, track(new THREE.ShaderMaterial({
+    ...secUniforms,
+    vertexShader: /* glsl */ `
+      attribute float sid; attribute float sw;
+      attribute float osid; attribute float osw;
+      attribute vec3 shue;
+      varying float vA; varying vec3 vC;
+      uniform float u_t, u_sec, u_sx, u_sy, u_fs;
+      ${SPIN}
+      ${PLACE}
+      void main(){
+        vC = shue;
+        vA = smoothstep(3.6, 0.0, abs(sid - u_sec));
+        // Centre to centre is what made these look wrong: the line ran straight
+        // through both solids and out the other side. Each end starts on its own
+        // solid's SURFACE instead — pulled toward the far centre by its own
+        // radius, which is the same radius place() will draw it at, so the join
+        // stays seamless at every size and depth.
+        vec3 a = place(vec3(0.0), sid, 0.0);
+        vec3 b = place(vec3(0.0), osid, 0.0);
+        vec3 dir = normalize(b - a);
+        float r = sw * u_fs / (1.0 + 0.30 * abs(sid - u_sec));
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(a + dir * r * 1.05, 1.0);
+      }`,
+    fragmentShader: /* glsl */ `
+      varying float vA; varying vec3 vC;
+      void main(){ gl_FragColor = vec4(vC, 0.06 + 0.30 * vA); }`,
+  })));
+  mSecL.frustumCulled = false;
+  mSecL.renderOrder = 7;
+  secGroup.add(mSecL);
+
+  /** Rebuild both buffers for a page's sections. Called once per page, not per
+   *  frame — the weights only change when the document does. */
+  const buildSections = (weights: number[]) => {
+    const n = weights.length;
+    secGroup.visible = n > 1;
+    if (!secGroup.visible) return;
+
+    const hi = Math.max(1, ...weights);
+    // A one-paragraph section still gets a solid you can see; it is just not the
+    // biggest one on the page. sqrt so a very long section does not dwarf
+    // everything else in the document.
+    // Normalised 0..1: u_fs turns it into camera-space units, so these are
+    // RELATIVE importances and nothing here knows about viewports.
+    const rad = weights.map((x) => 0.52 + 0.48 * Math.sqrt(Math.max(0, x) / hi));
+
+    const ep: number[] = [], ei: number[] = [], ew: number[] = [], eh: number[] = [];
+    const jp: number[] = [], ji: number[] = [], jw: number[] = [], jh: number[] = [];
+    for (let s = 0; s < n; s++) {
+      const c = new THREE.Color(HUES[s % HUES.length]);
+      for (const v of S_EDGE) {
+        ep.push(v.x, v.y, v.z); ei.push(s); ew.push(rad[s]); eh.push(c.r, c.g, c.b);
+      }
+      for (const v of S_VERT) {
+        jp.push(v.x, v.y, v.z); ji.push(s); jw.push(rad[s]); jh.push(c.r, c.g, c.b);
+      }
+    }
+    const set3 = (g: THREE.BufferGeometry, p: number[], i: number[], w: number[], h: number[]) => {
+      g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+      g.setAttribute('sid', new THREE.Float32BufferAttribute(i, 1));
+      g.setAttribute('sw', new THREE.Float32BufferAttribute(w, 1));
+      g.setAttribute('shue', new THREE.Float32BufferAttribute(h, 3));
+    };
+    set3(gSecE, ep, ei, ew, eh);
+    set3(gSecJ, jp, ji, jw, jh);
+
+    // The chain: two vertices per link. Each end carries BOTH its own section and
+    // the one at the far end, which is what lets the shader start the line on the
+    // surface of its own solid rather than at its centre.
+    const lp: number[] = [], li: number[] = [], lw: number[] = [];
+    const lo: number[] = [], low: number[] = [], lh: number[] = [];
+    const push = (self: number, other: number) => {
+      const c = new THREE.Color(HUES[self % HUES.length]);
+      lp.push(0, 0, 0);
+      li.push(self); lw.push(rad[self]);
+      lo.push(other); low.push(rad[other]);
+      lh.push(c.r, c.g, c.b);
+    };
+    for (let s = 0; s < n - 1; s++) {
+      push(s, s + 1);
+      push(s + 1, s);
+    }
+    gSecL.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
+    gSecL.setAttribute('sid', new THREE.Float32BufferAttribute(li, 1));
+    gSecL.setAttribute('sw', new THREE.Float32BufferAttribute(lw, 1));
+    gSecL.setAttribute('osid', new THREE.Float32BufferAttribute(lo, 1));
+    gSecL.setAttribute('osw', new THREE.Float32BufferAttribute(low, 1));
+    gSecL.setAttribute('shue', new THREE.Float32BufferAttribute(lh, 3));
+  };
+  secGroup.visible = false;
 
   /* ── driving it ─────────────────────────────────────────────────────────── */
   const smooth = (x: number) => x * x * (3 - 2 * x);
@@ -505,7 +766,11 @@ export function buildJourney(): Journey {
     const seg = clamp01(p) * (STATION_COUNT - 1);
     const i = Math.min(STATION_COUNT - 2, Math.floor(seg));
     const local = seg - i;
-    return i + smooth(clamp01((local - 0.22) / 0.56));
+    // Travel over the middle 72%, park for the rest. The first cut travelled
+    // over 56% and the hold was long enough that the page felt stopped rather
+    // than settled — the camera has to still be arriving while you read the
+    // first line.
+    return i + smooth(clamp01((local - 0.14) / 0.72));
   }
 
   /** 1 when parked at station k, falling off as the camera leaves. */
@@ -515,15 +780,50 @@ export function buildJourney(): Journey {
   const lookAt = new THREE.Vector3();
   const set = (k: string, v: number) => { u[k].value = v; };
 
+  /** Re-anchor the section solids to the camera, and work out where on the glass
+   *  the current section sits. Offsets come from the frustum rather than being
+   *  authored, so the composition holds at any viewport: copy on one side, its
+   *  solid on the other, level with each other — the same arrangement the
+   *  landing page uses. */
+  let denseMode = false;
+  const FOCAL_DIST = 7.4;
+  const anchorSections = (camera: THREE.PerspectiveCamera, side: number) => {
+    const halfH = Math.tan((camera.fov * Math.PI) / 360) * FOCAL_DIST;
+    const halfW = halfH * camera.aspect;
+    secGroup.position.copy(camera.position);
+    secGroup.quaternion.copy(camera.quaternion);
+    const narrow = camera.aspect < 1.05;
+    // `side` is damped and therefore fractional mid-swap, which is exactly what
+    // carries the solid across the page as the copy changes sides.
+    set('u_sx', narrow ? 0 : halfW * (denseMode ? 0.68 : 0.47) * side);
+    // The current section's solid SETTLES at the middle of the frame, level with
+    // its copy — which is centred in its own full-height row. Tracking the
+    // section's live rect instead made the solid slide continuously as you
+    // scrolled: anchored, but never at rest. Every bit of vertical movement it
+    // needs comes from `d` in place(), which only changes when the section does.
+    set('u_sy', narrow ? halfH * 0.55 : 0);
+    // The gap beside the copy is what decides how big the solid may be. Half of
+    // the empty half, and never taller than a third of the frame.
+    set('u_fs', Math.min(halfW * (denseMode ? 0.15 : 0.24), halfH * (denseMode ? 0.22 : 0.34)));
+  };
+
   return {
     group,
-    update(camera, t, progress, lit) {
+    update(camera, t, progress, lit, px = 0, py = 0, section = 0, side = 1) {
       const s = stationSpace(progress);
       const tt = s / (STATION_COUNT - 1);
 
       CAM_CURVE.getPoint(tt, camPos);
       LOOK_CURVE.getPoint(tt, lookAt);
       camera.position.copy(camPos);
+      // Idle drift plus pointer parallax, applied to the position and NOT to the
+      // target, so the station stays framed and only the parallax moves. Without
+      // this a parked camera is a still image: the solids spin, nothing else
+      // does, and the page reads as stopped. Amplitude is deliberately under
+      // half a unit — enough that the depth separates, never enough that the
+      // copy beside it appears to move.
+      camera.position.x += Math.sin(t * 0.21) * 0.30 + px * 1.15;
+      camera.position.y += Math.cos(t * 0.17) * 0.22 + py * 0.85;
       camera.lookAt(lookAt);
 
       set('u_t', t);
@@ -535,6 +835,14 @@ export function buildJourney(): Journey {
       set('u_pkt', near(s, 4));
       set('u_web', near(s, 5));
 
+      // The section solids: one uniform decides which is in front and where the
+      // rest sit behind it. Everything else about them is in the shader.
+      if (secGroup.visible) {
+        anchorSections(camera, side);
+        set("u_sec", section);
+      }
+
+
       const shot = near(s, 3);
       shotMat.opacity = 0.92 * shot;
       mShot.visible = shot > 0.01;
@@ -542,6 +850,16 @@ export function buildJourney(): Journey {
       // the plane turns to face the camera as it resolves
       mShot.rotation.y = (1 - shot) * 1.25;
       mFrame.rotation.y = mShot.rotation.y;
+    },
+    setSections(w, d) {
+      // Dense pages pack their rows a sixth as far apart, so the same section
+      // distance covers much more of the screen and the chain wanders over the
+      // cards. It sits further out and smaller there.
+      denseMode = !!d;
+      buildSections(w);
+    },
+    setStations(on) {
+      stations.visible = on;
     },
     resize(w, h) {
       (u.u_res.value as THREE.Vector2).set(w, h);

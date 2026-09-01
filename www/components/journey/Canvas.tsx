@@ -50,10 +50,6 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
     if (!canvas) return;
     const html = document.documentElement;
     const ambient = mode === 'ambient';
-    // A content route is a page somebody is reading. The scene sits further back
-    // there — the luminance ceiling this project already learned the hard way,
-    // expressed as one class rather than a second set of materials.
-    html.classList.toggle('scene-ambient', ambient);
 
     /** Fail open: a canvas we cannot drive is worse than no canvas. */
     const drop = () => {
@@ -88,9 +84,14 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
     let lenis: Lenis | null = null;
 
     let progress = 0;
+    let sec = 0;
+    let side = 1;
     let clock = 0;
     let lit = 0;
     let prev = 0;
+    // Pointer parallax: the raw target from pointermove, and the damped value the
+    // scene actually sees. One delegated listener, no per-element handlers.
+    let pxT = 0, pyT = 0, px = 0, py = 0;
 
     const awake = () =>
       !cancelled && !lost && !still && !document.hidden && focused;
@@ -113,6 +114,13 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
     let tops: number[] = [];
     let end = 0;
 
+    // The focal solid's anchors: the same elements on the landing page, and the
+    // spine rows everywhere else. One selector list, so a page only has to mark
+    // its sections and it gets a focal solid.
+    let secTops: number[] = [];
+    /** The section elements themselves, for the side each one left empty. */
+    let secEls: HTMLElement[] = [];
+
     const measure = () => {
       const host = document.getElementById('journey-stations');
       const y = window.scrollY;
@@ -121,7 +129,33 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
         : [];
       tops = panels.map((el) => el.getBoundingClientRect().top + y);
       end = host ? host.getBoundingClientRect().bottom + y - window.innerHeight : 0;
+
+      const secs = Array.from(document.querySelectorAll<HTMLElement>('[data-section]'));
+      secEls = secs;
+      secTops = secs.map((el) => el.getBoundingClientRect().top + y);
+      // Weight is authored per section; a missing one is 1, not a crash.
+      journey?.setSections(
+        secs.map((el) => Number(el.dataset.weight) || 1),
+        secs[0]?.dataset.dense === '1',
+      );
     };
+
+    /** Continuous section index. A section is "current" from the moment its top
+     *  passes the upper third of the viewport, which is where a reader's eye
+     *  actually is — using the viewport top makes the solid change one screen
+     *  before the heading it belongs to. */
+    const sectionAt = () => {
+      if (secTops.length < 2) return 0;
+      const y = window.scrollY + window.innerHeight * 0.34;
+      let i = 0;
+      while (i < secTops.length - 1 && y >= secTops[i + 1]) i++;
+      const span = i + 1 < secTops.length ? secTops[i + 1] - secTops[i] : 0;
+      return i + (span > 0 ? clamp01((y - secTops[i]) / span) : 0);
+    };
+
+    /** Which half of the screen this section left empty. The solid goes in the
+     *  other one, so the two alternate down the page together. */
+    const sideAt = () => (secEls[Math.round(sec)]?.dataset.side === 'right' ? -1 : 1);
 
     /** Target progress in 0..1: which panel the viewport top sits in, and how
      *  far through it. Arriving at a panel parks the camera at its station. */
@@ -184,8 +218,21 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
       // are already parked at station 01 when the page loads. It is a uniform,
       // so CSS cannot own this one.
       lit = Math.min(1, lit + dt / LIT_SECONDS);
+      const k = 1 - Math.exp(-3.5 * dt);
+      px += (pxT - px) * k;
+      py += (pyT - py) * k;
 
-      journey.update(camera, clock, progress, lit * lit * (3 - 2 * lit));
+      // The section index is damped like the camera is: a solid that snapped to
+      // the next section mid-scroll would skip its own reassembly.
+      sec += (sectionAt() - sec) * (1 - Math.exp(-5.5 * dt));
+
+      // Damped too: the solid should cross the page as the sides swap, not jump.
+      side += (sideAt() - side) * (1 - Math.exp(-4.5 * dt));
+
+      journey.update(
+        camera, clock, progress, lit * lit * (3 - 2 * lit), px, py, sec, side,
+      );
+
       renderer.render(scene, camera);
 
       if (!painted) {
@@ -231,6 +278,13 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
       resize();
       measure();
     });
+    on(window, 'pointermove', (e) => {
+      const p = e as PointerEvent;
+      pxT = (p.clientX / window.innerWidth) * 2 - 1;
+      pyT = 1 - (p.clientY / window.innerHeight) * 2;
+    });
+    // A pointer that leaves the window must not park the parallax off-centre.
+    on(document, 'pointerleave', () => { pxT = 0; pyT = 0; });
     // three's own constructor already preventDefaults this one, so a restore
     // will follow and three re-uploads everything itself. Until it does, park
     // and fail open — a canvas with a dead context is a black rectangle.
@@ -297,8 +351,20 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
       scene = new three.Scene();
       camera = new three.PerspectiveCamera(52, 1, 0.1, 220);
       journey = mod.buildJourney();
+      // The journey is the landing page. A content route shows only its own
+      // section solids — running both at once is what buried the copy.
+      journey.setStations(!ambient);
       scene.add(journey.group);
       LenisCtor = lenisMod?.default ?? null;
+
+      /* No post-processing. Bloom went in and came straight back out: with the
+         EffectComposer in the chain every dark tone was lifted — the page
+         background measured (56, 61, 71) where the clear colour is (10, 12, 16),
+         which is linear 0.04 written as if it were sRGB. These are raw
+         ShaderMaterials writing final display values, so any pass that re-encodes
+         them is wrong by construction, and the glow was never worth two render
+         targets on integrated graphics. The joints are bright enough on their
+         own. */
 
       resize();
       measure();
@@ -317,7 +383,6 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
       scene = null;
       camera = null;
       html.classList.remove('journey-on');
-      html.classList.remove('scene-ambient');
     };
     // Crossing between the landing page and the rest is the only thing that
     // rebuilds the scene. Inner-page to inner-page keeps the same canvas.
