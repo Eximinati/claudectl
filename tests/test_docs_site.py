@@ -199,6 +199,33 @@ def test_an_off_host_redirect_is_scoped_to_the_host_it_is_correct_on():
         'loop wherever this build also serves the destination host: %s' % bad)
 
 
+def test_each_deployment_carries_its_own_build_config():
+    """Two Vercel projects build this repository: the marketing site with Root
+    Directory `www`, and the documentation with Root Directory `.`. A project
+    whose root directory has no vercel.json falls back to the one at the
+    repository root — so with only the root file present, the Next app was handed
+    the documentation's Python install command and ran it inside www/:
+
+        ERROR: Could not open requirements file: 'requirements-docs.txt'
+
+    The file was committed and correct; the working directory was not the one it
+    lives in. Each root directory owns its own config, and neither may carry the
+    other's toolchain."""
+    import json
+    root = json.loads(_read(os.path.join(ROOT, 'vercel.json')))
+    www = json.loads(_read(os.path.join(ROOT, 'www', 'vercel.json')))
+
+    root_cmds = ' '.join(str(root.get(k, '')) for k in ('installCommand', 'buildCommand'))
+    www_cmds = ' '.join(str(www.get(k, '')) for k in ('installCommand', 'buildCommand'))
+
+    assert 'requirements-docs.txt' in root_cmds and 'mkdocs' in root_cmds, \
+        'the repository-root config is the documentation build: %s' % root_cmds
+    assert 'npm' in www_cmds, 'www/ is a Node app: %s' % www_cmds
+    for leaked in ('python', 'mkdocs', 'requirements-docs.txt', '.venv'):
+        assert leaked not in www_cmds, \
+            'www/vercel.json carries the docs toolchain (%r): %s' % (leaked, www_cmds)
+
+
 def test_the_docs_toolchain_stays_out_of_the_shipped_package():
     """Zero runtime dependencies is a marketed claim. mkdocs belongs to
     requirements-docs.txt, the way ruff/build/playwright belong to their CI job."""
