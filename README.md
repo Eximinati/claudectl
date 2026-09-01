@@ -10,13 +10,13 @@
   <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-0078D6">
   <img alt="Dependencies" src="https://img.shields.io/badge/runtime%20deps-zero%20(stdlib)-brightgreen">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-1310-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-1367-brightgreen">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
   <img alt="Claude Code" src="https://img.shields.io/badge/for-Claude%20Code-8A5CF6">
 </p>
 
 <p align="center">
-  <b>📖 Full documentation → <a href="https://babarmuhammad.github.io/claudectl/">babarmuhammad.github.io/claudectl</a></b><br>
+  <b>📖 Full documentation → <a href="https://claudectl.vercel.app/">claudectl.vercel.app</a></b><br>
   <sub>Everything below is the short version. Every feature, key binding and file is
   documented in detail on the docs site.</sub>
 </p>
@@ -71,7 +71,7 @@ It also ships as a Claude Code plugin, if you'd rather stay inside the session:
 /plugin install claudectl@claudectl
 ```
 
-→ [Full install guide](https://babarmuhammad.github.io/claudectl/install/)
+→ [Full install guide](https://claudectl.vercel.app/install/)
 
 ## What it looks like
 
@@ -110,7 +110,7 @@ The terminal UI is the same tool, keyboard-first:
 
 <sub>Also: 29 palettes, 7 skins and 4 themed worlds — a skin changes the shape of the app,
 not just its colours.
-<a href="https://babarmuhammad.github.io/claudectl/gui/">See them →</a></sub>
+<a href="https://claudectl.vercel.app/gui/">See them →</a></sub>
 
 ---
 
@@ -134,26 +134,28 @@ Without claudectl, a big project either starves the agent (no context) or floods
 - **No stale weight** — superseded facts are invalidated, dead entities evicted.
 - **Cheaper model for the grunt work** — Plan→Execute runs the expensive model once for the plan and a cheap (or free) one for execution.
 
-→ [How the token economy works](https://babarmuhammad.github.io/claudectl/token-economy/)
+→ [How the token economy works](https://claudectl.vercel.app/token-economy/)
 
 ---
 
 ## Documentation
 
-The full manual lives at **[babarmuhammad.github.io/claudectl](https://babarmuhammad.github.io/claudectl/)**.
+The full manual lives at **[claudectl.vercel.app](https://claudectl.vercel.app/)**.
 
 | | |
 |---|---|
-| [Install](https://babarmuhammad.github.io/claudectl/install/) | pipx, pip, checkout, plugin, GUI window, Windows shortcuts |
-| [Usage](https://babarmuhammad.github.io/claudectl/usage/) | every screen, every key binding, the command line |
-| [Features](https://babarmuhammad.github.io/claudectl/features/) | one page per area — start here to see the whole surface |
-| [Project memory](https://babarmuhammad.github.io/claudectl/memory/) | the three injection surfaces, lessons, recall |
-| [Architecture graph](https://babarmuhammad.github.io/claudectl/graph/) | the interactive dependency view |
-| [Plan → Execute](https://babarmuhammad.github.io/claudectl/plan-execute/) | two-model runs and free execution via OmniRoute |
-| [Token economy](https://babarmuhammad.github.io/claudectl/token-economy/) | measuring and cutting the per-turn cost |
-| [Reference](https://babarmuhammad.github.io/claudectl/reference/) | per-project files, workspace status, session encoding, layout |
-| [API reference](https://babarmuhammad.github.io/claudectl/api/) | the local HTTP API the GUI is built on |
-| [FAQ](https://babarmuhammad.github.io/claudectl/faq/) · [Compare](https://babarmuhammad.github.io/claudectl/compare/) · [Troubleshooting](https://babarmuhammad.github.io/claudectl/troubleshooting/) | honest answers, including what claudectl does *not* do |
+| [Install](https://claudectl.vercel.app/install/) | pipx, pip, checkout, plugin, GUI window, Windows shortcuts |
+| [Download](https://claudectl.vercel.app/download/) | every way to get it, what a release contains, versioning |
+| [Usage](https://claudectl.vercel.app/usage/) | every screen, every key binding, the command line |
+| [Features](https://claudectl.vercel.app/features/) | one page per area — start here to see the whole surface |
+| [Project memory](https://claudectl.vercel.app/memory/) | the three injection surfaces, lessons, recall |
+| [Architecture graph](https://claudectl.vercel.app/graph/) | the interactive dependency view |
+| [Plan → Execute](https://claudectl.vercel.app/plan-execute/) | two-model runs and free execution via OmniRoute |
+| [Token economy](https://claudectl.vercel.app/token-economy/) | measuring and cutting the per-turn cost |
+| [Reference](https://claudectl.vercel.app/reference/) | per-project files, workspace status, session encoding, layout |
+| [API reference](https://claudectl.vercel.app/api/) | the local HTTP API the GUI is built on |
+| [FAQ](https://claudectl.vercel.app/faq/) · [Compare](https://claudectl.vercel.app/compare/) · [Troubleshooting](https://claudectl.vercel.app/troubleshooting/) | honest answers, including what claudectl does *not* do |
+| [Project dashboard](https://claudectl.vercel.app/dashboard/) | downloads, stars, test count, commit activity |
 
 ## Credits
 
@@ -161,7 +163,7 @@ claudectl is built on ideas from the wider Claude Code ecosystem — cognee and 
 repo-map behind the memory graph, Anthropic's `code-review` plugin behind `claudectl review`,
 claude-mem behind recent-work memory, OmniRoute behind free execution, and VoltAgent's
 subagent catalog behind the agent library. Every one is credited, with links, on the
-[Credits page](https://babarmuhammad.github.io/claudectl/credits/).
+[Credits page](https://claudectl.vercel.app/credits/).
 
 ## License
 

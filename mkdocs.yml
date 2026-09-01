@@ -3,7 +3,11 @@ site_description: >-
   The workspace layer for Claude Code — persistent project memory, an interactive
   architecture graph, MCP server management, and per-project launch control, in a fast
   terminal UI or a native desktop GUI. Zero runtime dependencies.
-site_url: https://babarmuhammad.github.io/claudectl/
+# Canonical host. The site is built by Vercel and mirrored on GitHub Pages; both
+# copies emit this URL, so search and answer engines index one of them rather
+# than splitting the same content across two domains. Asset and page links stay
+# relative, which is why one site_url serves both.
+site_url: https://claudectl.vercel.app/
 site_author: Babar Muhammad Anas
 repo_url: https://github.com/babarmuhammad/claudectl
 repo_name: babarmuhammad/claudectl
@@ -40,6 +44,11 @@ theme:
 extra_css:
   - stylesheets/extra.css
 
+# Emits site/llms-full.txt at build time — the companion to the hand-written
+# docs/llms.txt index. Generated, not committed, so it can never fall behind.
+hooks:
+  - tools/mkdocs_hooks.py
+
 markdown_extensions:
   - admonition
   - attr_list
@@ -66,6 +75,7 @@ nav:
   - Getting started:
       - Home: index.md
       - Install: install.md
+      - Download: download.md
       - Usage: usage.md
   - Features:
       - Overview: features.md
@@ -91,7 +101,9 @@ nav:
       - FAQ: faq.md
       - Compare: compare.md
       - Troubleshooting: troubleshooting.md
+      - Project dashboard: dashboard.md
       - Changelog: changelog.md
+      - Code of conduct: code-of-conduct.md
       - Credits: credits.md
 
 extra:

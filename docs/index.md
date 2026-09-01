@@ -13,7 +13,7 @@ jsonld: |
     "operatingSystem": "Windows, macOS, Linux",
     "softwareVersion": "1.8.2",
     "description": "The workspace layer for Claude Code - persistent project memory, an interactive architecture graph, MCP awareness, and per-project launch control in a fast terminal UI.",
-    "url": "https://babarmuhammad.github.io/claudectl/",
+    "url": "https://claudectl.vercel.app/",
     "codeRepository": "https://github.com/babarmuhammad/claudectl",
     "programmingLanguage": "Python",
     "license": "https://opensource.org/licenses/MIT",

@@ -12,43 +12,47 @@ Install with `pipx install claudectl`, or clone the repository and run it.
 
 ## Getting started
 
-- [Install](https://babarmuhammad.github.io/claudectl/install/): requirements, pipx/pip, running from a checkout, the Claude Code plugin, GUI setup and Windows shortcuts.
-- [Usage](https://babarmuhammad.github.io/claudectl/usage/): screens, full key bindings and the command line.
+- [Install](https://claudectl.vercel.app/install/): requirements, pipx/pip, running from a checkout, the Claude Code plugin, GUI setup and Windows shortcuts.
+- [Download](https://claudectl.vercel.app/download/): every way to get it — PyPI, the GitHub release page, the Claude Code plugin marketplace, a source checkout — what each release contains and the versioning policy.
+- [Usage](https://claudectl.vercel.app/usage/): screens, full key bindings and the command line.
 
 ## Features
 
-- [Features overview](https://babarmuhammad.github.io/claudectl/features/): one page per feature area.
-- [Sessions and search](https://babarmuhammad.github.io/claudectl/sessions/): browse, search, tag, fork, resume, archive and export sessions; usage analytics; per-project launch control.
-- [Project memory](https://babarmuhammad.github.io/claudectl/memory/): the semantic memory graph, its three token-budgeted injection surfaces, session lessons and recall.
-- [Architecture graph](https://babarmuhammad.github.io/claudectl/graph/): the interactive, expandable dependency graph rendered as self-contained HTML.
-- [Plan to Execute and OmniRoute](https://babarmuhammad.github.io/claudectl/plan-execute/): plan on an accurate model, execute on a cheap or free one; OmniRoute setup and troubleshooting.
-- [Multiple accounts](https://babarmuhammad.github.io/claudectl/accounts/): running two or more Claude accounts, per-launch account selection, cross-account context injection.
-- [Context hand-off](https://babarmuhammad.github.io/claudectl/context-handoff/): starting a new session seeded with a previous session's transcript, optionally under a different account — for when the context window fills up or an account hits its rate limit.
-- [MCP servers](https://babarmuhammad.github.io/claudectl/mcp/): add, remove and inspect MCP servers; connection state; tool documentation.
-- [Agents and skills](https://babarmuhammad.github.io/claudectl/agents/): the agent library, per-project subagent selection, adaptive suggestions, the skills manager.
-- [Hooks](https://babarmuhammad.github.io/claudectl/hooks/): 19 Claude Code hook templates plus AI-generated hooks.
-- [Status line, failover and checkpoints](https://babarmuhammad.github.io/claudectl/statusline/): the per-turn status line, the model failover proxy, the read-only checkpoint view.
-- [Desktop GUI](https://babarmuhammad.github.io/claudectl/gui/): the local web GUI, its shells, and the 29 palettes / 7 skins / 4 worlds theme system.
+- [Features overview](https://claudectl.vercel.app/features/): one page per feature area.
+- [Sessions and search](https://claudectl.vercel.app/sessions/): browse, search, tag, fork, resume, archive and export sessions; usage analytics; per-project launch control.
+- [Project memory](https://claudectl.vercel.app/memory/): the semantic memory graph, its three token-budgeted injection surfaces, session lessons and recall.
+- [Architecture graph](https://claudectl.vercel.app/graph/): the interactive, expandable dependency graph rendered as self-contained HTML.
+- [Plan to Execute and OmniRoute](https://claudectl.vercel.app/plan-execute/): plan on an accurate model, execute on a cheap or free one; OmniRoute setup and troubleshooting.
+- [Multiple accounts](https://claudectl.vercel.app/accounts/): running two or more Claude accounts, per-launch account selection, cross-account context injection.
+- [Context hand-off](https://claudectl.vercel.app/context-handoff/): starting a new session seeded with a previous session's transcript, optionally under a different account — for when the context window fills up or an account hits its rate limit.
+- [MCP servers](https://claudectl.vercel.app/mcp/): add, remove and inspect MCP servers; connection state; tool documentation.
+- [Agents and skills](https://claudectl.vercel.app/agents/): the agent library, per-project subagent selection, adaptive suggestions, the skills manager.
+- [Hooks](https://claudectl.vercel.app/hooks/): 19 Claude Code hook templates plus AI-generated hooks.
+- [Status line, failover and checkpoints](https://claudectl.vercel.app/statusline/): the per-turn status line, the model failover proxy, the read-only checkpoint view.
+- [Desktop GUI](https://claudectl.vercel.app/gui/): the local web GUI, its shells, and the 29 palettes / 7 skins / 4 worlds theme system.
 
 ## Guides
 
-- [Token economy](https://babarmuhammad.github.io/claudectl/token-economy/): how it reduces per-message context cost — bounded index, path-scoped rules, task-scoped injection, context weight audit, deny rules, economy model routing.
-- [Project health and auto-fixes](https://babarmuhammad.github.io/claudectl/health/): pre-launch health card, context-loss insurance, permission-fatigue killer.
-- [Installing the agent library](https://babarmuhammad.github.io/claudectl/agent-library/): bulk-installing the awesome-claude-code-subagents catalog.
+- [Token economy](https://claudectl.vercel.app/token-economy/): how it reduces per-message context cost — bounded index, path-scoped rules, task-scoped injection, context weight audit, deny rules, economy model routing.
+- [Project health and auto-fixes](https://claudectl.vercel.app/health/): pre-launch health card, context-loss insurance, permission-fatigue killer.
+- [Installing the agent library](https://claudectl.vercel.app/agent-library/): bulk-installing the awesome-claude-code-subagents catalog.
 
 ## Reference
 
-- [Files, layout and encoding](https://babarmuhammad.github.io/claudectl/reference/): per-project files, workspace status, CLAUDE.md auto-generation, session encoding, file layout.
-- [API reference](https://babarmuhammad.github.io/claudectl/api/): the local HTTP API the desktop GUI is built on, generated from the route tables.
+- [Files, layout and encoding](https://claudectl.vercel.app/reference/): per-project files, workspace status, CLAUDE.md auto-generation, session encoding, file layout.
+- [API reference](https://claudectl.vercel.app/api/): the local HTTP API the desktop GUI is built on, generated from the route tables.
 
 ## About
 
-- [FAQ](https://babarmuhammad.github.io/claudectl/faq/): platform support, dependencies, multiple accounts, how it differs from /resume.
-- [Compare](https://babarmuhammad.github.io/claudectl/compare/): honest comparison against bare Claude Code, hand-written CLAUDE.md and terminal multiplexers, including what claudectl does not do.
-- [Troubleshooting](https://babarmuhammad.github.io/claudectl/troubleshooting/): common problems and fixes.
-- [Changelog](https://babarmuhammad.github.io/claudectl/changelog/): release history.
-- [Credits](https://babarmuhammad.github.io/claudectl/credits/): the projects and ideas claudectl builds on.
+- [FAQ](https://claudectl.vercel.app/faq/): platform support, dependencies, multiple accounts, how it differs from /resume.
+- [Compare](https://claudectl.vercel.app/compare/): honest comparison against bare Claude Code, hand-written CLAUDE.md and terminal multiplexers, including what claudectl does not do.
+- [Troubleshooting](https://claudectl.vercel.app/troubleshooting/): common problems and fixes.
+- [Project dashboard](https://claudectl.vercel.app/dashboard/): release version, PyPI download counts, stars, test count, source size and commit activity.
+- [Changelog](https://claudectl.vercel.app/changelog/): release history.
+- [Code of conduct](https://claudectl.vercel.app/code-of-conduct/): the Contributor Covenant this project follows.
+- [Credits](https://claudectl.vercel.app/credits/): the projects and ideas claudectl builds on.
 
 ## Optional
 
+- [Full documentation as one file](https://claudectl.vercel.app/llms-full.txt): every page above concatenated, for reading without crawling.
 - [Source](https://github.com/babarmuhammad/claudectl): the repository.

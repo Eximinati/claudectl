@@ -10,7 +10,7 @@ import subprocess
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOCS = os.path.join(ROOT, 'docs')
-SITE_URL = 'https://babarmuhammad.github.io/claudectl/'
+SITE_URL = 'https://claudectl.vercel.app/'
 
 # Moved to notes/ so they are outside docs_dir. Inside it they would be built and
 # listed in sitemap.xml even without a nav entry.
