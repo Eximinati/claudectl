@@ -226,6 +226,7 @@ def scan_sessions(project_path, proj_folder, sids=None):
     added = 0
     for i, sid in enumerate(todo):
         lessons = extract_lessons(project_path, proj_folder, sid)
+        memory.charge(mem)          # a lesson scan is a paid Claude call too
         mem['session_counter'] = mem.get('session_counter', 0) + 1
         added += merge_lessons(mem, lessons, sid)
         mem.setdefault('lessons_scanned', {})[sid] = memory._iso()

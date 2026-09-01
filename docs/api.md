@@ -27,7 +27,7 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/cc-settings` | `api_cc_settings_get` | Claude Code's own settings.json, per account, with the schema that says |
 | `/api/checkpoint/diff` | `api_checkpoint_diff` | — |
 | `/api/checkpoints` | `api_checkpoints` | Read-only snapshot index for one session. |
-| `/api/claude-md` | `api_claude_md_get` | — |
+| `/api/claude-md` | `api_claude_md_get` | The file, plus what it is made OF. |
 | `/api/client/project` | `api_client_project` | Claude Code's own record for one project: cost, tokens, MCP approval |
 | `/api/client/usage` | `api_client_usage` | What is actually being used versus carried as dead weight. |
 | `/api/conventions` | `api_conventions` | Conventions shared across projects, and the global CLAUDE.md block they |
@@ -52,8 +52,9 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/memory-map` | `api_memory_map` | — |
 | `/api/memory/active` | `api_memory_active` | Project paths whose memory is being refreshed right now (scan-lock held) |
 | `/api/memory/auto` | `api_memory_auto_get` | Per-project auto-memory state for the management UI. |
+| `/api/memory/entity` | `api_memory_entity` | One fact in the graph, in full: what it means and what cites it. |
 | `/api/memory/progress` | `api_memory_progress` | Live progress, and — once the lock clears — HOW the last run ended. |
-| `/api/memory/state` | `api_memory_state` | — |
+| `/api/memory/state` | `api_memory_state` | Everything the graph knows about itself: size, reach, spend, queue. |
 | `/api/omniroute/models` | `api_omniroute_models` | Models that can actually serve a session, not the whole routable catalog. |
 | `/api/omniroute/status` | `api_omniroute_status` | — |
 | `/api/output-style/read` | `api_output_style_read` | — |
@@ -82,7 +83,7 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/usage/projects` | `api_usage_projects` | — |
 | `/api/versions` | `api_versions` | claudectl and the installed Claude Code against what has been released, |
 | `/api/worklog` | `api_worklog_get` | — |
-| `/api/workspace-status` | `api_workspace_status` | — |
+| `/api/workspace-status` | `api_workspace_status` | The freshness checks as DATA, not as pre-rendered terminal lines. |
 | `/api/worktree/diff` | `api_worktree_diff` | — |
 | `/api/worktrees` | `api_worktrees` | The board: every repo under this project, its worktrees, and the session |
 

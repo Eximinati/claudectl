@@ -67,11 +67,36 @@ def _used_omni(stats):
     return any(not _is_anthropic_model(m) for m in (stats.get('models') or []))
 
 
+#: Appended to every prompt `memory._claude_stdin` sends. `claude -p` writes a
+#: transcript like any other session, so without this claudectl's own calls are
+#: indistinguishable from yours.
+HEADLESS_MARK = '<!-- claudectl:headless -->'
+
+#: Transcripts written before HEADLESS_MARK existed carry no marker, so the
+#: opening line of each prompt claudectl sends is matched too. The list can only
+#: rot by a prompt being reworded, and
+#: `test_the_headless_openers_still_match_the_prompts_we_send` fails when it is.
+HEADLESS_OPENERS = (
+    'You are building a knowledge graph',
+    'You are distilling durable LESSONS',
+    'You are reviewing a software project to produce',
+    'You are a meticulous senior code reviewer',
+    'Compress this CLAUDE.md project-instructions file',
+    'Rewrite the `description` field of these Claude Code subagents',
+)
+
+
+def is_headless_text(text):
+    """True when this user message is claudectl prompting Claude, not you."""
+    t = (text or '').lstrip()
+    return HEADLESS_MARK in t or any(t.startswith(p) for p in HEADLESS_OPENERS)
+
+
 _EMPTY_STATS = {
     'preview': '', 'count': 0, 'title': '',
     'usage_by_model': {}, 'models': [],
     'first_ts': None, 'last_ts': None,
-    'branch': '', 'cwd': '', 'api_errors': 0,
+    'branch': '', 'cwd': '', 'api_errors': 0, 'headless': False,
 }
 
 
@@ -120,6 +145,8 @@ def _parse_session(jsonl_path):
             s['count'] += 1
         if role == 'user':
             for text in _extract_texts(obj):
+                if is_headless_text(text):
+                    s['headless'] = True
                 if _good_text(text):
                     s['preview'] = text[:65].replace('\n', ' ')   # last good one wins
                     break

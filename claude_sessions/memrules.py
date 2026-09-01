@@ -56,10 +56,21 @@ def _unit_glob(entities, module=''):
             if len(set(seg)) != 1:
                 break
             common.append(seg[0])
-    if common:
-        return '/'.join(common) + '/**'
     mod = str(module or '').strip('/')
-    if mod and mod not in ('(root)', '.'):
+    scoped_mod = mod and mod not in ('(root)', '.')
+    if common:
+        prefix = '/'.join(common)
+        # The prefix must never be NARROWER than the unit it describes. The
+        # entities' `source_files` are a representative SAMPLE (MODULE_MAX_FILES
+        # caps it), so a unit whose sample happened to sit in one subdirectory
+        # scoped itself to that subdirectory: `Claude/plugin/skills` — a rule
+        # about all eight skills — came out `plugin/skills/changelog/**` and
+        # would fire for one of them. Harmless while every rule loaded
+        # unconditionally; load-bearing the moment `paths:` actually scopes.
+        if scoped_mod and prefix.startswith(mod + '/'):
+            return f"{mod}/**"
+        return prefix + '/**'
+    if scoped_mod:
         return f"{mod}/**"
     # A unit that genuinely spans the repo root gets a glob that still SCOPES —
     # '**' is indistinguishable from an always-on rule and defeats the point.
@@ -68,10 +79,18 @@ def _unit_glob(entities, module=''):
 
 def render_rule(repo, module, summary, entities, relations):
     glob = _unit_glob(entities, module)
+    # `paths:`, NOT `globs:`. Claude Code scopes a rule file on `paths:` alone —
+    # "rules without a paths field are loaded unconditionally and apply to all
+    # files" — and `globs:` is the Cursor spelling, which it does not recognise.
+    # Every rule file this wrote was therefore loaded into EVERY session, ~3.9k
+    # tokens on this repo, while claudectl's own audit reported them as lazy.
+    # Verified empirically: all 11 files appeared in a fresh session's context
+    # with no matching file opened. Documented list form, one pattern per item.
     lines = [
         '---',
         f'description: "claudectl memory: {repo}/{module}"',
-        f'globs: "{glob}"',
+        'paths:',
+        f'  - "{glob}"',
         '---',
         f"# {repo}/{module}" + (f" — {summary}" if summary else ''),
     ]

@@ -319,6 +319,22 @@ def hits_log_path(project_path, proj_folder):
     return os.path.join(dirs[0], HITS_LOG) if dirs else ''
 
 
+def hits_pending(project_path, proj_folder):
+    """Recall hits recorded but not yet folded into the graph.
+
+    One line per entity injected into one prompt. The GUI showed the literal
+    string 'folding in' derived from the graph's top-hits list, which is a
+    different thing entirely and never changed. Reading is safe against a
+    concurrent hook: each prompt appends its whole block in one write, so a
+    reader sees a consistent prefix (same contract as memory.dirty_count)."""
+    p = hits_log_path(project_path, proj_folder)
+    try:
+        with open(p, encoding='utf-8', errors='replace') as f:
+            return sum(1 for line in f if line.strip())
+    except OSError:
+        return 0
+
+
 def _log_hits(project_path, proj_folder, names):
     p = hits_log_path(project_path, proj_folder)
     if not p or not names:
@@ -362,8 +378,14 @@ def fold_hits(project_path, proj_folder, mem):
     return bool(counts)
 
 
-def retrieve(project_path, proj_folder, query, budget_tokens=600):
-    """Main entry: {'text', 'tokens', 'items', 'empty'}."""
+def retrieve(project_path, proj_folder, query, budget_tokens=600, log=True):
+    """Main entry: {'text', 'tokens', 'items', 'empty'}.
+
+    `log=False` for a PREVIEW. Reinforcement must credit what Claude actually
+    saw: `hits` is a term in the eviction score and in recall ranking, so a
+    preview that logged would let looking at the memory reshape it — and both
+    previews (TUI and GUI) are opened repeatedly on the same query.
+    """
     mem = memory.load_memory(project_path, proj_folder)
     if not mem.get('entities') or not (query or '').strip():
         return {'text': '', 'tokens': 0, 'items': [], 'empty': True}
@@ -399,13 +421,48 @@ def retrieve(project_path, proj_folder, query, budget_tokens=600):
     # so every prompt inflated `hits` for entities Claude never saw — and
     # `hits*2` is a term in the eviction score.
     included = getattr(render_context, 'last_included', None) or []
-    if text and included:
+    if log and text and included:
         _log_hits(project_path, proj_folder, included)
     return {'text': text, 'tokens': toks, 'items': list(included),
             'empty': not text}
 
 
 # ── surface estimation (launch UI) ───────────────────────────
+
+def _rule_frontmatter(text):
+    """(unit, glob, scoped) as the rule file itself declares them.
+
+    `memrules._sanitize` maps every non-alnum char to '_', so the FILENAME is
+    not reversible back to repo/module — two different units can produce the
+    same name and '/' is indistinguishable from '-'. The file states both facts
+    in its own frontmatter (`memrules.render_rule`), so read them from there.
+
+    `scoped` is False for a file written with the old `globs:` key: Claude Code
+    scopes on `paths:` alone and loads everything else into every session, so a
+    file claiming a glob it does not honour must not be reported as lazy.
+    """
+    unit = glob = ''
+    scoped = False
+    for ln in text.splitlines()[:8]:
+        ln = ln.strip()
+        if ln == '---' and unit:
+            break
+        m = re.match(r'^description\s*:\s*"?claudectl memory:\s*(.+?)"?\s*$', ln)
+        if m:
+            unit = m.group(1)
+        if re.match(r'^paths\s*:', ln):
+            scoped = True
+            m = re.match(r'^paths\s*:\s*"?([^"\s].*?)"?\s*$', ln)   # inline form
+            if m:
+                glob = m.group(1)
+        m = re.match(r'^-\s+"?(.+?)"?\s*$', ln)                     # list item
+        if m and scoped and not glob:
+            glob = m.group(1)
+        m = re.match(r'^globs\s*:\s*"?(.+?)"?\s*$', ln)             # legacy, unscoped
+        if m and not glob:
+            glob = m.group(1)
+    return unit, glob, scoped
+
 
 def estimate_surfaces(project_path, proj_folder, settings):
     """What memory costs per session: digest (always), hook budget, lazy rules."""
@@ -417,15 +474,20 @@ def estimate_surfaces(project_path, proj_folder, settings):
         for nm in sorted(os.listdir(rules_dir)):
             if nm.startswith('claudectl-mem-'):
                 p = os.path.join(rules_dir, nm)
-                rules.append((nm, tokens_estimate(open(p, encoding='utf-8',
-                                                       errors='ignore').read())))
+                txt = open(p, encoding='utf-8', errors='ignore').read()
+                unit, glob, scoped = _rule_frontmatter(txt)
+                # dicts, not tuples: a 2-tuple serialises as ["name", 12] and
+                # every consumer has to know the order. Same fix conventions.py
+                # already took for the same reason.
+                rules.append({'file': nm, 'tokens': tokens_estimate(txt),
+                              'unit': unit, 'glob': glob, 'scoped': scoped,
+                              'path': p})
     except OSError:
         pass
     hook_on = bool(settings.get('memory_prompt_hook'))
     return {'digest_tokens': tokens_estimate(digest) if digest else 0,
             'hook_budget': settings.get('memory_budget', 600) if hook_on else None,
-            'rules': rules,
-            'total_always': tokens_estimate(digest) if digest else 0}
+            'rules': rules}
 
 
 def preview_screen(project_path, proj_folder, project_name):
@@ -442,8 +504,9 @@ def preview_screen(project_path, proj_folder, project_name):
     lines = [f"ALWAYS LOADED — CLAUDE.md memory block  (~{est['digest_tokens']} tok)", '']
     lines += ['  ' + l for l in digest.splitlines()]
     lines += ['', f"LAZY — path-scoped rules ({len(est['rules'])} files, load only when touched)"]
-    for nm, tk in est['rules']:
-        lines.append(f"  {nm}  (~{tk} tok)")
+    for r in est['rules']:
+        lines.append(f"  {r['file']}  (~{r['tokens']} tok)"
+                     + (f"  {r['glob']}" if r.get('glob') else ''))
     if not est['rules']:
         lines.append('  (none generated yet)')
     hook = est['hook_budget']
@@ -462,7 +525,8 @@ def _try_prompt(project_path, proj_folder, project_name, settings):
     q = text_input("Prompt to test:")
     if not q:
         return
-    r = retrieve(project_path, proj_folder, q, settings.get('memory_budget', 600))
+    r = retrieve(project_path, proj_folder, q, settings.get('memory_budget', 600),
+                 log=False)
     body = r['text'].splitlines() if not r['empty'] else ['(nothing relevant — no injection)']
     pager(('CLAUDECTL', project_name, f'HOOK WOULD INJECT (~{r["tokens"]} tok)'),
           body, hint='ESC back')

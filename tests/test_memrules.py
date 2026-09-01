@@ -25,14 +25,18 @@ def _mem():
     }
 
 
-def test_sync_writes_globs_rule(monkeypatch, tmp_path):
+def test_sync_writes_a_path_scoped_rule(monkeypatch, tmp_path):
     sb = Sandbox(monkeypatch, tmp_path)
     actual, enc, folder, _ = sb.add_project('alpha')
     written = memrules.sync_rules(actual, folder, _mem())
     assert written == [memrules.rule_filename('svc', 'engine')]
     p = os.path.join(actual, '.claude', 'rules', written[0])
     body = open(p, encoding='utf-8').read()
-    assert 'globs: "svc/engine/**"' in body
+    # `paths:`, not `globs:` — Claude Code loads a rule with no `paths` field
+    # into EVERY session, so the old key made every rule file always-on while
+    # claudectl reported it as lazy.
+    assert 'paths:' in body and '- "svc/engine/**"' in body
+    assert 'globs:' not in body
     assert 'Engine' in body and 'Cache' in body
     assert 'the engine module' in body
     assert 'Engine uses Cache' in body
@@ -119,7 +123,9 @@ def test_written_rules_are_never_globally_scoped(tmp_path):
     written = list(rules.glob('claudectl-mem-*.md')) if rules.is_dir() else []
     assert written, 'nothing was written'
     for p in written:
-        m = _re.search(r'globs:\s*"([^"]*)"', p.read_text(encoding='utf-8'))
+        txt = p.read_text(encoding='utf-8')
+        assert _re.search(r'(?m)^paths\s*:', txt), f'{p.name} is not path-scoped at all'
+        m = _re.search(r'-\s*"([^"]*)"', txt)
         assert m and m.group(1) != '**', p.name
 
 
@@ -133,3 +139,46 @@ def test_a_root_level_file_is_not_dropped_from_the_prefix():
                               '(root)')
     assert not got.startswith('claude_sessions/'), got
     assert got == '*'
+
+
+def test_only_paths_scopes_a_rule(monkeypatch, tmp_path):
+    """Claude Code scopes a rule file on `paths:` alone — "rules without a
+    paths field are loaded unconditionally and apply to all files". `globs:` is
+    the Cursor spelling, and writing it meant every memory rule claudectl ever
+    wrote was loaded into every session while the audit reported it as lazy.
+    Verified empirically first: all eleven of this repo's rule files appeared in
+    a fresh session's context with no matching file opened."""
+    from claude_sessions import ctxaudit, recall
+    memrules.sync_rules(str(tmp_path), None, _mem())
+    p = next((tmp_path / '.claude' / 'rules').glob('claudectl-mem-*.md'))
+    txt = p.read_text(encoding='utf-8')
+
+    assert ctxaudit._rule_is_lazy(txt) is True
+    assert ctxaudit._rule_is_lazy(txt.replace('paths:', 'globs:')) is False, \
+        'a globs-only rule was counted as lazy — it loads in every session'
+
+    unit, glob, scoped = recall._rule_frontmatter(txt)
+    assert scoped is True and glob == 'svc/engine/**' and unit == 'svc/engine'
+    # the legacy shape still reports its glob, but never claims to be scoped
+    _u, g, sc = recall._rule_frontmatter('---\nglobs: "svc/**"\n---\n')
+    assert g == 'svc/**' and sc is False
+
+
+def test_a_glob_is_never_narrower_than_its_own_module(tmp_path):
+    """`source_files` is a representative SAMPLE, so a unit whose sample landed
+    in one subdirectory scoped itself to that subdirectory. On this repo the
+    rule for `plugin/skills` — eight skills — came out `plugin/skills/changelog/**`
+    and would have fired for one of them. Invisible while every rule loaded
+    unconditionally; a real coverage hole the moment `paths:` scopes for real."""
+    mem = {'entities': [
+        {'name': 'A', 'type': 'model', 'summary': 's', 'repo': 'R',
+         'module': 'plugin/skills', 'source_files': ['plugin/skills/changelog/SKILL.md'],
+         'valid': True},
+        {'name': 'B', 'type': 'model', 'summary': 's', 'repo': 'R',
+         'module': 'plugin/skills', 'source_files': ['plugin/skills/changelog/README.md'],
+         'valid': True},
+    ], 'relations': [], 'summaries': {}}
+    memrules.sync_rules(str(tmp_path), None, mem)
+    txt = next((tmp_path / '.claude' / 'rules').glob('claudectl-mem-*.md')).read_text(
+        encoding='utf-8')
+    assert '- "plugin/skills/**"' in txt, txt.splitlines()[:5]

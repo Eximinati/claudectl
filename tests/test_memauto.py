@@ -260,6 +260,47 @@ def test_background_auto_memory_is_explicit_opt_in(tmp_path, monkeypatch):
     assert memory.refresh_on_open(actual, enc) is True
 
 
+def test_background_auto_memory_owns_the_spend_so_opening_adds_no_cycle(tmp_path, monkeypatch):
+    """Opting a project into background auto-memory used to also mean "refresh
+    whenever you open it". So the configured cadence bounded nothing: the
+    scheduler waited the interval and then navigating to the project spent a
+    cycle anyway. Background auto-memory means launch + interval, and nothing
+    else — pressing Build with Claude is still a decision the user can make."""
+    from harness import Sandbox
+    from claude_sessions import config, memhub
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    assert config.load_settings().get('memory_auto_refresh') == 'open'
+
+    memhub.set_auto_memory(enc, True)
+    assert memory.auto_enabled(actual, enc) is True, 'the scheduler still picks it up'
+    assert memory.refresh_on_open(actual, enc) is False, \
+        'the scheduler owns the cadence; opening must not add a cycle'
+
+
+def test_the_gui_asks_the_same_question_the_tui_does(tmp_path, monkeypatch):
+    """`api_memory_autoscan` re-derived "refresh on open?" from the global
+    setting, so the per-project flag was ignored in the GUI entirely — which is
+    the surface the report came from. One reader, `memory.refresh_on_open`."""
+    from harness import Sandbox
+    from claude_sessions import gui_api, memhub
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    started = []
+    monkeypatch.setattr(gui_api, '_refresh_async',
+                        lambda p, f, auto_cap=6: started.append((p, auto_cap)))
+    monkeypatch.setattr(memory, 'is_stale', lambda *a, **k: True)
+
+    memhub.set_auto_memory(enc, True)
+    body = {'path': actual, 'enc': enc, 'cfgdir': str(sb.cfg)}
+    assert gui_api.api_memory_autoscan({}, body)['running'] is False
+    assert started == [], 'opening a scheduled project started a cycle'
+
+    # forcing is a decision, not navigation — and it is uncapped
+    gui_api.api_memory_autoscan({}, dict(body, force=True))
+    assert started == [(actual, None)]
+
+
 def test_turning_it_off_turns_off_the_open_scan_too(tmp_path, monkeypatch):
     from harness import Sandbox
     from claude_sessions import memhub
@@ -323,9 +364,16 @@ def test_repeated_ticks_converge_to_not_stale(monkeypatch, tmp_path):
     assert len(set(calls)) == 9, 'every module was eventually extracted'
 
 
-def test_a_capped_pass_asks_to_be_called_back_soon(monkeypatch, tmp_path):
-    """A cycle does at most auto_cap modules. Waiting the full interval between
-    passes would leave memory stale for an hour while auto-memory was on."""
+def test_a_capped_pass_does_not_shorten_the_cadence(monkeypatch, tmp_path):
+    """A cycle does at most auto_cap modules, and the rest wait for the NEXT
+    scheduled pass — not for a shorter catch-up one.
+
+    The loop used to come back in 45s for as long as any project still owed
+    work, on the reasoning that memory should converge rather than sit stale.
+    That inverted the point of the cap: across several opted-in projects it is
+    most of a daily limit inside an hour, and on a rate-limited account it was
+    six *failed* extractions repeating forever. The cap decides what one pass
+    may spend; the interval decides how often that happens."""
     from harness import Sandbox
     from claude_sessions import gui_api, memhub, gui
     sb = Sandbox(monkeypatch, tmp_path)
@@ -345,7 +393,15 @@ def test_a_capped_pass_asks_to_be_called_back_soon(monkeypatch, tmp_path):
         {'path': actual, 'encoded': enc, 'primary_cfgdir': str(sb.cfg)}])
 
     assert gui_api._auto_scan_pass() is True, 'nine modules, cap of six'
-    assert gui_api.CATCHUP_INTERVAL < 300, 'the catch-up wait must be short'
+
+    from claude_sessions import config as config_mod
+    monkeypatch.setattr(config_mod, 'load_settings',
+                        lambda: {'auto_memory_interval': 1800})
+    assert gui_api._next_wait(owed=True) == 1800, 'work left must not shorten the wait'
+    assert gui_api._next_wait(owed=False) == 1800
+    monkeypatch.setattr(config_mod, 'load_settings',
+                        lambda: {'auto_memory_interval': 5})
+    assert gui_api._next_wait(owed=True) == gui_api.MIN_INTERVAL, 'the floor holds'
 
 
 def test_a_project_that_is_already_current_still_reports_fresh(monkeypatch, tmp_path):
@@ -405,9 +461,10 @@ def test_the_scheduler_runs_a_pass_on_launch(monkeypatch):
 
 
 def test_it_keeps_going_after_the_first_pass(monkeypatch):
-    """One pass at launch is not "periodically". The wait between passes is the
-    configured interval, or CATCHUP_INTERVAL while a project still owes work —
-    the same loop either way, and the short one is what a test can observe."""
+    """One pass at launch is not "periodically". The cadence itself is
+    `_next_wait`'s job and is asserted there; this only proves the loop comes
+    back, so it drives the wait through that seam rather than through a settings
+    interval it cannot make shorter than a minute."""
     import threading
     from claude_sessions import gui_api
     n = []
@@ -417,10 +474,10 @@ def test_it_keeps_going_after_the_first_pass(monkeypatch):
         n.append(1)
         if len(n) >= 3:
             done.set()
-        return True                       # still owed → the catch-up wait
+        return True                       # work still owed
 
     monkeypatch.setattr(gui_api, 'STARTUP_DELAY', 0.05)
-    monkeypatch.setattr(gui_api, 'CATCHUP_INTERVAL', 0.05)
+    monkeypatch.setattr(gui_api, '_next_wait', lambda owed=False: 0.05)
     monkeypatch.setattr(gui_api, '_auto_scan_pass', _pass)
     monkeypatch.setattr(gui_api, '_sched_started', False)
     try:
@@ -437,7 +494,7 @@ def test_a_stopped_scheduler_stops(monkeypatch):
     from claude_sessions import gui_api
     n = []
     monkeypatch.setattr(gui_api, 'STARTUP_DELAY', 0.05)
-    monkeypatch.setattr(gui_api, 'CATCHUP_INTERVAL', 0.05)
+    monkeypatch.setattr(gui_api, '_next_wait', lambda owed=False: 0.05)
     monkeypatch.setattr(gui_api, '_auto_scan_pass', lambda: n.append(1) or True)
     monkeypatch.setattr(gui_api, '_sched_started', False)
     gui_api.start_auto_memory_scheduler()

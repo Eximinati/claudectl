@@ -11,3 +11,10 @@
 *.ico binary
 *.png binary
 *.jpg binary
+
+# Machine-written — collapse in diffs so reviewers stop reviewing generated text.
+# claudectl rewrites these from the semantic graph and the route tables; the
+# thing to review is the generator, never its output.
+.claude/rules/claudectl-mem-*.md linguist-generated=true
+docs/api.md linguist-generated=true
+plugin/skills/** linguist-generated=true

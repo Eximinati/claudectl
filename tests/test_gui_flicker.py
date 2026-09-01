@@ -349,7 +349,7 @@ def test_jobs_run_inline_and_escalate_to_the_modal():
     assert 'function inlineJob(host,kind,params,o)' in PAGE
     assert 'if(!J.modal){J.modal=true;inlineClear(J);}   // escalate' in PAGE
     for kind in ('memory_build', 'review', 'ai_scaffold', 'ai_compress',
-                 'lessons_scan', 'agent_ai', 'skill_ai', 'hook_ai'):
+                 'lessons_scan', 'rules_sync', 'agent_ai', 'skill_ai', 'hook_ai'):
         assert f"inlineJob('#jban','{kind}'" in PAGE, kind
         assert f"runJob('{kind}'" not in PAGE, f'{kind} still opens the modal'
 

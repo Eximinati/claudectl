@@ -90,9 +90,13 @@ def _seed_audit_project(sb):
     rules = os.path.join(actual, '.claude', 'rules')
     os.makedirs(rules, exist_ok=True)
     with open(os.path.join(rules, 'lazy-rule.md'), 'w', encoding='utf-8') as f:
-        f.write('---\nglobs:\n  - "src/**"\n---\nrule body\n')
+        f.write('---\npaths:\n  - "src/**"\n---\nrule body\n')
     with open(os.path.join(rules, 'always-rule.md'), 'w', encoding='utf-8') as f:
         f.write('always-on rule body\n')
+    # claims a glob in the Cursor spelling. Claude Code does not read `globs:`,
+    # so this file loads into EVERY session — the audit must not call it lazy.
+    with open(os.path.join(rules, 'globs-rule.md'), 'w', encoding='utf-8') as f:
+        f.write('---\nglobs: "src/**"\n---\nrule body\n')
     with open(os.path.join(folder, 'system-prompt.txt'), 'w', encoding='utf-8') as f:
         f.write('be terse\n')
     return actual, folder
@@ -110,6 +114,11 @@ def test_audit_items_labels_tokens_lazy(monkeypatch, tmp_path):
     assert 'global ~/.claude/CLAUDE.md' in by
     assert by['rule lazy-rule.md']['lazy'] is True
     assert by['rule always-rule.md']['lazy'] is False
+    # `globs:` is the Cursor key. Claude Code scopes on `paths:` alone and loads
+    # everything else unconditionally, so counting a globs-only file as lazy
+    # understated the always-on total by its whole size — on this repo, by the
+    # ~3.9k tokens of all eleven memory rules at once.
+    assert by['rule globs-rule.md']['lazy'] is False
     assert 'system-prompt.txt (--system-prompt-file)' in by
     mcp_rows = [l for l in by if l.startswith('MCP servers (1)')]
     assert mcp_rows and by[mcp_rows[0]]['tokens'] == ctxaudit.MCP_TOKENS_PER_SERVER
@@ -206,3 +215,83 @@ def test_protected_regions_are_reported_in_the_audit(monkeypatch, tmp_path):
         f.write(f'# proj\n\n{_KEEP_START}\n## Keep\nsecret\n{_KEEP_END}\n\n## Rest\nx\n')
     labels = [i['label'] for i in ctxaudit.audit_items(actual, folder)]
     assert any('protected' in l for l in labels), labels
+
+
+def test_the_headless_openers_still_match_the_prompts_we_send():
+    """The opener list is how transcripts written before HEADLESS_MARK existed
+    are recognised. It can only rot one way — a prompt gets reworded — so pin
+    each opener to the source of the prompt that produces it.
+
+    It rots the *other* way too, and this test cannot see that: a new headless
+    prompt whose opener nobody adds. That cost one row (`agents.sharpen_prompt`,
+    listed as a session topic under "Rewrite the `description` field…"). The
+    structural answer is HEADLESS_MARK, which `memory._claude_stdin` appends to
+    every prompt regardless of who wrote it — so a missing opener now only
+    affects transcripts recorded before the marker existed, and ages out."""
+    import inspect
+    from claude_sessions import (sessions, lessons, claude_md as cmd, review,
+                                 brief, agents)
+    src = '\n'.join(inspect.getsource(m)
+                    for m in (memory, lessons, cmd, review, brief, agents))
+    for opener in sessions.HEADLESS_OPENERS:
+        assert opener in src, f'no prompt starts with {opener!r} any more — update HEADLESS_OPENERS'
+
+
+def test_claudectl_talking_to_itself_is_not_a_session_topic(monkeypatch, tmp_path):
+    """`claude -p` writes a transcript into ~/.claude/projects exactly like a
+    session you had, so claudectl's own calls were listed back as "session
+    topics" — always-on CLAUDE.md tokens spent describing claudectl extracting
+    a module, distilling lessons, and compressing this very file."""
+    from claude_sessions import sessions, claude_md as cmd
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+
+    # one real session, one legacy headless call (no marker), one marked one
+    for sid, text in (
+            ('aaaaaaaa', 'fix the launch bug on windows'),
+            ('bbbbbbbb', 'You are distilling durable LESSONS from a coding-session '
+                         'transcript so future sessions start smarter.'),
+            ('cccccccc', 'Summarise the diff below.\n\n' + sessions.HEADLESS_MARK)):
+        make_jsonl(os.path.join(folder, sid + '.jsonl'), n_msgs=2, preview=text)
+
+    block = cmd._build_sessions_block(folder, {})
+    assert 'fix the launch bug' in block
+    assert 'distilling durable LESSONS' not in block, 'a lessons scan was listed as a session'
+    assert 'Summarise the diff' not in block, 'HEADLESS_MARK did not exclude the call'
+
+
+def test_headless_lines_already_in_the_file_are_dropped(monkeypatch, tmp_path):
+    """The block is rebuilt by MERGING with what CLAUDE.md already holds, so
+    filtering only the fresh scan would leave every historical one in place."""
+    from claude_sessions import claude_md as cmd
+    Sandbox(monkeypatch, tmp_path)
+    existing = {
+        'f48befd7': "- **f48befd7** (74 msgs): i don't see my accounts anymore",
+        'dbe1a401': '- **dbe1a401** (2 msgs): You are distilling durable LESSONS from a transcript',
+        '34df1808': '- **34df1808** (3 msgs): Compress this CLAUDE.md project-instructions file. It is',
+    }
+    block = cmd._build_sessions_block('', existing)
+    assert 'accounts anymore' in block
+    assert 'distilling durable LESSONS' not in block
+    assert 'Compress this CLAUDE.md' not in block
+
+
+def test_every_headless_prompt_leaves_marked(monkeypatch, tmp_path):
+    """One seam, so marking cannot be forgotten at a new call site: everything
+    that shells out to `claude -p` goes through memory._claude_stdin."""
+    from claude_sessions import sessions
+    Sandbox(monkeypatch, tmp_path)
+    seen = {}
+    monkeypatch.setattr(memory, 'extract_model', lambda: '')
+    monkeypatch.setattr(memory._c, 'get_claude_exe', lambda: 'claude.exe')
+    monkeypatch.setattr(memory._tls, 'silent', True, raising=False)
+
+    def fake(args, input_text=None, cwd=None, timeout=None):
+        seen['prompt'] = input_text
+        return '{}'
+    import claude_sessions.gui_api as ga
+    monkeypatch.setattr(ga, '_run_cancellable', fake)
+
+    memory._claude_stdin('extract this module', str(tmp_path))
+    assert sessions.HEADLESS_MARK in seen['prompt']
+    assert seen['prompt'].startswith('extract this module')

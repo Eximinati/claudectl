@@ -19,7 +19,7 @@ from . import config as _c
 from . import render
 
 SKIP_DIRS = {'.git', 'node_modules', '__pycache__', 'venv', '.venv', '.tox',
-             'dist', 'build', '.mypy_cache', '.pytest_cache', '.claudectl',
+             'dist', 'build', 'site', '.mypy_cache', '.pytest_cache', '.claudectl',
              '.claude', 'site-packages', '.next', 'target', 'bin', 'obj',
              '.idea', '.vscode', 'coverage', '.cache'}
 SKIP_EXT = {'.pyc', '.pyo', '.so', '.dll', '.exe', '.bin', '.png', '.jpg',

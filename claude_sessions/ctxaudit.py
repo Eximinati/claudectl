@@ -101,7 +101,12 @@ def _rule_is_lazy(text):
     for ln in lines[1:12]:
         if ln.strip() == '---':
             break
-        if re.match(r'^(globs|paths)\s*:', ln.strip()):
+        # `paths:` ONLY. Accepting `globs:` here is what let claudectl's own
+        # rule files — which wrote `globs:` — be counted as lazy while Claude
+        # Code loaded every one of them into every session. The audit's whole
+        # job is the always-on total, so a false lazy is the worst answer it
+        # can give.
+        if re.match(r'^paths\s*:', ln.strip()):
             return True
     return False
 

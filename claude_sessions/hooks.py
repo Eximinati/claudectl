@@ -777,24 +777,56 @@ def _move(s, event, idx, src_key, dst_key):
     return entry
 
 
+def _move_across(event, index, src_key, dst_key, cfgdir=None):
+    """Move one hook out of `src_key` in every account that has it.
+
+    Installing already fans out (`_hook_targets`, and the GUI says so on the
+    Templates card), and turning one OFF did not — so `notify-on-input-needed`,
+    installed once, sat enabled in all five accounts on this machine and kept
+    firing from the other four after the user disabled it. "The reader narrows,
+    the writer does not" was already the stated rule; the writers here were the
+    two that broke it.
+
+    The index cannot be reused across accounts — the same event holds a
+    different number of entries in each — so `index` only resolves the hook in
+    the account the caller is looking at, and every other account is matched by
+    what the hook actually IS (`_cmd_keys`, interpreter-independent). Passing an
+    explicit `cfgdir` still means that account alone, which is what the GUI's
+    account picker sends.
+    """
+    ref = _load(cfgdir)
+    entries = (ref.get(src_key) or {}).get(event) or []
+    idx = int(index)
+    if not isinstance(entries, list) or idx >= len(entries):
+        return False
+    if cfgdir:
+        if _move(ref, event, idx, src_key, dst_key) is None:
+            return False
+        return _save(ref, cfgdir)
+    keys = _cmd_keys(entries[idx])
+    moved = False
+    for _name, d in account_dirs():
+        s = _load(d)
+        for i, e in enumerate((s.get(src_key) or {}).get(event) or []):
+            if _cmd_keys(e) == keys:
+                _move(s, event, i, src_key, dst_key)
+                moved = _save(s, d) or moved
+                break
+    return moved
+
+
 def set_hook_enabled(event, index, enabled, cfgdir=None):
     """Move one hook between `hooks` and `hooks_disabled`. Returns True when it
     moved. The pure half of the TUI's toggle, so the GUI does not need a second
     implementation of the move."""
-    s = _load(cfgdir)
     src, dst = ('hooks_disabled', 'hooks') if enabled else ('hooks', 'hooks_disabled')
-    if _move(s, event, int(index), src, dst) is None:
-        return False
-    return _save(s, cfgdir)
+    return _move_across(event, index, src, dst, cfgdir)
 
 
 def remove_hook(event, index, enabled=True, cfgdir=None):
     """Delete one hook outright, from either state block."""
-    s = _load(cfgdir)
-    key = 'hooks' if enabled else 'hooks_disabled'
-    if _move(s, event, int(index), key, None) is None:
-        return False
-    return _save(s, cfgdir)
+    return _move_across(event, index, 'hooks' if enabled else 'hooks_disabled',
+                        None, cfgdir)
 
 
 def _toggle_or_remove(sel, cfgdir=None):

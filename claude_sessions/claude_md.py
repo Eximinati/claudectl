@@ -202,6 +202,19 @@ def _build_sessions_block(proj_folder, existing_entries, cap=None):
             cap = load_settings().get('claude_md_sessions_cap', 10)
         except Exception:
             cap = 10
+    # claudectl's own headless calls (extract a module, distil lessons, compress
+    # this very file) leave transcripts in ~/.claude/projects like any session,
+    # and were being listed back as "session topics" — always-on CLAUDE.md
+    # tokens spent describing claudectl talking to itself. New ones carry
+    # sessions.HEADLESS_MARK; lines already written into the file are matched by
+    # the prompt opener that produced their preview.
+    from .sessions import is_headless_text
+
+    def _kept(entries):
+        return {k: v for k, v in entries.items()
+                if not is_headless_text(v.split('): ', 1)[-1])}
+    existing_entries = _kept(existing_entries)
+
     if not proj_folder or not os.path.isdir(proj_folder):
         if existing_entries:
             kept = list(existing_entries.values())
@@ -239,8 +252,10 @@ def _build_sessions_block(proj_folder, existing_entries, cap=None):
                 sess_name = open(name_file, encoding='utf-8').read().strip()
             except Exception:
                 pass
-        preview, count = get_session_info(jpath)
-        if not preview:
+        from .sessions import get_session_stats
+        st = get_session_stats(jpath)          # same cached parse as get_session_info
+        preview, count = st['preview'], st['count']
+        if not preview or st.get('headless'):
             continue
         key = sess_name if sess_name else sid[:8]
         line = f"- **{key}** ({count} msgs): {preview[:120]}"

@@ -366,3 +366,75 @@ def test_the_stale_on_change_preset_is_wired_to_a_real_signal():
     assert p['entry']['matcher'] == 'Edit|Write|NotebookEdit'
     cmds = ' '.join(h['command'] for h in p['entry']['hooks'])
     assert 'memdirty_hook.py' in cmds and 'worklog_hook.py' not in cmds
+
+
+def _two_accounts(sb, tmp_path, monkeypatch):
+    """The sandbox is single-account by default; hook writers fan out, so the
+    interesting state needs two."""
+    from claude_sessions import config as config_mod
+    other = tmp_path / 'other-cfg'
+    other.mkdir()
+    monkeypatch.setattr(config_mod, 'all_config_dirs',
+                        lambda: [('default', str(sb.cfg)), ('work', str(other))])
+    return hooks.settings_path, os.path.join(str(other), 'settings.json')
+
+
+NOTIFY = {'hooks': [{'type': 'command', 'command': 'py -X utf8 notify_hook.py'}]}
+OTHER = {'hooks': [{'type': 'command', 'command': 'echo something-else'}]}
+
+
+def test_disabling_a_hook_disables_it_in_every_account(monkeypatch, tmp_path):
+    """Installing a template fans out to every account and the Templates card
+    says so; disabling did not. On the reporter's machine
+    `notify-on-input-needed` was enabled in all five accounts, so turning it off
+    in the GUI left four copies firing and the hook looked un-disable-able.
+
+    The hook sits at a DIFFERENT index in each account here, which is why the
+    fan-out cannot reuse the caller's index and matches on the command instead.
+    """
+    sb = Sandbox(monkeypatch, tmp_path)
+    sp, osp = _two_accounts(sb, tmp_path, monkeypatch)
+    json.dump({'hooks': {'Notification': [NOTIFY]}}, open(sp, 'w', encoding='utf-8'))
+    json.dump({'hooks': {'Notification': [OTHER, NOTIFY]}},
+              open(osp, 'w', encoding='utf-8'))
+
+    assert hooks.set_hook_enabled('Notification', 0, False) is True
+
+    d = json.load(open(sp, encoding='utf-8'))
+    assert 'Notification' not in d.get('hooks', {})
+    assert d['hooks_disabled']['Notification'] == [NOTIFY]
+
+    o = json.load(open(osp, encoding='utf-8'))
+    assert o['hooks']['Notification'] == [OTHER], 'the other account kept firing'
+    assert o['hooks_disabled']['Notification'] == [NOTIFY]
+
+
+def test_removing_a_hook_removes_it_in_every_account(monkeypatch, tmp_path):
+    """Same asymmetry, same seam — `remove_hook` and `set_hook_enabled` are one
+    function apart, so a fix to only one of them is half a fix."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    sp, osp = _two_accounts(sb, tmp_path, monkeypatch)
+    json.dump({'hooks': {'Notification': [NOTIFY]}}, open(sp, 'w', encoding='utf-8'))
+    json.dump({'hooks': {'Notification': [OTHER, NOTIFY]}},
+              open(osp, 'w', encoding='utf-8'))
+
+    assert hooks.remove_hook('Notification', 0) is True
+
+    assert 'Notification' not in json.load(open(sp, encoding='utf-8')).get('hooks', {})
+    o = json.load(open(osp, encoding='utf-8'))
+    assert o['hooks']['Notification'] == [OTHER]
+
+
+def test_naming_an_account_still_means_that_account_alone(monkeypatch, tmp_path):
+    """The GUI's account picker sends `cfgdir`, and the rule the code already
+    states is "the reader narrows, the writer does not" — so an explicitly
+    narrowed writer must stay narrow, or the picker would be a lie."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    sp, osp = _two_accounts(sb, tmp_path, monkeypatch)
+    json.dump({'hooks': {'Notification': [NOTIFY]}}, open(sp, 'w', encoding='utf-8'))
+    json.dump({'hooks': {'Notification': [NOTIFY]}}, open(osp, 'w', encoding='utf-8'))
+
+    assert hooks.set_hook_enabled('Notification', 0, False, cfgdir=str(sb.cfg)) is True
+
+    assert 'Notification' not in json.load(open(sp, encoding='utf-8')).get('hooks', {})
+    assert json.load(open(osp, encoding='utf-8'))['hooks']['Notification'] == [NOTIFY]

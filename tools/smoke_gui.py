@@ -225,33 +225,190 @@ ROUTES = {
          'cfgdir': 'w', 'tokens': '77k', 'omni': True}]},
     # The memory tab is the headline feature, so the demo workspace has a
     # memory: an empty one screenshots as an advert for nothing.
+    # `est` here was invented — {coverage,modules,tokens,budget} against a real
+    # {digest_tokens,hook_budget,rules}. A stub that agrees with nothing audits
+    # nothing, and this one hid the fact that the tab never read `est` at all.
     '/api/memory/state': {
         'generated_at': '2026-08-12T09:15:00Z',
         'n_entities': 148, 'n_lessons': 9, 'n_pending': 2, 'n_unscanned': 1,
-        'hook_on': True, 'rules_on': True,
-        'est': {'coverage': 82, 'modules': 11, 'tokens': 232, 'budget': 250}},
-    '/api/lessons': {'lessons': [
+        'n_relations': 61, 'n_module_edges': 4, 'n_modules': 11,
+        'session_counter': 34,
+        'hook_on': True, 'rules_on': True, 'auto_on': True, 'budget': 600,
+        'pending_units': 2, 'last_extracted': 3,
+        'last_cost_usd': 0.1237, 'cost_usd_total': 2.8451,
+        'cost_history': [0.09, 0.14, 0.07, 0.21, 0.12, 0.18, 0.1, 0.1237],
+        'auto_updated': '2026-08-12T09:15:00Z',
+        'auto_last': {'graph': True, 'extracted': 3, 'lessons': 2,
+                      'scanned': 1, 'pending': 2},
+        'evicted': 3, 'evicted_names': ['LegacyPoller', 'OldCsvWriter', 'TempShim'],
+        'top': [{'name': 'CheckoutHandler', 'hits': 33, 'module': 'api'},
+                {'name': 'LedgerStore', 'hits': 17, 'module': 'billing'},
+                {'name': 'RetryPolicy', 'hits': 9, 'module': 'api'}],
+        # the hook is NOT installed on purpose — that branch is the only reason
+        # the indicator exists
+        'dirty': 4, 'dirty_hook': False,
+        # `pending_units` splits into these two: a capped cycle and a failed one
+        # both left it set, and every consumer worded it "the next cycle takes
+        # them". One of each here, so both branches render.
+        'last_failed': 1, 'last_skipped': 1,
+        'last_error': 'claude exited 1: rate limit reached',
+        'hits_pending': 12,
+        'auto_interval': 1800,
+        'est': {'digest_tokens': 232, 'hook_budget': 600, 'rules': [
+            {'file': 'claudectl-mem-app-api.md', 'tokens': 372,
+             'unit': 'app/api', 'glob': 'api/**'},
+            {'file': 'claudectl-mem-app-billing.md', 'tokens': 288,
+             'unit': 'app/billing', 'glob': 'billing/**'},
+            {'file': 'claudectl-mem-app-root.md', 'tokens': 145,
+             'unit': 'app/(root)', 'glob': '*'}]}},
+    '/api/memory/progress': {'progress': None, 'last': {
+        'ok': False, 'at': _NOW - 900,
+        'error': 'claude exited 1: rate limit reached'}},
+    '/api/memory/entity': {
+        'found': True, 'name': 'CheckoutHandler', 'type': 'component',
+        'summary': 'Orchestrates the checkout flow: cart totals, payment capture, '
+                   'and the retry policy around the gateway call.',
+        'module': 'api', 'repo': 'app', 'unit': 'app/api', 'hits': 33, 'rank': 30,
+        'status': '', 'valid': True, 'kind': '', 'created_at': '2026-07-02T10:00:00Z',
+        'source_files': ['api/checkout.py', 'api/retry.py'],
+        'unit_summary': 'The HTTP surface: checkout, retries, and the webhook receiver.',
+        'relations': [{'rel': 'uses', 'other': 'RetryPolicy', 'dir': 'out'},
+                      {'rel': 'calls', 'other': 'LedgerStore', 'dir': 'out'},
+                      {'rel': 'depends_on', 'other': 'PaymentGateway', 'dir': 'in'}],
+        'sessions': []},
+    # /api/history carries the graph's SHAPE, because a line diff of a
+    # re-serialised 300 KB JSON is +27808/-27783 whatever changed. Enough
+    # versions here to exercise the collapse, too.
+    '/api/history': {'keys': [
+        {'key': 'claude_md', 'title': 'CLAUDE.md', 'now': None, 'versions': [
+            {'ts': _NOW - 3600, 'added': 4, 'removed': 61, 'age': '1h'},
+            {'ts': _NOW - 7200, 'added': 2, 'removed': 2, 'age': '2h'},
+            {'ts': _NOW - 86400, 'added': 3, 'removed': 4, 'age': '1d'},
+            {'ts': _NOW - 90000, 'added': 5, 'removed': 3, 'age': '1d'},
+            {'ts': _NOW - 172800, 'added': 9, 'removed': 1, 'age': '2d'},
+            {'ts': _NOW - 259200, 'added': 1, 'removed': 1, 'age': '3d'}]},
+        {'key': 'memory_graph', 'title': 'memory graph',
+         'now': {'entities': 148, 'relations': 61, 'lessons': 9},
+         'versions': [
+            {'ts': _NOW - 3600, 'added': 27808, 'removed': 27783, 'age': '1h',
+             'shape': {'entities': 151, 'relations': 60, 'lessons': 8}},
+            {'ts': _NOW - 90000, 'added': 26356, 'removed': 25730, 'age': '1d',
+             'shape': {'entities': 140, 'relations': 55, 'lessons': 6}}]},
+        {'key': 'system_prompt', 'title': 'system prompt', 'now': None,
+         'versions': []}]},
+    '/api/lessons': {'counter': 34, 'ttl': 30, 'lessons': [
         {'id': 'l1', 'status': 'approved', 'confidence': 0.9,
+         'kind': 'error_fix', 'last_used': 32,
          'name': 'Retries need a jittered backoff',
          'summary': 'The gateway retried on a fixed 200ms and stampeded the '
                     'upstream; every retry path takes jitter now.'},
         {'id': 'l2', 'status': 'pinned', 'confidence': 0.8,
+         'kind': 'decision', 'last_used': 4,
          'name': 'Money is integer cents, never float',
          'summary': 'A float total drifted by a cent across the invoice '
                     'rollup; the ledger is integer cents end to end.'},
-        {'id': 'l3', 'status': 'pending', 'confidence': 0.6,
+        # 30 - (34 - 6) = 2 sessions from eviction: the state the decay column
+        # exists to warn about
+        {'id': 'l3', 'status': 'approved', 'confidence': 0.6,
+         'kind': 'correction', 'last_used': 6,
          'name': 'Migrations run before the deploy gate',
          'summary': 'Observed twice: a deploy went out ahead of its schema '
-                    'change and the API 500d until the migration landed.'}]},
-    '/api/worklog': {'on': True, 'installed': True, 'entries': [
-        {'when': '2h', 'summary': 'split the checkout handler, added retries',
+                    'change and the API 500d until the migration landed.'},
+        {'id': 'l4', 'status': 'pending', 'confidence': 0.5,
+         'kind': 'preference', 'last_used': 34,
+         'name': 'Prefer one query over N+1 in the report path',
+         'summary': 'The weekly report issued a query per row; it is one join '
+                    'with an index now.'}]},
+    '/api/worklog': {'on': True, 'installed': {'default': True, 'teamA': False},
+                     'entries': [
+        {'ended_at': '2026-08-12T07:40:00Z', 'session_id': 'a1b2c3d4',
+         'summary': 'split the checkout handler, added retries',
          'files': ['api/checkout.py', 'api/retry.py']},
-        {'when': '1d', 'summary': 'moved totals to integer cents',
+        {'ended_at': '2026-08-11T16:02:00Z', 'session_id': 'b2c3d4e5',
+         'summary': 'moved totals to integer cents',
          'files': ['billing/ledger.py']}]},
-    '/api/workspace-status': {'score': 86, 'label': 'healthy', 'lines': [
-        'memory 2h old · 148 entities · 11 modules',
-        'CLAUDE.md 232 tok of a 250 budget',
-        'git: main · clean']},
+    # states, weights and details — not pre-rendered terminal lines. A mix of
+    # fresh/stale, because a card of all-green proves no state renders.
+    '/api/workspace-status': {
+        'score': 68, 'safe': True, 'generated_at': '2026-08-12T09:15:00Z',
+        'checks': [
+            {'name': 'manifest', 'state': 'fresh', 'detail': 'schema v1',
+             'applicable': True, 'weight': 5},
+            {'name': 'claude_md', 'state': 'fresh', 'detail': 'CLAUDE.md present',
+             'applicable': True, 'weight': 25},
+            {'name': 'claude_md_fresh', 'state': 'stale',
+             'detail': 'built 3 commits ago', 'applicable': True, 'weight': 25},
+            {'name': 'repo', 'state': 'stale', 'detail': 'HEAD moved since 9e1b6d6',
+             'applicable': True, 'weight': 10},
+            {'name': 'mcp_docs', 'state': 'stale', 'detail': 'undocumented: TestMCP',
+             'applicable': True, 'weight': 15},
+            {'name': 'sessions', 'state': 'fresh', 'detail': '42 analyzed',
+             'applicable': True, 'weight': 10},
+            {'name': 'conflicts', 'state': 'fresh', 'detail': 'none',
+             'applicable': False, 'weight': 10}]},
+    '/api/recall-preview': {
+        'tokens': 214, 'empty': False,
+        'items': ['CheckoutHandler', 'RetryPolicy', 'Retries need a jittered backoff'],
+        'context': 'PROJECT MEMORY\n- CheckoutHandler (component) — orchestrates '
+                   'the checkout flow\n- RetryPolicy (service) — jittered backoff'},
+    '/api/system-prompt': {'text': 'Answer directly. No preamble.'},
+    '/api/claude-md': {
+        'exists': True, 'path': 'C:/x/alpha/CLAUDE.md', 'tokens': 1180,
+        'text': '# alpha\n\nA checkout service.\n\n## Conventions\n'
+                '- Money is integer cents.\n',
+        'blocks': [
+            {'key': 'manual', 'label': 'Your prose', 'present': True, 'tokens': 420},
+            {'key': 'keep', 'label': 'Protected (2 fenced)', 'present': True,
+             'tokens': 96},
+            {'key': 'autogen', 'label': 'AUTOGEN — repos and commits',
+             'present': True, 'tokens': 210,
+             'text': '## Recent commits\n- 9e1b6d6 fix the retry stampede\n'},
+            {'key': 'sessions', 'label': 'SESSIONS — session topics',
+             'present': True, 'tokens': 318, 'entries': 12,
+             'text': '## Session topics\n- **a1b2c3d4** (44 msgs): checkout retries\n'},
+            {'key': 'memory', 'label': 'MEMORY — the digest claudectl builds',
+             'present': True, 'tokens': 232,
+             'text': '## Project memory\n- **app/api** — checkout, retries\n'}]},
+    # one import is BROKEN — the case the row exists to surface
+    '/api/memory-map': {'files': [
+        {'label': 'user (default)', 'path': 'C:/Users/x/.claude/CLAUDE.md',
+         'exists': True, 'imports': []},
+        {'label': 'project', 'path': 'C:/x/alpha/CLAUDE.md', 'exists': True,
+         'imports': [{'ref': './docs/style.md', 'exists': True},
+                     {'ref': './docs/deleted-guide.md', 'exists': False}]},
+        {'label': 'project/.claude', 'path': 'C:/x/alpha/.claude/CLAUDE.md',
+         'exists': False, 'imports': []}]},
+    '/api/deny': {'patterns': [
+        {'pattern': 'node_modules/**', 'why': '18k files, 240 MB'},
+        {'pattern': 'site/**', 'why': 'generated mkdocs output'}]},
+    '/api/graph-lite': {
+        'files': 412, 'dirs': 38, 'repos': 1, 'deps': 96, 'truncated': False,
+        'languages': [['Python', 210], ['JavaScript', 88], ['Markdown', 41]],
+        'top_repos': [{'label': 'alpha', 'files': 412, 'deps': 96}],
+        'modules': [{'label': 'api', 'files': 44, 'rank': 30, 'heat': 0.8},
+                    {'label': 'billing', 'files': 31, 'rank': 18, 'heat': 0.5}],
+        'edges': [[0, 1, 12]],
+        'memory': {'entities': 148, 'lessons': 9, 'pending': 2,
+                   'unscanned': 1, 'generated_at': '2026-08-12T09:15:00Z'}},
+    '/api/ctxaudit': {'total': 3120, 'items': [
+        {'label': 'CLAUDE.md · manual content', 'tokens': 420, 'lazy': False,
+         'warnings': [], 'path': 'C:/x/alpha/CLAUDE.md'},
+        {'label': 'CLAUDE.md · protected (2 fenced)', 'tokens': 96, 'lazy': False,
+         'warnings': [], 'path': 'C:/x/alpha/CLAUDE.md'},
+        {'label': 'CLAUDE.md · session topics (12)', 'tokens': 318, 'lazy': False,
+         'warnings': ['12 session entries (cap 10) — prune (p)'],
+         'path': 'C:/x/alpha/CLAUDE.md'},
+        {'label': 'CLAUDE.md · memory digest', 'tokens': 232, 'lazy': False,
+         'warnings': [], 'path': 'C:/x/alpha/CLAUDE.md'},
+        {'label': 'global ~/.claude/CLAUDE.md', 'tokens': 640, 'lazy': False,
+         'warnings': ['> 500 tok — loads in EVERY project'],
+         'path': 'C:/Users/x/.claude/CLAUDE.md'},
+        {'label': 'rule claudectl-mem-app-api.md', 'tokens': 372, 'lazy': True,
+         'warnings': [], 'path': 'C:/x/alpha/.claude/rules/claudectl-mem-app-api.md'},
+        # tokens=None is unknowable-statically and rendered as literal `null`
+        # for its whole life — the row that proves the fix
+        {'label': 'MCP servers (2) — rough estimate', 'tokens': None, 'lazy': False,
+         'warnings': [], 'path': None}]},
     '/api/agents/library': {'own': [
         {'name': 'reviewer', 'desc': 'reviews diffs', 'scope': 'user',
          'path': 'C:/x/agents/reviewer.md', 'model': ''}],
@@ -265,7 +422,7 @@ ROUTES = {
                 {'name': 'security-auditor', 'desc': 'finds holes',
                  'path': 'C:/x/lib/sec.md', 'model': ''}]}],
         'known_tools': ['Read', 'Bash'], 'models': []},
-    '/api/agents': {'categories': []}, '/api/skills': {'project': [], 'templates': []},
+    '/api/agents': {'categories': []},   # (the real /api/skills stub is below)
     '/api/hooks': {'hooks': [], 'templates': []},
     '/api/omniroute/status': {'ok': False}, '/api/failover/status': {'running': False},
     '/api/memory/auto-list': {'projects': []},
@@ -398,13 +555,8 @@ ROUTES = {
         'near': [{'text': 'Always run the linter before committing', 'projects': 1,
                   'why': 'seen in 1 project — needs 1 more, or pin it to promote it now'}],
         'block': '## Conventions\n- Prefer stdlib over a new dependency\n'},
-    '/api/history': {'keys': [
-        {'key': 'claude_md', 'title': 'CLAUDE.md', 'versions': [
-            {'ts': _NOW - 900, 'age': '15m', 'added': 4, 'removed': 61},
-            {'ts': _NOW - 90000, 'age': '1d', 'added': 12, 'removed': 3}]},
-        {'key': 'memory_graph', 'title': 'memory graph', 'versions': [
-            {'ts': _NOW - 3600, 'age': '1h', 'added': 0, 'removed': 18}]},
-        {'key': 'system_prompt', 'title': 'system prompt', 'versions': []}]},
+    # (the /api/history stub lives with the memory ones above — a second entry
+    #  for the same key would silently win, and did)
     '/api/ctxaudit/prune-preview': {'ok': True, 'changed': True, 'old_tokens': 1840,
                                     'new_tokens': 1190,
                                     'dropped': ['Fable Claude Script', 'AI ClaudeMd']},
@@ -960,6 +1112,146 @@ def main():
             "(()=>{const e=document.querySelector('#memBudget');return e?e.type:'missing';})()")
         check('#memBudget is a number input', btype == 'number', btype)
 
+        # ── the memory tab shows the artifacts, not just counters ──
+        # Every number below was already in a payload this tab fetched; the
+        # regression class is "the renderer stopped reading a field", which no
+        # route-coverage gate can see because the route is called either way.
+        print('\n— memory: what is built, and what it costs —')
+        inv = pg.evaluate("document.querySelectorAll('#memInv tr').length")
+        check('the inventory lists the memory artifacts', inv >= 12, f'{inv} rows')
+        txt = pg.evaluate("document.querySelector('#content').innerText")
+        check('the always-on vs lazy split is stated with numbers',
+              '232 tok' in txt and 'when Claude opens a matching path' in txt
+              and 'per prompt' in txt, txt[:120])
+        # 232 tok reads as a lot or a little depending on nothing at all. The
+        # share of the window is the denominator that makes it interpretable,
+        # and CTX_WINDOW sat defined-and-unused until it rendered.
+        check('always-on cost is given as a share of the context window',
+              '0.1%' in txt, [l for l in txt.split('\n') if '%' in l][:2])
+        # four load-trigger groups, stated once each, instead of a badge
+        # repeated down a 12-row wall
+        buckets = pg.evaluate(
+            "[...document.querySelectorAll('#memInv .lbl')].map(e=>e.innerText)")
+        check('the artifacts are grouped by when they reach a session',
+              len(buckets) == 4, buckets)
+        glob = pg.evaluate(
+            "(()=>{const d=[...document.querySelectorAll('#memInv details')]"
+            ".find(x=>x.innerText.includes('Path-scoped'));if(!d)return 'no details';"
+            "d.open=true;return d.innerText;})()")
+        check('each rule names the paths it loads for',
+              'api/**' in glob and 'app/api' in glob, glob[:100].replace('\n', ' '))
+        check('cumulative spend is shown, not just the last cycle',
+              '2.845' in txt, [l for l in txt.split('\n') if 'total' in l.lower()][:2])
+        check('eviction names what it dropped', 'LegacyPoller' in txt)
+        check('reinforcement is visible', 'CheckoutHandler' in txt and '33' in txt)
+        check('a queued edit with no hook installed is flagged',
+              'stale-on-edit hook not installed' in txt)
+        # a failed unit and a capped one were summed into one `pending_units`
+        # and both worded "the next cycle takes them", so a rate-limited
+        # account produced dead calls forever, reported as progress.
+        check('a failed module reads as failed, not as queued',
+              'could not be extracted' in txt and 'rate limit reached' in txt,
+              [l for l in txt.split('\n') if 'extracted' in l][:2])
+        # and it says WHEN. A capped cycle used to trigger a 45s catch-up pass,
+        # which spent a daily limit inside an hour on a repo with a backlog; the
+        # cap is now the only thing that decides how much one pass does, and the
+        # configured cadence the only thing that decides how often.
+        check('a capped module says when the next pass is',
+              '1 module(s) — the next pass takes some, in 30 min' in txt,
+              [l for l in txt.split('\n') if 'queued' in l.lower()][:2])
+        check('the cadence is stated where auto-memory is switched on',
+              'every 30 min' in txt)
+        # the row showed the literal 'folding in' off the top-hits list, which
+        # is a different thing and never changed
+        # the bookkeeping bucket is collapsed by default — it is the one group
+        # that costs nothing — so open it before reading, which also proves the
+        # rows are really in there rather than dropped
+        hits = pg.evaluate(
+            "(()=>{const d=document.querySelector('#memKeep');if(!d)return 'no bucket';"
+            "d.open=true;const r=[...document.querySelectorAll('#memInv tr')]"
+            ".find(r=>r.innerText.includes('Reinforcement log'));"
+            "return r?r.innerText:'no row';})()")
+        check('the reinforcement log says how much is waiting',
+              '12 to fold in' in hits, hits[:120].replace('\n', ' '))
+        # ttl 30 - (counter 34 - last_used 6) = 2 sessions left on lesson l3,
+        # and the pinned one is exempt. Read the CELL, not the row text: a row
+        # mentioning '2' anywhere would pass a substring check while the column
+        # rendered nothing.
+        decay = pg.evaluate(
+            "(()=>{const cell=t=>{const r=[...document.querySelectorAll('.tbl tr')]"
+            ".find(r=>r.innerText.includes(t));return r?r.cells[3].innerText.trim():'';};"
+            "return {near:cell('Migrations run'),pinned:cell('Money is integer')};})()")
+        check('a lesson says how close it is to being dropped',
+              decay['near'] == '2' and decay['pinned'] == 'kept', decay)
+        # structured checks, not an ANSI-stripped <pre> blob
+        wsr = pg.evaluate(
+            "(()=>{const c=[...document.querySelectorAll('.card')]"
+            ".find(x=>x.innerText.startsWith('Workspace health'));"
+            "return c?{rows:c.querySelectorAll('.hrow').length,"
+            "fix:c.querySelectorAll('.hrow .btn').length,pre:c.innerText}:null;})()")
+        check('workspace checks render as rows with states',
+              bool(wsr) and wsr['rows'] == 7 and 'fresh' in wsr['pre']
+              and 'stale' in wsr['pre'], wsr and wsr['rows'])
+        check('every stale check offers the thing that fixes it',
+              bool(wsr) and wsr['fix'] >= 3, wsr and wsr['fix'])
+        check('memory history is on the memory tab',
+              pg.evaluate("!!document.querySelector('#histOut')"))
+        # a name and a hit count says a fact matters without saying what it is
+        pg.evaluate("entDetail('CheckoutHandler')")
+        pg.wait_for_timeout(600)
+        det = pg.evaluate(
+            "(()=>{const d=document.querySelector('#drawer');"
+            "return d&&d.classList.contains('show')?"
+            "document.querySelector('#dBody').innerText:'';})()")
+        check('a reinforced fact opens and explains itself',
+              'Orchestrates the checkout flow' in det and 'RetryPolicy' in det
+              and 'api/checkout.py' in det, det[:80].replace('\n', ' '))
+        pg.evaluate("document.querySelector('#drawer').classList.remove('show')")
+        # a line diff of a re-serialised 300KB JSON is +27808/-27783 whatever
+        # changed — a true number that answers nothing
+        hist = pg.evaluate("document.querySelector('#histOut').innerText")
+        check('a graph version is summarised by its shape, not by JSON lines',
+              '151 facts' in hist and '27808' not in hist,
+              [ln for ln in hist.split('\n') if 'facts' in ln][:1])
+
+        print('\n— CLAUDE.md: block by block —')
+        pg.evaluate("TAB='claudemd';drawProject()")
+        pg.wait_for_timeout(900)
+        blk = pg.evaluate(
+            "(()=>{const h=document.querySelector('#cmBlocks');if(!h)return null;"
+            "return {rows:h.querySelectorAll('.hrow').length,txt:h.innerText};})()")
+        check('CLAUDE.md is shown as its blocks', bool(blk) and blk['rows'] == 5,
+              blk and blk['rows'])
+        check('each block carries its token cost',
+              bool(blk) and blk['txt'].count('tok') >= 5)
+        check('each machine block has the button that regenerates it',
+              pg.evaluate("document.querySelectorAll('#cmBlocks .btn').length") >= 4)
+        cm = pg.evaluate("document.querySelector('#content').innerText")
+        check('a broken @import is called out',
+              'deleted-guide.md' in cm and 'missing' in cm)
+        check('version history moved to the file it is history of',
+              pg.evaluate("!!document.querySelector('#histOut')"))
+        # 12 versions is the right thing to KEEP and the wrong thing to show
+        hv = pg.evaluate(
+            "(()=>{const h=document.querySelector('#histOut');return h?"
+            "{rows:h.querySelectorAll(':scope > .agrow').length,"
+            "more:!!h.querySelector('details')}:null;})()")
+        check('a long history collapses instead of burying the recent one',
+              bool(hv) and hv['rows'] == 4 and hv['more'], hv)
+
+        print('\n— audit: one turn, every surface —')
+        pg.evaluate("TAB='audit';drawProject()")
+        pg.wait_for_timeout(900)
+        au = pg.evaluate("document.querySelector('#content').innerText")
+        check('an unknowable token count is not rendered as null',
+              'null' not in au and '~?' in au,
+              [l for l in au.split('\n') if 'null' in l][:2])
+        check('audit rows can open the file they cost you', 'open' in au)
+        check('audit no longer duplicates the history panel',
+              not pg.evaluate("!!document.querySelector('#histOut')"))
+        check('audit still totals the account-scoped surfaces',
+              'global ~/.claude/CLAUDE.md' in au and 'MCP servers' in au)
+
         pg.evaluate("go('settings')")
         pg.wait_for_timeout(900)
         # every settings key the server accepts must resolve to a LIVE control.
@@ -1123,7 +1415,7 @@ def main():
     # "FAILURES: none" every time. A floor on the number of checks executed is
     # the cheapest thing that would have caught it.
     # And a floor that never moves stops being a floor: it rises with the suite.
-    FLOOR = 85
+    FLOOR = 149
     if len(ran) < FLOOR:
         fails.append(f'only {len(ran)} checks ran, expected >= {FLOOR} — '
                      'part of this suite is not executing')

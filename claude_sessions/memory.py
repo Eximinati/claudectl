@@ -52,7 +52,10 @@ def _empty():
     return {'schema_version': SCHEMA_VERSION, 'generated_at': '',
             'entities': [], 'relations': [], 'summaries': {}, 'provenance': {},
             'module_edges': [], 'lessons_scanned': {}, 'session_counter': 0,
-            'pending_units': 0, 'repo_summaries': {}}
+            'pending_units': 0, 'repo_summaries': {},
+            # lifetime spend. No SCHEMA_VERSION bump needed: _migrate
+            # setdefaults every _empty() key onto whatever it loads.
+            'cost_usd_total': 0.0, 'cost_history': []}
 
 
 def _migrate(m):
@@ -365,11 +368,24 @@ def _claude_stdin(prompt, cwd, timeout=EXTRACT_TIMEOUT,
     `model` overrides the economy extract_model; '' forces the account default.
     `extra_args` is how _claude_json adds the structured-output flags without
     becoming a second spawn site.
-    Returns stdout text or ''."""
+    Returns stdout text or ''.
+
+    Every prompt leaves with `sessions.HEADLESS_MARK`. `claude -p` writes a
+    transcript into ~/.claude/projects exactly like a session you had, so
+    claudectl's own calls — extract a module, distil lessons, compress
+    CLAUDE.md — were being listed back to you as "session topics" and costing
+    always-on CLAUDE.md tokens to describe claudectl talking to itself. This is
+    the one seam every headless call passes through, so marking here is both
+    complete and impossible to forget at a new call site."""
+    global last_call_error
     from .config import get_claude_exe
+    from .sessions import HEADLESS_MARK
+    last_call_error = ''
     exe = get_claude_exe()
     if not exe:
+        last_call_error = 'the claude executable was not found'
         return ''
+    prompt = (prompt or '') + '\n\n' + HEADLESS_MARK
     args = [exe, '-p', '--max-turns', '20', '--disallowedTools', 'Write,Edit,NotebookEdit,Bash']
     m = extract_model() if model is None else (model or '').strip()
     if m:
@@ -387,6 +403,12 @@ def _claude_stdin(prompt, cwd, timeout=EXTRACT_TIMEOUT,
         args, prompt, crumbs, label, timeout=timeout, cwd=cwd)
     return out or ''
 
+
+#: why the last headless call failed, or ''. Same module-level-latch idiom as
+#: `last_call_cost` below, and for the same reason: the failure happens three
+#: frames below the code that has to report it. Set by gui_api._run_cancellable
+#: on a nonzero exit, cleared at the start of each call.
+last_call_error = ''
 
 #: last `total_cost_usd` reported by a _claude_json envelope, or None. The JSON
 #: output format carries the real figure, which is strictly better than the
@@ -661,14 +683,21 @@ def refresh_on_open(project_path, encoded=None):
     """Should opening this project kick off a refresh?
 
     A different question from `auto_enabled` — this one is scoped to something
-    you just did, so the global `memory_auto_refresh` remains its default and
-    the long-standing behaviour is unchanged. Opting a project into background
-    memory implies it."""
+    you just did, so for a project with no opinion the global
+    `memory_auto_refresh` decides and the long-standing behaviour is unchanged.
+
+    Opting a project into background auto-memory used to imply this too, and
+    that is exactly what made the configured cadence not mean anything: the
+    scheduler waited the interval, and then opening the project spent a cycle
+    anyway. Background auto-memory now means the scheduler OWNS the spend —
+    launch, then the interval, and nothing else. Pressing Build with Claude
+    still refreshes on demand; that is a decision, not a side effect of
+    navigating."""
     st, proj = _project_opts(project_path, encoded)
-    if proj.get('auto_memory'):
-        return True
     if 'auto_memory' in proj:
-        return False                       # explicitly turned off
+        # True  -> the scheduler owns it, so opening must not add a cycle
+        # False -> explicitly turned off; an explicit no beats the global default
+        return False
     return st.get('memory_auto_refresh') == 'open'
 
 
@@ -715,6 +744,38 @@ def has_dirty(project_path):
         return os.path.isfile(p) and os.path.getsize(p) > 0
     except OSError:
         return False
+
+
+def dirty_count(project_path):
+    """How many edits are queued. Same no-drain contract as has_dirty —
+    `drain_dirty` stays the only remover, or a display would eat the work."""
+    try:
+        p = dirty_log_path(project_path)
+        with open(p, encoding='utf-8', errors='replace') as f:
+            return sum(1 for line in f if line.strip())
+    except OSError:
+        return 0
+
+
+COST_HISTORY = 24
+
+
+def charge(mem):
+    """Fold the cost of the Claude call that just returned into the graph's
+    running total, and return it.
+
+    `last_cost_usd` only ever held the MOST RECENT cycle, so what memory has
+    cost over its lifetime was unmeasurable — the number was overwritten by the
+    next cycle before anything could add it up. One writer, called wherever a
+    memory call is paid for; `ask_memory` deliberately does not call it, because
+    a query is not memory being built.
+    """
+    c = last_call_cost
+    if not c:
+        return 0.0
+    mem['cost_usd_total'] = round((mem.get('cost_usd_total') or 0) + c, 4)
+    mem['cost_history'] = ((mem.get('cost_history') or []) + [round(c, 4)])[-COST_HISTORY:]
+    return c
 
 
 def _file_sig(path):
@@ -875,6 +936,11 @@ def _refresh_locked(project_path, proj_folder, project_name, auto_cap=None):
     todo, deleted, cur_hashes = _changed_units(root, units, mem)
     if not todo and not deleted and mem.get('entities'):
         mem['last_extracted'] = 0        # nothing to do is not "we did work"
+        # …and nothing to do also means nothing is queued. This never cleared
+        # the counters, so one failed cycle left "6 module(s) still queued" on
+        # screen indefinitely, long after the work had actually completed.
+        mem['pending_units'] = mem['last_failed'] = mem['last_skipped'] = 0
+        mem['last_error'] = ''
         # Reinforcement still has to land. fold_hits ran ONLY in the full path
         # below, and this early return is the common case on a settled repo —
         # so on this very project the sidecar held 807 recorded hits while the
@@ -941,6 +1007,7 @@ def _refresh_locked(project_path, proj_folder, project_name, auto_cap=None):
     done_hashes = {}
     done_units = []
     failed_units = 0
+    last_error = ''
     spent = 0.0
     for i, (repo, module, fs) in enumerate(todo):
         unit = f"{repo}/{module}"
@@ -954,12 +1021,13 @@ def _refresh_locked(project_path, proj_folder, project_name, auto_cap=None):
         # the real figure from the headless JSON envelope, which was recorded
         # and then read by nothing outside the tests — so what a cycle costs
         # has never been visible anywhere in the product
-        if last_call_cost:
-            spent += last_call_cost
+        spent += charge(mem)
         if ex is None:
             # the call failed: keep the old facts, do NOT record these hashes,
             # and count the unit so the next cycle picks it up again
             failed_units += 1
+            if last_call_error:
+                last_error = last_call_error
             _report_progress(f"memory {i + 1}/{n}", project_path)
             continue
         summaries.pop(unit, None)
@@ -1045,6 +1113,14 @@ def _refresh_locked(project_path, proj_folder, project_name, auto_cap=None):
                 'last_extracted': len(done_units),
                 'last_cost_usd': round(spent, 4),
                 'pending_units': skipped_units + failed_units,
+                # A unit that FAILED and a unit that was capped are not the same
+                # thing, and fusing them into one number is why six rate-limited
+                # calls an hour read as a calm "queued — the next cycle takes
+                # them". Both terms are kept so the difference can be said out
+                # loud, along with what the failure actually was.
+                'last_failed': failed_units,
+                'last_skipped': skipped_units,
+                'last_error': last_error if failed_units else '',
                 'repo_summaries': _rollup_summaries(units, summaries, unit_rank),
                 'generated_at': _iso()})
     # Reinforcement counts recorded by the per-prompt recall hook. Folded in
@@ -1260,6 +1336,12 @@ def auto_cycle(project_path, proj_folder, project_name, auto_cap=6):
     out['graph'] = int(mem.get('last_extracted') or 0) > 0
     out['extracted'] = int(mem.get('last_extracted') or 0)
     out['pending'] = int(mem.get('pending_units') or 0)
+    # A failed cycle and a capped one both left `pending` set, and every
+    # consumer worded it as "the next cycle takes them" — so a rate-limited
+    # account produced six dead calls an hour, forever, reported as progress.
+    out['failed'] = int(mem.get('last_failed') or 0)
+    out['skipped'] = int(mem.get('last_skipped') or 0)
+    out['error'] = mem.get('last_error') or ''
 
     # 'off' is a real answer and is honoured; 'prompt' still mines here, because
     # the prompt is about REVIEWING lessons, not about whether to notice them.
@@ -1339,6 +1421,23 @@ def tokens_estimate(text):
     return max(1, len(text or '') // 4)
 
 
+def _clip(s, n):
+    """First `n` chars, cut at a word boundary. A rollup summary can run to 240
+    characters — 60 of a 250-token budget on one sentence, which is why the
+    module links and the reinforced facts never used to fit."""
+    s = ' '.join((s or '').split())
+    if len(s) <= n:
+        return s
+    cut = s[:n]
+    return cut[:cut.rfind(' ')].rstrip(' ,;:—-') + '…' if ' ' in cut else cut + '…'
+
+
+def _short_unit(u):
+    """'Claude/claude_sessions/web' → 'claude_sessions/web' — the repo prefix is
+    the same on every edge, so it is pure repetition inside a token budget."""
+    return str(u or '').split('/', 1)[-1] or str(u or '')
+
+
 def build_digest_micro(mem, max_tokens=250):
     """Tiny always-loaded memory INDEX (repo one-liners + module names + recall
     pointer). Detail lives in path-scoped rules and `claudectl recall` — this
@@ -1364,7 +1463,7 @@ def build_digest_micro(mem, max_tokens=250):
         if not summ:
             biggest = max(mods, key=lambda m: len(mods[m]))
             summ = (summaries.get(f"{repo}/{biggest}", '') or '').strip()
-        out.append(f"- **{repo}**" + (f" — {summ}" if summ else ''))
+        out.append(f"- **{repo}**" + (f" — {_clip(summ, 150)}" if summ else ''))
         names = sorted(mods, key=lambda m: len(mods[m]), reverse=True)
         shown = names[:6]
         line = "  modules: " + ', '.join(shown)
@@ -1373,13 +1472,42 @@ def build_digest_micro(mem, max_tokens=250):
         out.append(line)
     lessons = [e for e in ents if e.get('type') == 'lesson'
                and e.get('status') in ('approved', 'pinned')]
+    # The budget is 250 tokens and this block was spending 117 of it on a module
+    # LISTING — names with no content, which tells a session nothing it could
+    # not get from `ls`. The graph's value is the facts it holds, so the rest of
+    # the budget goes to the highest-signal ones: pinned first, then confident,
+    # then most-reinforced.
     if lessons:
-        out.append(f"- lessons: {len(lessons)} learned (injected when relevant)")
+        out.append(f"- lessons: {len(lessons)} learned"
+                   + (f", {sum(1 for e in lessons if e.get('status') == 'pinned')} pinned"
+                      if any(e.get('status') == 'pinned' for e in lessons) else ''))
+        for e in sorted(lessons, key=lambda e: (e.get('status') != 'pinned',
+                                                -(e.get('confidence') or 0),
+                                                -(e.get('hits') or 0)))[:3]:
+            s = _clip(e.get('summary'), 95)
+            out.append(f"  · {e.get('name', '')}" + (f" — {s}" if s else ''))
+    # How the modules actually depend on each other. `module_edges` is derived
+    # from real imports by the architecture graph and was going into the graph
+    # file and no further — yet "which module leans on which" is exactly the
+    # orientation a session lacks on its first turn, and it is one line.
+    edges = sorted((e for e in (mem.get('module_edges') or []) if e.get('weight')),
+                   key=lambda e: -(e.get('weight') or 0))[:3]
+    if edges:
+        out.append("- depends: " + ', '.join(
+            f"{_short_unit(e['source'])} → {_short_unit(e['target'])}" for e in edges))
+    top = sorted((e for e in ents
+                  if e.get('type') != 'lesson' and e.get('valid', True) and e.get('hits')),
+                 key=lambda e: -(e.get('hits') or 0))[:5]
+    if top:
+        out.append("- most used: " + ', '.join(
+            f"{e.get('name', '')} ({e.get('module', '')})" for e in top))
     out.append('Detail on demand: run `claudectl recall "<topic>"` (Bash) for the '
                'task-relevant subgraph of this project\'s memory.')
     text = '\n'.join(out)
+    # trim from the end (reinforced facts, then links, then lesson detail, then
+    # repo lines), never the pointer
     while tokens_estimate(text) > max_tokens and len(out) > 2:
-        out.pop(-2)                      # drop lowest-priority repo lines, keep pointer
+        out.pop(-2)
         text = '\n'.join(out)
     return text
 

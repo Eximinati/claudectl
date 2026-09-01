@@ -272,3 +272,25 @@ def test_mcp_docs_are_found_under_any_account(monkeypatch, tmp_path):
 
     _, _, checks, _, _ = workspace.compute_status(actual, folder)
     assert {c['name']: c['state'] for c in checks}['mcp_docs'] == 'fresh'
+
+
+def test_the_gui_gets_structured_checks(monkeypatch, tmp_path):
+    """`_status_lines` is a TUI renderer — emoji dots, a meter bar and `(+25)`
+    weight suffixes baked into strings. The GUI ANSI-stripped them into a <pre>,
+    so every check's name, state and weight died one call short of the browser
+    and nothing on the page could be acted on."""
+    from claude_sessions import gui_api
+    sb = Sandbox(monkeypatch, tmp_path)
+    _stub_git(monkeypatch)
+    actual, enc, folder, sids = _seed_project(sb, monkeypatch, document_mcp=False)
+
+    d = gui_api.api_workspace_status(
+        {'path': actual, 'enc': enc, 'cfgdir': str(sb.cfg)}, None)
+    by = {c['name']: c for c in d['checks']}
+    assert set(by) == set(workspace._WEIGHTS), 'a check is missing from the payload'
+    for c in d['checks']:
+        assert {'name', 'state', 'detail', 'applicable', 'weight'} <= set(c)
+        assert c['state'] in ('fresh', 'stale', 'invalid')
+        assert '\x1b' not in c['detail'] and '●' not in c['detail']
+    assert by['mcp_docs']['state'] == 'stale' and by['mcp_docs']['weight'] == 15
+    assert isinstance(d['score'], int) and isinstance(d['safe'], bool)

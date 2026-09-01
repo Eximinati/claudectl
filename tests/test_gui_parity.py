@@ -344,7 +344,10 @@ def test_memory_state_lessons_audit_deny_workspace(monkeypatch, tmp_path):
                                        encoding='utf-8'))
         assert any('node_modules' in x for x in proj_settings['permissions']['deny'])
         code, d = _req(f'{base}/api/workspace-status?{c}')
-        assert code == 200 and 'lines' in d
+        assert code == 200 and 'checks' in d
+        # structured, not pre-rendered terminal lines: the GUI needs each
+        # check's name/state/weight to render a state dot and a fix button
+        assert {'name', 'state', 'detail', 'applicable', 'weight'} <= set(d['checks'][0])
     finally:
         srv.shutdown()
 

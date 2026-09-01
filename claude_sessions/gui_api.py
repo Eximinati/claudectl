@@ -83,6 +83,14 @@ def _run_cancellable(cmd, input_text=None, capture_output=True, text=True,
         if proc.returncode:
             if job is not None:
                 job['last_subprocess_error'] = {'code': proc.returncode, 'output': stdout}
+            # The scheduler and the detached memory worker have NO job context,
+            # so `if job is not None` dropped the reason on the floor for
+            # precisely the two callers that run unattended — a rate-limited
+            # account produced six silent failures an hour, reported as
+            # "queued". Record it where any caller can read it.
+            from . import memory as _mem
+            _mem.last_call_error = 'claude exited %s: %s' % (
+                proc.returncode, (stdout or '(no output)')[:300])
             return ''
         return stdout
     except subprocess.TimeoutExpired:
@@ -456,9 +464,8 @@ def _auto_scan_pass():
     to genuinely-changed projects.
 
     Returns True when work is still owed — a cycle hit its per-cycle cap, or a
-    project is still stale. The caller uses that to come back SOON instead of
-    after the full interval: with auto-memory on, memory must CONVERGE, not sit
-    stale for an hour because one tick could only afford six modules.
+    project is still stale. That is reported, not acted on: what a pass could
+    not finish waits for the next scheduled one (see `_next_wait`).
     """
     from . import memory
     owed = False
@@ -477,28 +484,51 @@ def _auto_scan_pass():
     return owed
 
 
-#: gap between catch-up passes while a project still owes work. Short enough to
-#: converge within minutes, long enough that a capped cycle's Claude calls are
-#: not made back to back.
-CATCHUP_INTERVAL = 45
-
 #: how long the first pass waits after start — enough for the server/TUI to
 #: settle, short enough that "it updates when I launch claudectl" is true.
 #: A module constant so the loop can actually be tested; it had none.
 STARTUP_DELAY = 2
 
+#: floor on the configured cadence, and the module seam a test drives the loop
+#: through — settings cannot express a sub-minute interval, deliberately.
+MIN_INTERVAL = 60
+
+
+def _next_wait(owed=False):
+    """Seconds until the next pass. Always the cadence the user configured.
+
+    It used to return a 45s CATCHUP_INTERVAL whenever a pass reported work still
+    owed, on the reasoning that memory should converge rather than sit stale for
+    an hour. That inverted the point of the per-cycle cap: a repo with more
+    changed modules than one cycle can afford was swept every 45 seconds until
+    it caught up, which on several opted-in projects is most of a daily limit
+    inside an hour — and on a rate-limited account it was six *failed*
+    extractions repeating forever. The cap decides how much one pass may spend;
+    the interval decides how often that happens. Nothing else may schedule work.
+
+    `owed` is taken and logged rather than acted on, so "why is my memory still
+    stale" has an answer in the log instead of a silent short-circuit.
+    """
+    from .config import load_settings
+    try:
+        wait = max(MIN_INTERVAL, int(load_settings().get('auto_memory_interval', 3600)))
+    except Exception:
+        wait = 3600
+    if owed:
+        _c.log.info('gui: auto-memory has work left; next pass in %ss '
+                    '(the configured interval — a cycle is capped on purpose)', wait)
+    return wait
+
 
 def start_auto_memory_scheduler():
-    """Daemon thread: one pass on start, then every auto_memory_interval seconds
-    — or every CATCHUP_INTERVAL while a project still owes work. Started by the
-    real entry points only (never make_server, so tests don't spawn refreshes).
-    Idempotent."""
+    """Daemon thread: one pass on start, then one every `auto_memory_interval`
+    seconds — never sooner, however much work is left. Started by the real entry
+    points only (never make_server, so tests don't spawn refreshes). Idempotent."""
     global _sched_started
     if _sched_started:
         return
     _sched_started = True
     import threading
-    from .config import load_settings
     _sched_stop.clear()
 
     def _loop():
@@ -512,15 +542,7 @@ def start_auto_memory_scheduler():
                 owed = _auto_scan_pass()
             except Exception:
                 _c.log.exception('gui: auto-memory scheduler tick failed')
-            try:
-                interval = max(60, int(load_settings().get('auto_memory_interval', 3600)))
-            except Exception:
-                interval = 3600
-            # Converge, don't idle. A cycle is capped at `auto_cap` modules, so
-            # a busy repo needs several passes — waiting the full interval
-            # between them would leave memory stale for an hour at a time while
-            # auto-memory was switched on and nominally working.
-            _sched_stop.wait(CATCHUP_INTERVAL if owed else interval)
+            _sched_stop.wait(_next_wait(owed))
 
     threading.Thread(target=_loop, daemon=True).start()
 
@@ -1389,7 +1411,11 @@ def api_worklog_get(q, body):
     enc = q.get('enc', '')
     on = bool((( load_settings().get('project_defaults') or {}).get(enc) or {}).get('worklog'))
     entries = load_worklog(q['path']) if q.get('path') else []
-    return {'on': on, 'installed': hooks.worklog_hook_installed(),
+    # across_accounts, like the POST beside it. Reading one account made the
+    # toggle look installed while the account actually running the session had
+    # no hook — the same import-frozen-account class of bug, one call short.
+    return {'on': on,
+            'installed': hooks.across_accounts(hooks.worklog_hook_installed),
             'entries': list(reversed(entries))[:10]}
 
 
@@ -1633,8 +1659,15 @@ def api_accounts_terminal(q, body):
 # ── memory suite ─────────────────────────────────────────────
 
 def api_memory_state(q, body):
+    """Everything the graph knows about itself: size, reach, spend, queue.
+
+    The graph has always carried relations, module links, eviction names, the
+    reinforcement counters and the outcome of the last automatic cycle. None of
+    it left this handler, so the Memory tab could only ever show entity counts —
+    it could not say what memory costs, what it dropped, or what it is doing."""
     from .memhub import _state
     from .lessons import pending_sids
+    from . import hooks, memory, recall as _recall
     folder = _folder(q.get('cfgdir'), q['enc'])
     st = _state(q['path'], folder)
     mem = st['mem']
@@ -1642,11 +1675,26 @@ def api_memory_state(q, body):
         n_unscanned = len(pending_sids(folder, mem))
     except Exception:
         n_unscanned = 0
+    # most-reinforced facts: `hits` drives both recall ranking and the eviction
+    # score, so which entities are actually earning their place is the one thing
+    # that explains why memory looks the way it does.
+    top = sorted((e for e in st['entities'] if e.get('hits')),
+                 key=lambda e: -int(e.get('hits') or 0))[:8]
+    tpl = hooks.TEMPLATES.get('memory-stale-on-change')
+    try:
+        dirty_hook = bool(tpl) and _template_installed(
+            hooks, hooks._load(q.get('cfgdir')), tpl)
+    except Exception:
+        dirty_hook = False
     return {'generated_at': mem.get('generated_at', ''),
             'n_entities': len(st['entities']),
             'n_lessons': len(st['lessons']),
             'n_pending': len(st['pending']),
             'n_unscanned': n_unscanned,
+            'n_relations': len(mem.get('relations') or []),
+            'n_module_edges': len(mem.get('module_edges') or []),
+            'n_modules': len(mem.get('summaries') or {}),
+            'session_counter': int(mem.get('session_counter') or 0),
             'hook_on': st['hook_on'], 'rules_on': st['rules_on'],
             'auto_on': st['auto_on'],
             # what the last cycle did and what it cost. `pending_units` and the
@@ -1654,9 +1702,63 @@ def api_memory_state(q, body):
             'pending_units': int(mem.get('pending_units') or 0),
             'last_extracted': int(mem.get('last_extracted') or 0),
             'last_cost_usd': mem.get('last_cost_usd') or 0,
+            'cost_usd_total': mem.get('cost_usd_total') or 0,
+            'cost_history': list(mem.get('cost_history') or []),
             'auto_updated': mem.get('auto_updated', ''),
+            'auto_last': mem.get('auto_last') or {},
+            # what eviction dropped. Stored specifically so it could be checked.
+            'evicted': int(mem.get('evicted_entities') or 0),
+            'evicted_names': list(mem.get('evicted_names') or []),
+            'top': [{'name': e.get('name', ''), 'hits': int(e.get('hits') or 0),
+                     'module': e.get('module', '')} for e in top],
+            'last_failed': int(mem.get('last_failed') or 0),
+            'last_skipped': int(mem.get('last_skipped') or 0),
+            'last_error': mem.get('last_error') or '',
+            'dirty': memory.dirty_count(q['path']),
+            'dirty_hook': dirty_hook,
+            'hits_pending': _recall.hits_pending(q['path'], folder),
             'budget': (st['settings'] or {}).get('memory_budget', 600),
+            # what a capped cycle actually means for the user: the rest waits
+            # this long. Without it "still queued" has no answer to "until when".
+            'auto_interval': int((st['settings'] or {}).get('auto_memory_interval', 3600)),
             'est': st['est']}
+
+
+def api_memory_entity(q, body):
+    """One fact in the graph, in full: what it means and what cites it.
+
+    The "most reinforced" list was names and a hit count — which says a fact
+    matters without ever saying what the fact IS. Everything here is already in
+    graph.json; nothing was reachable from the browser."""
+    from .memory import load_memory
+    mem = load_memory(q['path'], _folder(q.get('cfgdir'), q['enc']))
+    name = q.get('name', '')
+    e = next((x for x in mem.get('entities', []) if x.get('name') == name), None)
+    if not e:
+        return {'found': False, 'name': name}
+    rels = []
+    for r in mem.get('relations', []):
+        if r.get('source') == name:
+            rels.append({'rel': r.get('rel', 'relates'), 'other': r.get('target', ''),
+                         'dir': 'out'})
+        elif r.get('target') == name:
+            rels.append({'rel': r.get('rel', 'relates'), 'other': r.get('source', ''),
+                         'dir': 'in'})
+    unit = f"{e.get('repo', '')}/{e.get('module', '')}"
+    return {'found': True, 'name': name, 'type': e.get('type', ''),
+            'summary': e.get('summary', ''), 'module': e.get('module', ''),
+            'repo': e.get('repo', ''), 'unit': unit,
+            'hits': int(e.get('hits') or 0), 'rank': int(e.get('rank') or 0),
+            'status': e.get('status', ''), 'valid': bool(e.get('valid', True)),
+            'kind': e.get('kind', ''),
+            'created_at': e.get('created_at', ''),
+            'source_files': list(e.get('source_files') or []),
+            'unit_summary': (mem.get('summaries') or {}).get(unit, ''),
+            'relations': rels[:24],
+            # lessons carry the sessions they came from; a code entity has no
+            # session link at all — recall's sidecar records names, not sids —
+            # so say which it is rather than inventing a provenance.
+            'sessions': list(e.get('sids') or ([e['sid']] if e.get('sid') else []))}
 
 
 def api_memory_progress(q, body):
@@ -1674,7 +1776,6 @@ def api_memory_autoscan(q, body):
     refresh ONLY when the project's source has actually changed (cheap
     hash-only `is_stale` check) — so revisiting an up-to-date project neither
     re-scans nor flashes the badge. Returns whether a refresh is now running."""
-    from .config import load_settings
     from . import memory
     path = body.get('path', '')
     folder = _folder(body.get('cfgdir'), body.get('enc', ''))
@@ -1684,9 +1785,14 @@ def api_memory_autoscan(q, body):
     if running:
         return {'running': True, 'stale': True}
     try:
-        st = load_settings()
         force = bool(body.get('force'))
-        on_open = st.get('memory_auto_refresh') == 'open'
+        # `memory.refresh_on_open` is the ONE answer to this question — the TUI
+        # has asked it through that function all along, while this handler
+        # re-derived it from the global setting alone. So the per-project flag
+        # was ignored here: a project opted into background auto-memory spent a
+        # cycle every time it was opened, on top of the scheduled ones, and the
+        # interval the user configured did not bound anything.
+        on_open = memory.refresh_on_open(path, body.get('enc', ''))
         # only refresh when something changed (or the user forced it)
         if (force or on_open) and memory.is_stale(path, folder):
             _refresh_async(path, folder, auto_cap=None if force else 6)
@@ -1763,12 +1869,19 @@ def api_lessons_get(q, body):
     lessons = [e for e in mem.get('entities', []) if e.get('type') == 'lesson']
     lessons.sort(key=lambda e: (e.get('status') != 'pending',
                                 -e.get('confidence', 0)))
+    from .config import load_settings
     return {'lessons': [{'id': e.get('id'), 'name': e.get('name', ''),
                          'summary': e.get('summary', ''),
                          'status': e.get('status', 'pending'),
                          'kind': e.get('kind', ''),
+                         'last_used': int(e.get('last_used') or 0),
                          'confidence': e.get('confidence', 0)}
-                        for e in lessons]}
+                        for e in lessons],
+            # decay is `counter - last_used > ttl` (lessons.apply_decay), so a
+            # lesson's distance from eviction needs all three numbers. The table
+            # showed confidence, which is not what decides whether it survives.
+            'counter': int(mem.get('session_counter') or 0),
+            'ttl': load_settings().get('memory_lessons_ttl', 30)}
 
 
 def api_lessons_post(q, body):
@@ -1823,16 +1936,46 @@ def api_ctxaudit_prune(q, body):
 _HISTORY_KEYS = ('claude_md', 'memory_graph', 'system_prompt')
 
 
+def _graph_shape(text):
+    """{entities, relations, lessons} of a serialised graph, or None."""
+    try:
+        g = json.loads(text)
+        ents = g.get('entities') or []
+        return {'entities': sum(1 for e in ents if e.get('type') != 'lesson'),
+                'lessons': sum(1 for e in ents if e.get('type') == 'lesson'),
+                'relations': len(g.get('relations') or [])}
+    except Exception:
+        return None
+
+
 def api_history(q, body):
-    """Every replaced version claudectl still holds, newest first."""
+    """Every replaced version claudectl still holds, newest first.
+
+    `added`/`removed` are LINE counts, which is the right summary for a
+    CLAUDE.md and pure noise for the graph: re-serialising a 300 KB JSON reports
+    "+27808 -27783" whether one fact changed or all of them. For memory_graph
+    the summary is the shape delta instead — entities, relations and lessons
+    before against now — which is the thing you would actually restore for."""
     from . import diffview
     from .sessions import format_age
     folder = _folder(q.get('cfgdir'), q['enc'])
     keys = []
     for k in _HISTORY_KEYS:
         vs = diffview.versions(q['path'], folder, k)
+        out = []
+        for v in vs:
+            row = dict(v, age=format_age(v['ts']))
+            if k == 'memory_graph':
+                row['shape'] = _graph_shape(
+                    diffview.read_version(q['path'], folder, k, v['ts']))
+            out.append(row)
+        cur = None
+        if k == 'memory_graph':
+            p = diffview.target_path(q['path'], folder, k)
+            if p and os.path.isfile(p):
+                cur = _graph_shape(open(p, encoding='utf-8', errors='ignore').read())
         keys.append({'key': k, 'title': diffview.TITLES.get(k, k),
-                     'versions': [dict(v, age=format_age(v['ts'])) for v in vs]})
+                     'now': cur, 'versions': out})
     return {'keys': keys}
 
 
@@ -1850,6 +1993,28 @@ def api_history_diff(q, body):
             cur = open(p, encoding='utf-8', errors='ignore').read()
         except Exception:
             cur = ''
+    if key == 'memory_graph':
+        # a line diff of two serialised graphs is thousands of lines of JSON
+        # punctuation. What changed is which FACTS came and went.
+        a, b = _graph_shape(cur), _graph_shape(old)
+        if a is not None and b is not None:
+            names = lambda t: {e.get('name', '') for e in    # noqa: E731
+                               (json.loads(t).get('entities') or [])}
+            try:
+                back, gone = names(old) - names(cur), names(cur) - names(old)
+            except Exception:
+                back, gone = set(), set()
+            lines = [f"--- now: {a['entities']} entities, {a['relations']} relations, "
+                     f"{a['lessons']} lessons",
+                     f"+++ snapshot: {b['entities']} entities, {b['relations']} relations, "
+                     f"{b['lessons']} lessons", '@@ what restoring would change @@']
+            lines += [f"+ {n}" for n in sorted(back)[:60]]
+            lines += [f"- {n}" for n in sorted(gone)[:60]]
+            if len(back) > 60 or len(gone) > 60:
+                lines.append(f"@@ …and {max(0, len(back) - 60) + max(0, len(gone) - 60)} more @@")
+            if not back and not gone:
+                lines.append('  the same facts — only their summaries or counters moved')
+            return {'title': diffview.TITLES.get(key, key), 'diff': lines}
     # old=current, new=snapshot: the diff reads as "what restoring would do"
     return {'title': diffview.TITLES.get(key, key),
             'diff': diffview.unified(cur, old, diffview.TITLES.get(key, key))}
@@ -1893,32 +2058,73 @@ def api_deny_apply(q, body):
 
 
 def api_workspace_status(q, body):
-    from .workspace import _status_lines
-    lines, _m, score, safe = _status_lines(q['path'],
-                                           _folder(q.get('cfgdir'), q['enc']))
-    from .render import strip_ansi
-    return {'lines': [strip_ansi(l) for l in lines], 'score': score, 'safe': safe}
+    """The freshness checks as DATA, not as pre-rendered terminal lines.
+
+    `_status_lines` is a TUI renderer: it formats emoji dots, a meter bar and
+    `(+25)` weight suffixes into strings, and the GUI then ANSI-stripped them
+    into a `<pre>`. Every check's name, state, weight and detail existed one
+    call further down and none of it could be acted on. `compute_status` is the
+    read-only structured call; `_status_lines` stays for `status_screen`."""
+    from . import workspace
+    m, _live, checks, score, safe = workspace.compute_status(
+        q['path'], _folder(q.get('cfgdir'), q['enc']))
+    return {'checks': [dict(c, weight=workspace._WEIGHTS.get(c['name'], 0))
+                       for c in checks],
+            'score': score, 'safe': safe,
+            'generated_at': (m or {}).get('generated_at', '')}
 
 
 def api_recall_preview(q, body):
     from .recall import retrieve
     from .config import load_settings
     budget = load_settings().get('memory_budget', 600)
+    # log=False: a preview must not reinforce. `hits` is a term in both the
+    # recall ranking and the eviction score, so logging here would let looking
+    # at memory reshape it.
     r = retrieve(q['path'], _folder(q.get('cfgdir'), q['enc']),
-                 q.get('q', ''), budget_tokens=budget)
+                 q.get('q', ''), budget_tokens=budget, log=False)
     return {'context': r.get('text', ''), 'tokens': r.get('tokens', 0),
+            'items': list(r.get('items') or []),
             'empty': r.get('empty', True)}
 
 
 # ── CLAUDE.md, system prompt, memory map ─────────────────────
 
 def api_claude_md_get(q, body):
+    """The file, plus what it is made OF.
+
+    CLAUDE.md is five things stacked in one file — your prose, KEEP-fenced
+    regions, and three machine blocks claudectl rewrites — and the GUI showed it
+    as one undifferentiated blob, so which part cost what, and which button
+    regenerated which part, was unknowable. `ctxaudit` already splits it for the
+    token audit; reuse that splitter rather than parsing sentinels again."""
+    from . import ctxaudit
+    from .memory import tokens_estimate
     p = os.path.join(q['path'], 'CLAUDE.md')
     try:
         text = open(p, encoding='utf-8', errors='ignore').read()
     except Exception:
         text = ''
-    return {'text': text, 'exists': bool(text)}
+    b = ctxaudit.split_blocks(text)
+    n_keep = ctxaudit.keep_regions(text)
+    sess = b['sessions']
+    blocks = [
+        {'key': 'manual', 'label': 'Your prose', 'present': bool(b['manual'].strip()),
+         'tokens': tokens_estimate(b['manual'])},
+        {'key': 'keep', 'label': f'Protected ({n_keep} fenced)', 'present': bool(n_keep),
+         'tokens': tokens_estimate(''.join(ctxaudit._KEEP_RE.findall(text)))},
+        {'key': 'autogen', 'label': 'AUTOGEN — repos and commits',
+         'present': bool(b['autogen']), 'tokens': tokens_estimate(b['autogen']),
+         'text': b['autogen']},
+        {'key': 'sessions', 'label': 'SESSIONS — session topics',
+         'present': bool(sess), 'tokens': tokens_estimate(sess), 'text': sess,
+         'entries': sum(1 for l in sess.splitlines() if l.strip().startswith('- '))},
+        {'key': 'memory', 'label': 'MEMORY — the digest claudectl builds',
+         'present': bool(b['memory']), 'tokens': tokens_estimate(b['memory']),
+         'text': b['memory']},
+    ]
+    return {'text': text, 'exists': bool(text), 'path': p, 'blocks': blocks,
+            'tokens': tokens_estimate(text)}
 
 
 def api_claude_md_scaffold(q, body):
@@ -2376,6 +2582,14 @@ def api_job_start(q, body):
             added, scanned = lessons.scan_sessions(path, folder, pend)
             return {'added': added, 'scanned': scanned}
         jid = start_job('Learning from sessions', _scan)
+    elif kind == 'rules_sync':
+        # rewriting the rule files was reachable only as a SIDE EFFECT of
+        # toggling the rules checkbox off and on again — which is not a thing
+        # anyone would guess, and it is free (no Claude call).
+        from . import memrules, memory
+        jid = start_job('Rebuilding rules', lambda: {
+            'written': len(memrules.sync_rules(path, folder,
+                                               memory.load_memory(path, folder)))})
     elif kind == 'ai_scaffold':
         from .claude_md import ai_scaffold_claude_md
         jid = start_job('AI-analyzing project', lambda: ai_scaffold_claude_md(path, folder))
@@ -3284,6 +3498,7 @@ GET_ROUTES = {
     '/api/accounts': api_accounts_get,
     '/api/accounts/sync': api_accounts_sync,
     '/api/memory/state': api_memory_state,
+    '/api/memory/entity': api_memory_entity,
     '/api/memory/progress': api_memory_progress,
     '/api/memory/active': api_memory_active,
     '/api/memory/auto': api_memory_auto_get,

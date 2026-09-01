@@ -1674,10 +1674,10 @@ function goToFullSearch(){PENDING_SEARCH_Q=($('#hqSearch').value||'');go('search
    the help page renders from this array instead of a retyped copy of it. */
 const TABS=[
   ['sessions','Sessions','Every session in this project, across accounts — open, rename, archive, export.'],
-  ['memory','Memory','The project knowledge graph, lessons, recall injection and the two per-project memory hooks.'],
-  ['claudemd','CLAUDE.md','The project instruction file, its machine-maintained blocks, and the memory map.'],
+  ['memory','Memory','Everything claudectl knows about this project and what knowing it costs — the graph, the rules, lessons, spend, and what the last cycle did.'],
+  ['claudemd','CLAUDE.md','The instruction file block by block, what each block costs, the memory map, and every version claudectl replaced.'],
   ['review','Review','Run a code review over the working tree, staged changes or a branch.'],
-  ['audit','Audit','Everything injected into a session and what it costs, before you spend it.'],
+  ['audit','Audit','What one turn costs across every surface at once — this project, your account, hooks and MCP — before you spend it.'],
   ['pusage','Usage','This project\'s token spend over time.'],
   ['planexec','Plan → Execute','Have one model write a plan, approve or edit it, then have another execute it.'],
   ['worktrees','Repos','Git repos, submodules and linked worktrees under this project.'],
@@ -1862,6 +1862,9 @@ async function drawSessions(archived){
         <div class="frontread rtread"></div>
         <button class="btn sm pri" onclick="resumeTuned(${i})" style="margin-top:8px">Resume with these settings →</button>
       </div>`}`;}).join('')+'</div>'))return;
+  // a worklog line asked for this session by id; SESS only exists now
+  if(PENDING_SID){const i=SESS.findIndex(s=>s.sid===PENDING_SID);
+    PENDING_SID=null;if(i>=0)viewS(i);}
 }
 // one-click resume: launches immediately with the recommended/last-used
 // model+effort — no dialog. The settings ⚙ icon expands this row in place
@@ -2008,7 +2011,91 @@ async function memToggle(patch){
   const r=await post('/api/memory/toggles',Object.assign({},C(),{path:CUR.path},patch));
   toast(r.ok?'Saved':'Failed','ok');drawMemory();}
 
-/* memory tab */
+/* memory tab.
+
+   Memory is not "CLAUDE.md plus a few counters" — claudectl builds twelve
+   artifacts per project, and until now the tab could name three of them. The
+   two questions this tab answers are "what does claudectl know" and "what does
+   knowing it cost me", and the cost half is what was missing: the digest is
+   read on EVERY turn while several KB of rules cost nothing until Claude opens
+   a matching path, and nothing said so. Every number below already existed in
+   a payload this renderer was already fetching. */
+
+/* how far an artifact reaches into a session — the vocabulary is the whole
+   point of the table, because 'always' is the only one you pay for on every
+   single turn and everything else is conditional or free. */
+const REACH={
+  always:['every session','tag warn','Loaded at the start of every session and read on every turn. This is the only kind you pay for unconditionally.'],
+  lazy:  ['when Claude opens a matching file','tag',"Costs nothing until Claude reads a file the rule's paths match — then only that one rule loads."],
+  prompt:['every prompt', 'tag warn','Added to each message you send, inside the recall budget. The only cost that multiplies by how much you talk.'],
+  start: ['session start','tag',     'Injected once, when a session starts.'],
+  source:['on request',   'tag ok',  'Never loaded on its own. It is what the always-on surfaces are built FROM, and you can query it directly with `claudectl recall`.'],
+  never: ['not loaded',   '',        'claudectl reads it to do its job. Claude never sees it, and it costs you nothing.']};
+function rch(k){const r=REACH[k]||REACH.never;
+  return r[1]?`<span class="${r[1]}" title="${esc(r[2])}">${r[0]}</span>`
+             :`<span style="color:var(--dim2)" title="${esc(r[2])}">${r[0]}</span>`;}
+/* One row = name, a sentence saying what it does FOR YOU, its cost, an action.
+   The sentence is inline and never a tooltip — a tooltip is for a glossary, not
+   for the thing that makes the row comprehensible at all. The file path IS a
+   tooltip, because nobody asks it first. */
+function invRow(name,does,where,size,action){
+  return `<tr><td title="${esc(where)}"><b>${name}</b>
+      <div style="color:var(--dim2);font-size:11px">${does}</div></td>
+    <td class="num" style="white-space:nowrap">${size}</td>
+    <td style="white-space:nowrap">${action||''}</td></tr>`;}
+function invTable(rows){
+  return `<table class="tbl" style="margin:2px 0 4px">${rows}</table>`;}
+/* The load rule is stated ONCE per group instead of as a badge repeated on
+   every row, which is what turned a 12-row table into a wall. */
+function bucket(title,reach,note){
+  return `<div class="lbl" style="margin-top:16px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">
+    <span>${title}</span>${rch(reach)}
+    ${note?`<span style="color:var(--dim2);font-weight:400;text-transform:none;letter-spacing:0">${note}</span>`:''}</div>`;}
+//: what a session's context window holds, for the "…of what Claude can hold" line
+const CTX_WINDOW=200000;
+/* The auto-memory cadence, read back the way a person would say it. It is the
+   user's own setting, and it is the answer to "when do the queued modules get
+   done" — a cycle is capped on purpose, so nothing comes sooner than this. */
+function every(sec){
+  const s=+sec||3600;
+  if(s<3600)return Math.round(s/60)+' min';
+  const h=s/3600;
+  return (h%1?h.toFixed(1):h)+(h===1?' hour':' hours');}
+/* a name and a hit count says a fact matters without saying what it IS */
+async function entDetail(name){
+  const d=await api('/api/memory/entity?'+qs({...C(),name}));
+  const b=$('#dBody');if(!b)return;
+  $('#dTitle').textContent=name;
+  b.innerHTML=!d.found?'<div class="empty">Not in the graph any more.</div>':`
+    <div class="kv">
+      <span class="k">What it is</span><span>${esc(d.type||'')}${d.kind?' · '+esc(d.kind):''}${d.valid?'':' <span class="tag warn">superseded</span>'}${d.status?` <span class="tag">${esc(d.status)}</span>`:''}</span>
+      <span class="k">Where</span><span>${esc(d.unit||'')}</span>
+      <span class="k" title="How many prompts recall has injected this into. It is a term in the ranking, and in what eviction drops first.">Recalled into</span><span>${d.hits} prompt(s)</span>
+    </div>
+    <p style="margin:10px 0">${esc(d.summary||'')}</p>
+    ${d.unit_summary?`<div class="lbl">The module it belongs to</div>
+      <p style="color:var(--dim);margin:2px 0 10px">${esc(d.unit_summary)}</p>`:''}
+    ${(d.source_files||[]).length?`<div class="lbl">Read from</div>
+      <div class="chips">${d.source_files.map(f=>`<span class="chip">${esc(f)}</span>`).join('')}</div>`:''}
+    ${(d.relations||[]).length?`<div class="lbl" style="margin-top:10px">Connected to</div>
+      ${d.relations.map(r=>`<div class="agrow"><span style="flex:1">${r.dir==='out'?'':'← '}${esc(r.rel)} <b>${esc(r.other)}</b></span>
+        <button class="btn sm" onclick="entDetail('${jsq(r.other)}')">open</button></div>`).join('')}`:''}
+    ${(d.sessions||[]).length?`<div class="lbl" style="margin-top:10px">Learned in</div>
+      <div class="chips">${d.sessions.map(s=>`<span class="chip">${esc(String(s).slice(0,8))}</span>`).join('')}</div>`
+      :`<p style="color:var(--dim2);font-size:12px;margin-top:10px">Recall counts hits per fact, not per session, so there is no per-session breakdown for a code fact — only lessons carry the session they came from.</p>`}`;
+  $('#drawer').classList.add('show');
+}
+/* what actually raises each freshness check, as a button. workspace._FIXES is
+   phrased in TUI keystrokes ("press c", "m → b"), which is the right answer
+   there and no answer at all here. */
+const WSFIX={claude_md:['Scaffold','cmScaffold()'],
+  claude_md_fresh:['Rebuild memory','buildMemory()'],
+  repo:['Rebuild memory','buildMemory()'],
+  sessions:['Rebuild memory','buildMemory()'],
+  manifest:['Rebuild memory','buildMemory()'],
+  mcp_docs:['MCP servers',"go('mcp')"],
+  conflicts:['AI analyze',"inlineJob('#jban','ai_scaffold',C(),{label:'AI-analyzing project',redraw:()=>drawMemory()})"]};
+
 async function drawMemory(){
   const nav=paintNow(LOADING);
   const c=C();
@@ -2016,81 +2103,231 @@ async function drawMemory(){
     api('/api/memory/state?'+qs(c)),api('/api/lessons?'+qs(c)),
     api('/api/workspace-status?'+qs(c)),api('/api/worklog?'+qs(c))]);
   if(nav!==NAV_ID)return;   // navigated away mid-fetch — don't clobber the new page
-  const lesRows=(les.lessons||[]).map(l=>`
-    <tr><td>${l.status==='pending'?'…':l.status==='pinned'?ic('pin'):ic('check')} ${esc(l.status)}</td>
+  const est=st.est||{},rules=est.rules||[],
+        ruleTok=rules.reduce((a,r)=>a+(r.tokens||0),0),
+        ttl=les.ttl||30,counter=les.counter||0;
+  const lesRows=(les.lessons||[]).map(l=>{
+    const left=ttl-(counter-(l.last_used||0));
+    return `<tr><td>${l.status==='pending'?'…':l.status==='pinned'?ic('pin'):ic('check')} ${esc(l.status)}
+      ${l.kind?`<span class="tag">${esc(l.kind)}</span>`:''}</td>
     <td><b>${esc(l.name)}</b><div style="color:var(--dim);font-size:12px">${esc(l.summary)}</div></td>
     <td class="num">${(l.confidence||0).toFixed(1)}</td>
+    <td class="num">${l.status==='pinned'?'<span class="tag ok">kept</span>'
+      :`<span class="${left<=5?'tag warn':'tag'}" title="Dropped when it has gone ${ttl} sessions unused.">${Math.max(0,left)}</span>`}</td>
     <td style="white-space:nowrap">
       <button class="btn sm" onclick="lessonAct('${l.id}','approve')" title="Approve">${ic('check')}</button>
       <button class="btn sm" onclick="lessonAct('${l.id}','pin')" title="Pin">${ic('pin')}</button>
-      <button class="btn sm danger" onclick="lessonAct('${l.id}','evict')" title="Evict">${ic('close')}</button></td></tr>`).join('');
-  const modules=(ws.modules||ws.module_list||[]).length||0;
-  // freshness: entities the graph holds against a rough expectation of ~4 per
-  // module. Deliberately its own project's scale, not an absolute target.
-  const cover=st.n_entities?Math.min(1,st.n_entities/Math.max(8,modules*4)):0;
+      <button class="btn sm danger" onclick="lessonAct('${l.id}','evict')" title="Evict">${ic('close')}</button></td></tr>`;}).join('');
+  // coverage against something REAL: how many of the graph's own modules got a
+  // rule file. The old denominator read `ws.modules`, a key no endpoint has
+  // ever returned, so it fell back to a constant 8 for the feature's whole life.
+  const cover=st.n_modules?Math.min(1,rules.length/st.n_modules):0;
+  // A raw token total is a number nobody can calibrate. As a share of what a
+  // session can hold it is both honest and small, which is the de-alarming fact.
+  const pctWin=(((est.digest_tokens||0)/CTX_WINDOW)*100).toFixed(1)+'%';
+  const al=st.auto_last||{},wlIns=wl.installed,
+        wlMissing=wlIns&&typeof wlIns==='object'
+          ?Object.keys(wlIns).filter(k=>!wlIns[k]):[];
+  // The bookkeeping bucket: never sent to Claude, so it collapses behind one
+  // summary line. Built as a list so the count in that line cannot drift from
+  // the rows it is counting.
+  const stored=[
+    invRow('Semantic graph','Everything claudectl has learned about the code. Nothing reads it directly — every surface above is written from it.',
+      '.claudectl/memory/graph.json',`${st.n_entities||0}+${st.n_lessons||0}`,
+      `<button class="btn sm" onclick="go('graph')">${ic('share')} Graph</button>`),
+    invRow('Reinforcement log','Which facts recall actually injected. Folded into the graph on the next build; it is what makes useful facts survive.',
+      '.claudectl/memory/hits.log',
+      st.hits_pending?`<span class="tag">${st.hits_pending} to fold in</span>`:'folded in',''),
+    invRow('Edit log','Files Claude changed, so the next cycle knows what to re-read instead of rescanning everything.',
+      '.claudectl/memory/dirty.log',
+      st.dirty?`<span class="tag warn">${st.dirty} queued</span>`:'0',
+      st.dirty_hook?'':`<span class="hlink" onclick="go('hooks')">install hook</span>`),
+    invRow('Workspace manifest','What memory was built from — commit, file hashes, session count — so staleness is a fact rather than a guess.',
+      '.claudectl/workspace-manifest.json',`score ${ws.score??'?'}`,''),
+    invRow('Version snapshots','A copy of everything claudectl was about to overwrite. Nothing it shrinks is gone until it falls off this list.',
+      '.claudectl/snapshots/','12 kept',
+      `<span class="hlink" onclick="TAB='claudemd';drawProject()">History</span>`)];
   paint(nav,`
-    <div class="card"><h3>Project memory <span class="sp"></span>
+    <div class="card"><h3>What claudectl knows <span class="sp"></span>
       <button class="btn sm" onclick="askMem()">${ic('chat')} Ask</button>
       <button class="btn sm" onclick="recallPrev()">${ic('eye')} Recall preview</button>
       <button class="btn sm pri" onclick="buildMemory()">${ic('bolt')} Build with Claude</button></h3>
+      <p style="color:var(--dim);font-size:13px;margin:0 0 10px">claudectl reads this project — its code, its git history and your past sessions — and
+        builds a knowledge graph of it. The graph itself is never sent to Claude. What a session
+        actually reads is written <i>from</i> it, and the next card is that list.</p>
       <div class="memhd">
-        ${INST.html('ring','memory',{fmt:'pct',sub:'mapped',label:'coverage'})}
+        ${INST.html('ring','memory',{fmt:'pct',sub:'covered',label:'modules with a rule'})}
         <div class="kv" style="flex:1">
-        <span class="k">Entities</span><span>${st.n_entities||0}</span>
+        <span class="k">Entities</span><span>${st.n_entities||0} across ${st.n_modules||0} module(s)</span>
+        <span class="k">Relations</span><span>${st.n_relations||0}${st.n_module_edges?` · ${st.n_module_edges} module link(s)`:''}</span>
         <span class="k">Lessons</span><span>${st.n_lessons||0} (${st.n_pending||0} pending review)</span>
-        <span class="k">Unscanned sessions</span><span>${st.n_unscanned||0}</span>
-        <span class="k">Generated</span><span>${esc(st.generated_at||'never')}</span>
-        ${st.pending_units?`<span class="k">Still queued</span><span class="warn">${st.pending_units} module(s) — the next cycle takes them</span>`:''}
-        ${st.last_extracted||st.last_cost_usd?`<span class="k">Last cycle</span><span>${st.last_extracted||0} module(s)${st.last_cost_usd?' · $'+(+st.last_cost_usd).toFixed(3):''}</span>`:''}
+        <span class="k">Unscanned sessions</span><span>${st.n_unscanned||0} of ${st.session_counter||0} seen</span>
+        <span class="k">Built</span><span>${esc(st.generated_at||'never')}</span>
       </div></div>
-      <label class="autoline" title="Refresh this project's memory in the background — periodically, from whichever interface is running — whenever its files change, without needing this tab open.">
-        <input type="checkbox" id="autoMem" ${st.auto_on?'checked':''} onchange="toggleAutoMem(this.checked)">
-        <span>${ic('refresh')} Keep this project's memory updated automatically</span>
-        ${st.auto_updated?`<span class="tag">last run ${esc(String(st.auto_updated).slice(0,16))}</span>`:''}</label>
-      <label class="autoline" title="UserPromptSubmit recall: inject the task-relevant slice of this project's memory before every prompt. The hook itself is installed into every account.">
+      ${(st.top||[]).length?`<div class="lbl" style="margin-top:10px" title="How often recall has injected each fact. It is a term in the ranking and in what eviction drops first.">Facts Claude reaches for most</div>
+        <div class="chips">${st.top.map(t=>`<span class="chip" style="cursor:pointer" onclick="entDetail('${jsq(t.name)}')" title="Recalled into ${t.hits} prompt(s)${t.module?' · '+esc(t.module):''} — click for what it means">${esc(t.name)} <i>${t.hits}</i></span>`).join('')}</div>`:''}
+      ${(st.evicted_names||[]).length?`<div class="lbl" style="margin-top:10px" title="When the graph passes its cap, the least-used unpinned facts go. Pinned ones never do.">Dropped to stay under the cap (${st.evicted||0})</div>
+        <div class="chips">${st.evicted_names.slice(0,12).map(n=>`<span class="chip">${esc(n)}</span>`).join('')}</div>`:''}
+    </div>
+    <div class="card"><h3>What a session costs <span class="sp"></span>
+      <button class="btn sm" onclick="inlineJob('#jban','rules_sync',C(),{label:'Rebuilding rules',redraw:()=>drawMemory()})" title="Rewrite the path-scoped rule files from the current graph. Free — no Claude call.">${ic('refresh')} Rebuild rules</button></h3>
+      <p style="color:var(--dim);font-size:13px;margin:0 0 8px">You write the prose in CLAUDE.md. claudectl writes everything below it, and every
+        one of these can be opened, rebuilt or switched off. What separates them is <b>when</b>
+        each one reaches a session — which is what the four groups say.</p>
+      <p style="color:var(--dim);font-size:13px;margin:0 0 4px">
+        <b>~${est.digest_tokens||0} tok</b> of it is in every session — <b>${pctWin}</b> of what Claude can hold ·
+        ${est.hook_budget!=null?`up to <b>${est.hook_budget} tok</b> more per prompt`:'no per-prompt recall'} ·
+        <b>~${ruleTok} tok</b> across ${rules.length} rule file(s), read only when Claude opens a matching path</p>
+      <div id="memInv">
+      ${bucket('Always on','always',`~${est.digest_tokens||0} tok · ${pctWin} of the context window`)}
+      ${invTable(
+        invRow('CLAUDE.md digest','What this project is, its modules, and the lessons worth carrying into every session.',
+          'the CLAUDECTL:MEMORY block in CLAUDE.md',`~${est.digest_tokens||0} tok`,
+          `<span class="hlink" onclick="TAB='claudemd';drawProject()">CLAUDE.md</span>`)
+       +invRow('AUTOGEN / SESSIONS','Which repos this is, its recent commits, and what past sessions were about.',
+          'blocks in CLAUDE.md','see blocks',
+          `<span class="hlink" onclick="TAB='claudemd';drawProject()">CLAUDE.md</span>`)
+       +invRow('Cross-project conventions','Rules that recur across your repos, promoted once so every project on this account gets them.',
+          'a block in your user CLAUDE.md','account-wide',
+          `<span class="hlink" onclick="go('globalmd')">Global</span>`)
+       +invRow('Recent work','A one-line summary of what each session changed, put back when the next one starts.',
+          '.claudectl/memory/worklog.json',
+          `${(wl.entries||[]).length} entr${(wl.entries||[]).length===1?'y':'ies'}`,''))}
+      ${bucket('Every prompt','prompt','the only one that grows with how much you talk')}
+      ${invTable(invRow('Recall','The slice of the graph matching what you just typed, added to the message before it is sent.',
+        'the UserPromptSubmit recall hook',
+        st.budget?`up to ${st.budget} tok`:'<span class="tag">off</span>',''))}
+      <label class="autoline" style="margin-top:0" title="UserPromptSubmit recall: inject the task-relevant slice of this project's memory before every prompt. The hook itself is installed into every account.">
         <input type="checkbox" id="memHook" ${st.hook_on?'checked':''} onchange="memToggle({hook:this.checked})">
         <span>${ic('bolt')} Per-prompt recall for this project</span></label>
-      <label class="autoline" title="Write .claude/rules/claudectl-mem-*.md so Claude Code loads the memory for the paths it is actually working in.">
-        <input type="checkbox" id="memRules" ${st.rules_on?'checked':''} onchange="memToggle({rules:this.checked})">
-        <span>${ic('folder')} Path-scoped rules files</span></label>
-      <div class="fld" style="margin-top:12px;max-width:320px"><label>Recall budget (tokens per prompt)</label>
+      <div class="fld" style="margin-top:8px;max-width:320px"><label>Recall budget (tokens per prompt)</label>
         <input type="number" id="memBudget" min="0" max="20000" step="50"
           value="${st.budget==null?600:st.budget}" onchange="memToggle({budget:+this.value})">
-        <div style="color:var(--dim2);font-size:12px;margin-top:4px">What the recall preview above spends. 0 turns injection off.</div></div>
+        <div style="color:var(--dim2);font-size:12px;margin-top:4px">0 turns injection off. Try it with Recall preview.</div></div>
+      ${bucket('When relevant','lazy',`${rules.length} rule file(s) · ~${ruleTok} tok, none of it loaded until it matches`)}
+      <details><summary style="cursor:pointer;padding:6px 0">
+        <b>Path-scoped rules</b> — one file per module. Claude loads the one whose
+        <code>paths:</code> cover the file it just opened, and no others ·
+        ${rules.length} file(s), ~${ruleTok} tok</summary>
+        <table class="tbl" style="margin:4px 0 8px">
+          <tr><th>module</th><th>loads for</th><th>tok</th></tr>
+          ${rules.map(r=>`<tr><td>${esc(r.unit||r.file||'')}</td>
+            <td><code style="color:var(--cyan)">${esc(r.glob||'?')}</code></td>
+            <td class="num">${r.tokens||0}</td></tr>`).join('')
+            ||'<tr><td colspan="3" style="color:var(--dim)">None written yet.</td></tr>'}
+        </table>
+        <label class="autoline" style="margin:0" title="Write .claude/rules/claudectl-mem-*.md so Claude Code loads the memory for the paths it is actually working in.">
+          <input type="checkbox" id="memRules" ${st.rules_on?'checked':''} onchange="memToggle({rules:this.checked})">
+          <span>${ic('folder')} Keep the rule files in sync</span></label></details>
+      ${invTable(invRow('Lessons','Things this project learned the hard way — a bug and its fix, a decision, a preference you corrected. Recall injects one when it applies.',
+        'entities inside the graph',`${st.n_lessons||0}`,''))}
+      ${bucket('Stored, not loaded','source',`${stored.length} records · 0 tokens — read only when you or Claude ask`)}
+      <details id="memKeep"><summary style="cursor:pointer;padding:6px 0;color:var(--dim);font-size:13px">
+        What claudectl keeps for itself, so it knows what to rebuild and can undo it</summary>
+      ${invTable(stored.join(''))}
+      </details></div></div>
+    <div class="card"><h3>What it is doing <span class="sp"></span>
+      ${INST.html('spark','memcost',{fmt:'usd',label:'per cycle',noread:true})}</h3>
+      <p style="color:var(--dim);font-size:13px;margin:0 0 10px">Keeping memory current costs Claude calls. One pass runs when you open claudectl and
+        one every ${every(st.auto_interval)} after that — never sooner, however much is left to do.
+        Each pass re-reads at most a few changed modules, so a big backlog is spread across
+        passes instead of spent at once.</p>
+      <label class="autoline" style="margin-top:0" title="Refresh this project's memory in the background — on launch and then on the interval, from whichever interface is running — whenever its files change, without needing this tab open.">
+        <input type="checkbox" id="autoMem" ${st.auto_on?'checked':''} onchange="toggleAutoMem(this.checked)">
+        <span>${ic('refresh')} Keep this project's memory updated automatically</span>
+        <span class="tag" title="Change it on the Claude Code page, under auto-memory.">every ${every(st.auto_interval)}</span>
+        ${st.auto_updated?`<span class="tag">last run ${esc(String(st.auto_updated).slice(0,16))}</span>`:''}</label>
+      <div class="kv" style="margin-top:10px">
+        <span class="k">Last cycle</span><span>${al.extracted??st.last_extracted??0} module(s)${al.lessons?` · ${al.lessons} lesson(s)`:''}${al.scanned?` · ${al.scanned} session(s) scanned`:''}${st.last_cost_usd?` · $${(+st.last_cost_usd).toFixed(3)}`:''}</span>
+        <span class="k" title="Every Claude call memory has ever paid for on this project. Asking memory is a query, not memory being built, and is not counted.">Spent in total</span><span>$${(+(st.cost_usd_total||0)).toFixed(3)}</span>
+        ${st.last_failed?`<span class="k">Failed</span><span class="warn">${st.last_failed} module(s) could not be extracted${st.last_error?` — ${esc(String(st.last_error).slice(0,160))}`:''}. Retried on the next pass, in ${every(st.auto_interval)} — not sooner, so a failing account is not called in a loop.</span>`:''}
+        ${st.last_skipped?`<span class="k">Still queued</span><span>${st.last_skipped} module(s) — the next pass takes some, in ${every(st.auto_interval)}</span>`:''}
+        ${(!st.last_failed&&!st.last_skipped&&st.pending_units)?`<span class="k">Still queued</span><span>${st.pending_units} module(s) — the next pass takes some, in ${every(st.auto_interval)}</span>`:''}
+        ${st.dirty?`<span class="k">Edited since</span><span>${st.dirty} file(s) waiting for the next cycle</span>`:''}
+      </div>
+      ${st.dirty_hook?'':`<div style="margin-top:8px"><span class="tag warn">stale-on-edit hook not installed</span>
+        <span style="color:var(--dim);font-size:12px">— memory will not notice edits until something else triggers a cycle.</span>
+        <span class="hlink" onclick="go('hooks')">Install it</span></div>`}
       <div id="memProg"></div></div>
     <div class="card"><h3>Lessons <span class="sp"></span>
       <button class="btn sm" onclick="inlineJob('#jban','lessons_scan',C(),{label:'Learning from sessions',redraw:()=>drawMemory()})">${ic('school')} Learn from sessions${st.n_unscanned?` <span class="tag warn">${st.n_unscanned} new</span>`:''}</button>
       <button class="btn sm" onclick="lessonAct('','approve_all')">${ic('check')} Approve all pending</button></h3>
-      ${lesRows?`<table class="tbl"><tr><th>status</th><th>lesson</th><th>conf</th><th></th></tr>${lesRows}</table>`
-        :'<div style="color:var(--dim)">No lessons yet.</div>'}</div>
+      <p style="color:var(--dim);font-size:13px;margin:0 0 10px">What this project learned the hard way, read back out of your past sessions — a bug and its
+        fix, a decision and why, something you corrected. Approved ones are injected when relevant;
+        one nobody uses for ${ttl} sessions is dropped, unless you pin it.</p>
+      ${lesRows?`<table class="tbl"><tr><th>status</th><th>lesson</th><th>conf</th>
+        <th title="Sessions of disuse left before it is dropped.">left</th><th></th></tr>${lesRows}</table>`
+        :'<div class="empty">No lessons yet.</div>'}</div>
     <div class="card"><h3>Recent work</h3>
       <p style="color:var(--dim);font-size:12px;margin:0 0 8px">A token-free log of what each session changed, injected into the next session on start (claude-mem style).</p>
       <label class="autoline" style="margin-top:0" title="On session end, record a one-line summary + files touched; inject the last few on the next SessionStart.">
         <input type="checkbox" id="wlOn" ${wl.on?'checked':''} onchange="toggleWorklog(this.checked)">
         <span>${ic('school')} Track recent work for this project</span></label>
+      ${wlMissing.length?`<div style="margin-top:8px"><span class="tag warn">hook missing on ${esc(wlMissing.join(', '))}</span>
+        <span style="color:var(--dim);font-size:12px">— sessions under that account record nothing.</span>
+        <span class="hlink" onclick="go('hooks')">Fix</span></div>`:''}
       ${(wl.entries||[]).length?`<table class="tbl" style="margin-top:10px"><tr><th>when</th><th>summary</th><th>files</th></tr>`
-        +wl.entries.map(e=>`<tr><td style="white-space:nowrap;color:var(--dim)">${esc(e.ended_at||'')}</td>
+        +wl.entries.map(e=>`<tr${e.session_id?` style="cursor:pointer" onclick="openWorkSession('${jsq(e.session_id)}')" title="Open this session"`:''}>
+          <td style="white-space:nowrap;color:var(--dim)">${esc(e.ended_at||'')}</td>
           <td>${esc(e.summary||'')}</td>
           <td style="color:var(--dim);font-size:12px">${esc((e.files||[]).join(', '))}</td></tr>`).join('')
-        +`</table>`:'<div style="color:var(--dim);margin-top:8px">No sessions recorded yet.</div>'}</div>
-    <div class="card"><h3>Workspace status — score ${ws.score??'?'} ${ws.safe?'<span class="tag ok">safe</span>':'<span class="tag warn">attention</span>'}</h3>
-      <div style="font:12px Consolas,monospace;white-space:pre-wrap">${esc((ws.lines||[]).join('\n'))}</div></div>`);
+        +`</table>`:'<div class="empty">No sessions recorded yet.</div>'}</div>
+    <div class="card"><h3>Workspace health — score ${ws.score??'?'}
+      ${ws.safe?'<span class="tag ok">safe to launch</span>':'<span class="tag warn">attention</span>'}</h3>
+      <p style="color:var(--dim);font-size:13px;margin:0 0 10px">How much of what claudectl generated still matches the code as it is now. Each row is worth
+        the points beside it; clearing one raises the score.</p>
+      ${(ws.checks||[]).map(k=>{
+        const f=WSFIX[k.name]||null,na=!k.applicable;
+        return `<div class="hrow">
+          <span style="min-width:150px">${esc(k.name.replace(/_/g,' '))}</span>
+          <span style="min-width:74px">${na?'<span style="color:var(--dim2)">n/a</span>'
+            :k.state==='fresh'?'<span class="tag ok">fresh</span>'
+            :k.state==='invalid'?'<span class="tag warn">invalid</span>':'<span class="tag warn">stale</span>'}</span>
+          <span class="info" style="flex:1;color:var(--dim)">${esc(k.detail||'')}</span>
+          <span style="color:var(--dim2);font-size:11px;min-width:44px" title="Share of the freshness score this check carries.">${na?'—':'+'+(k.weight||0)}</span>
+          ${(na||k.state==='fresh'||!f)?'':`<button class="btn sm" onclick="${f[1]}">${esc(f[0])}</button>`}
+        </div>`;}).join('')||'<div class="empty">No checks ran.</div>'}
+      <div class="lbl" style="margin-top:12px">History</div>
+      <p style="color:var(--dim);font-size:12px;margin:0 0 6px">Every graph claudectl replaced. Eviction and rebuild both snapshot what they were about to overwrite, and restoring is itself snapshotted.</p>
+      <div id="histOut"><span class="spin"></span></div></div>`);
   INST.set('memory',{v:cover,tone:cover>=.6?'ok':cover>=.25?null:'warn'});
   setRead('memory',cover*100);
+  const hist=(st.cost_history||[]);
+  if(hist.length>1)INST.set('memcost',{series:hist});
+  drawHistory(['memory_graph']);
 }
+/* a worklog line names its session; opening it was one field away the whole
+   time. `viewS` indexes into SESS, which drawSessions builds — so hand the sid
+   to that renderer rather than trying to resolve it here. */
+let PENDING_SID=null;
+function openWorkSession(sid){PENDING_SID=sid;TAB='sessions';drawProject();}
 async function toggleWorklog(on){
   await post('/api/worklog',{enc:CUR.encoded,on});
   toast(on?'Recent-work tracking on':'Recent-work tracking off','ok');
 }
-/* live progress of a running memory scan (fg job or bg worker) */
+/* live progress of a running memory scan (fg job or bg worker), and — once the
+   lock clears — how the last one ENDED. The poller only ever read `progress`,
+   so a cycle that crashed cleared the lock exactly like one that succeeded and
+   the tab said nothing either way. `last` has been in this payload all along.
+   Cached in __plMemProg: an unconditional innerHTML every 600ms rebuilds nodes
+   and reflows for a string that almost never changes. */
+let __plMemProg=null;
 async function pollMemProg(){
   const el=$('#memProg');
   if(el&&PAGE_==='project'&&TAB==='memory'){
     try{
       const d=await api('/api/memory/progress?'+qs({path:CUR.path}));
-      el.innerHTML=(d.progress===null||d.progress===undefined)?''
-        :`<div style="display:flex;gap:8px;align-items:center;margin-top:10px;color:var(--warn)">
-           <span class="spin"></span> Memory scan running… ${esc(d.progress||'')}</div>`;
+      const L=d.last||null;
+      const html=(d.progress!==null&&d.progress!==undefined)
+        ?`<div style="display:flex;gap:8px;align-items:center;margin-top:10px;color:var(--warn)">
+           <span class="spin"></span> Memory scan running… ${esc(d.progress||'')}</div>`
+        :(L&&L.ok===false)
+        ?`<div style="margin-top:10px"><span class="tag warn">last run failed</span>
+           <span style="color:var(--dim);font-size:12px">${esc(L.error||'')}</span></div>`
+        :(L&&L.ok)
+        ?`<div style="margin-top:10px;color:var(--dim);font-size:12px">Last run: ${L.extracted||0} module(s), ${L.lessons||0} lesson(s)${L.pending?`, ${L.pending} still queued`:''}.</div>`
+        :'';
+      if(html!==__plMemProg){__plMemProg=html;el.innerHTML=html;}
     }catch(e){}
   }
 }
@@ -2124,40 +2361,90 @@ async function recallPrev(){
   const v=await ask('Recall preview',[{label:'Simulated prompt',ph:'e.g. fix the launch bug'}]);
   if(v===null)return;
   const d=await api('/api/recall-preview?'+qs({...C(),q:v[0]}));
+  const b=$('#dBody');if(!b)return;
   $('#dTitle').textContent=`Recall preview (${d.tokens||0} tok)`;
-  $('#dBody').innerHTML=d.empty?'<div class="empty">Nothing would be injected.</div>'
-    :`<div class="msg"><div class="body">${esc(d.context)}</div></div>`;
+  // the items ARE the answer to "why did that text appear" — they were computed
+  // and dropped at the endpoint. Previewing does not reinforce (log=False), so
+  // opening this repeatedly no longer reshapes what recall will pick next time.
+  b.innerHTML=d.empty?'<div class="empty">Nothing would be injected.</div>'
+    :`${(d.items||[]).length?`<div class="lbl">Injected (${d.items.length})</div>
+       <div class="chips">${d.items.map(n=>`<span class="chip">${esc(n)}</span>`).join('')}</div>`:''}
+     <div class="msg"><div class="body">${esc(d.context)}</div></div>`;
   $('#drawer').classList.add('show');
 }
 
-/* CLAUDE.md tab */
+/* CLAUDE.md tab — the file, block by block.
+
+   CLAUDE.md is five things stacked in one file: your prose, KEEP-fenced
+   regions, and three blocks claudectl rewrites (AUTOGEN, SESSIONS, MEMORY).
+   Shown as one 46vh scroll of raw text, there was no way to tell which part
+   cost what, which button regenerated which part, or that "Prune" only ever
+   touches the SESSIONS block. `ctxaudit.split_blocks` already did the split for
+   the token audit; the endpoint just stopped throwing the result away. */
+const CMFIX={
+  manual:['Compress',"inlineJob('#jban','ai_compress',C(),{label:'Compressing CLAUDE.md',redraw:()=>drawClaudeMd()})",
+          'Rewrite your prose shorter with Claude. KEEP-fenced text is never sent.'],
+  keep:['Protect more','cmProtect()',
+        'Fence a section so AI compression can never reword, shorten or drop it.'],
+  autogen:['Rebuild','cmScaffold()','Re-derive the repo and commit block.'],
+  sessions:['Prune','cmPrune()','Drop session entries past the cap. Transcripts are untouched.'],
+  memory:['Rebuild','buildMemory()','Re-extract the project memory this digest is built from.']};
 async function drawClaudeMd(){
   const nav=paintNow('<div class="empty"><span class="spin"></span></div>');
   const c=C();
   const [md,mm]=await Promise.all([api('/api/claude-md?'+qs(c)),
                                    api('/api/memory-map?'+qs(c))]);
-  const mf=mm.files||[],have=mf.filter(f=>f.exists).length;
-  paint(nav,`
-    <div class="card"><h3>CLAUDE.md <span class="sp"></span>
+  const blocks=md.blocks||[];
+  if(!paint(nav,`
+    <div class="card"><h3>CLAUDE.md — block by block <span class="sp"></span>
       <button class="btn sm" onclick="cmScaffold()">${ic('doc')} Scaffold</button>
       <button class="btn sm" onclick="inlineJob('#jban','ai_scaffold',C(),{label:'AI-analyzing project',redraw:()=>drawClaudeMd()})">${ic('ai')} AI analyze</button>
-      <button class="btn sm" onclick="inlineJob('#jban','ai_compress',C(),{label:'Compressing CLAUDE.md',redraw:()=>drawClaudeMd()})">${ic('shrink')} AI compress</button>
-      <button class="btn sm" onclick="cmPrune()">${ic('cut')} Prune</button>
       <button class="btn sm" onclick="post('/api/open-editor',{file:CUR.path+'\\\\CLAUDE.md'})">${ic('edit')} Edit</button></h3>
-      ${md.exists?`<div style="font:12px Consolas,monospace;white-space:pre-wrap;max-height:46vh;overflow-y:auto;background:var(--code);border-radius:8px;padding:12px">${esc(md.text)}</div>`
-        :'<div style="color:var(--dim)">No CLAUDE.md yet — scaffold one.</div>'}</div>
-    <div class="card"><h3>Memory files map</h3>
+      <p style="color:var(--dim);font-size:13px;margin:0 0 10px">Claude reads this whole file on every turn. It is five things stacked in one document —
+        your own prose, regions you have fenced off, and three blocks claudectl maintains.
+        Each row below is one of them, with what it costs and the one button that rewrites it.</p>
+      ${md.exists?`
+      <div id="cmBlocks">${blocks.map(b=>{const f=CMFIX[b.key]||null;return `
+        <div class="hrow">
+          <span style="min-width:210px">${b.present?ic('check'):'<span style="color:var(--dim2)">—</span>'} ${esc(b.label)}</span>
+          <span class="info" style="flex:1;color:var(--dim);font-size:12px">${
+            b.key==='sessions'&&b.entries?`${b.entries} entr${b.entries===1?'y':'ies'}`
+            :b.key==='manual'?'yours — claudectl never rewrites it unprompted'
+            :b.key==='keep'?'AI compression is not even shown this text'
+            :b.present?'maintained by claudectl':'not present'}</span>
+          <span class="num" style="min-width:70px;color:var(--dim2)">~${b.tokens||0} tok</span>
+          ${f?`<button class="btn sm" title="${esc(f[2])}" onclick="${f[1]}">${esc(f[0])}</button>`:''}
+        </div>${b.text?`<details style="margin:0 0 6px 12px"><summary style="cursor:pointer;color:var(--dim2);font-size:12px">show</summary>
+          <div class="diff">${esc(b.text).split('\n').map(l=>`<div>${l}</div>`).join('')}</div></details>`:''}`;}).join('')}</div>
+      <p style="color:var(--dim);font-size:12px;margin:10px 0 0">
+        <b>~${md.tokens||0} tok</b> of this file is read on every turn of every session in this project.</p>
+      <details style="margin-top:8px"><summary style="cursor:pointer;color:var(--dim2);font-size:12px">The whole file</summary>
+        <div style="font:12px Consolas,monospace;white-space:pre-wrap;max-height:46vh;overflow-y:auto;background:var(--code);border-radius:8px;padding:12px;margin-top:6px">${esc(md.text)}</div></details>`
+        :'<div class="empty">No CLAUDE.md yet — scaffold one.</div>'}</div>
+    <div class="card"><h3>Memory files map <span class="sp"></span>
+      <span style="color:var(--dim2);font-size:12px">every CLAUDE.md that reaches this project</span></h3>
       ${(mm.files||[]).map(f=>`<div style="display:flex;gap:8px;padding:3px 0;align-items:center">
         <span style="width:18px">${f.exists?ic('check'):'—'}</span>
         <span style="flex:1">${esc(f.label)}</span>
         <span style="color:var(--dim2);font-size:11px">${esc(f.path)}</span>
         ${f.exists?`<button class="btn sm" onclick="post('/api/open-editor',{file:'${jsq(f.path)}'})">open</button>`:''}
-      </div>`).join('')}</div>
+      </div>${(f.imports||[]).map(im=>`<div class="agrow" style="margin-left:26px">
+        <span style="flex:1;color:var(--dim);font-size:12px">@import ${esc(im.ref)}</span>
+        ${im.exists?ic('check'):'<span class="tag warn" title="This @import points at a file that does not exist — Claude silently loads nothing for it.">missing</span>'}
+      </div>`).join('')}`).join('')}</div>
+    <div class="card"><h3>${ic('refresh')} History <span class="sp"></span>
+      <span style="color:var(--dim2);font-size:12px">every version claudectl replaced</span></h3>
+      <p style="color:var(--dim);font-size:13px;margin:0 0 8px">Compress and prune both snapshot what they were about to
+        overwrite. Nothing claudectl shrinks is gone until it falls off the end of this list.
+        Restoring is itself snapshotted, so you can walk back out again.</p>
+      <div id="histOut"><span class="spin"></span></div></div>
     <div class="card"><h3>${ic('refresh')} loop.md</h3>
       <p style="color:var(--dim);font-size:13px;margin:0">What a bare <code>/loop</code> runs in this project. Both scopes are edited on the <span class="hlink" onclick="go('loops')">Loops</span> page, beside the loops themselves — two editors for one file is one too many.</p></div>
-    <div class="card"><h3>System prompt</h3><div id="spBox"></div></div>`);
+    <div class="card"><h3>System prompt</h3><div id="spBox"></div></div>`))return;
+  drawHistory(['claude_md','system_prompt']);
   const sp=await api('/api/system-prompt?'+qs(c));
-  $('#spBox').innerHTML=`<div class="fld"><textarea id="spText">${esc(sp.text)}</textarea></div>
+  const b=$('#spBox');if(!b)return;   // navigated away during the second fetch
+  b.innerHTML=`<div class="fld"><textarea id="spText">${esc(sp.text)}</textarea></div>
     <div class="mrow"><button class="btn pri sm" onclick="spSave()">Save</button></div>`;
 }
 async function cmScaffold(){
@@ -2184,36 +2471,39 @@ async function spSave(){
   await post('/api/system-prompt',{...C(),text:$('#spText').value});
   toast('System prompt saved','ok');}
 
-/* audit tab */
+/* audit tab — one question: what does a single turn cost me, across EVERY
+   surface. That includes the ones no project tab should own: the global
+   CLAUDE.md of each account, the system-prompt file, SessionStart hook
+   injections and MCP tool schemas. The per-artifact detail that used to live
+   here now sits on the tab that owns the artifact — CLAUDE.md blocks on the
+   CLAUDE.md tab, rule globs on the Memory tab — so each row here links there
+   instead of restating it. */
 async function drawAudit(){
   const nav=paintNow('<div class="empty"><span class="spin"></span></div>');
   const c=C();
   const [d,deny]=await Promise.all([api('/api/ctxaudit?'+qs(c)),api('/api/deny?'+qs(c))]);
-  const it=d.items||[];
-  const rows=(d.items||[]).map(it=>`
-    <tr><td>${esc(it.label)} ${it.lazy?'<span class="tag">lazy</span>':''}</td>
-    <td class="num">${it.tokens}</td>
-    <td style="color:var(--warn);font-size:12px">${esc((it.warnings||[]).join(' · '))}</td></tr>`).join('');
-  paint(nav,`
+  const rows=(d.items||[]).map(it=>{
+    const owner=it.label.startsWith('CLAUDE.md')?'claudemd'
+               :it.label.startsWith('rule ')?'memory':'';
+    return `
+    <tr><td>${esc(it.label)} ${it.lazy?'<span class="tag" title="Loaded only when Claude opens a matching path.">lazy</span>':''}
+      ${owner?`<span class="hlink" style="font-size:11px" onclick="TAB='${owner}';drawProject()">detail →</span>`:''}</td>
+    <td class="num">${it.tokens==null?'<span title="Not knowable before the session starts.">~?</span>':it.tokens}</td>
+    <td style="color:var(--warn);font-size:12px">${esc((it.warnings||[]).join(' · '))}</td>
+    <td style="white-space:nowrap">${it.path?`<button class="btn sm" onclick="post('/api/open-editor',{file:'${jsq(it.path)}'})">open</button>`:''}</td></tr>`;}).join('');
+  if(!paint(nav,`
     <div class="card"><h3>Context weight — ~${d.total||0} tok loaded every turn
       <span class="sp"></span>
       <button class="btn sm" onclick="cmPrune(drawAudit)">${ic('cut')} Prune sessions</button>
-      <button class="btn sm" onclick="post('/api/ctxaudit/compact',{path:CUR.path}).then(()=>{toast('Compact section added','ok');drawAudit()})">${ic('add')} Compact instructions</button>
-      <button class="btn sm" onclick="cmProtect()" title="Fence a section of CLAUDE.md so AI compression can never reword, shorten or drop it. The fenced text is not even sent to the model.">${ic('check')} Protect a section</button></h3>
-      <table class="tbl"><tr><th>item</th><th>tokens</th><th>warnings</th></tr>${rows}</table></div>
-    <div class="card"><h3>${ic('refresh')} History <span class="sp"></span>
-      <span style="color:var(--dim2);font-size:12px">every version claudectl replaced</span></h3>
-      <p style="color:var(--dim);font-size:13px;margin:0 0 8px">Compress, prune and memory eviction all snapshot what they were about to
-        overwrite. Nothing claudectl shrinks is gone until it falls off the end of this list.
-        Restoring is itself snapshotted, so you can walk back out again.</p>
-      <div id="histOut"><span class="spin"></span></div></div>
+      <button class="btn sm" onclick="post('/api/ctxaudit/compact',{path:CUR.path}).then(()=>{toast('Compact section added','ok');drawAudit()})">${ic('add')} Compact instructions</button></h3>
+      <p style="color:var(--dim);font-size:12px;margin:0 0 8px">Every surface a session loads, project-scoped and account-scoped together. <b>lazy</b> rows cost nothing until Claude opens a matching path, so they are not in the total.</p>
+      <table class="tbl"><tr><th>item</th><th>tokens</th><th>warnings</th><th></th></tr>${rows}</table></div>
     <div class="card"><h3>Deny rules (token-heavy paths) <span class="sp"></span>
       <button class="btn sm pri" onclick="post('/api/deny/apply',{path:CUR.path}).then(r=>{toast(r.added+' added, '+r.existed+' existed','ok');drawAudit()})">Apply all</button></h3>
       ${(deny.patterns||[]).map(p=>`<div style="display:flex;gap:10px;padding:2px 0">
         <code style="color:var(--cyan)">${esc(p.pattern)}</code>
         <span style="color:var(--dim);font-size:12px">${esc(p.why)}</span></div>`).join('')
-      ||'<div style="color:var(--dim)">Nothing heavy found.</div>'}</div>`);
-  drawHistory();
+      ||'<div class="empty">Nothing heavy found.</div>'}</div>`))return;
 }
 async function cmProtect(){
   const v=await ask('Protect a section of CLAUDE.md',
@@ -2224,19 +2514,43 @@ async function cmProtect(){
   if(v===null||!v[0].trim())return;
   const r=await post('/api/ctxaudit/protect',{path:CUR.path,text:v[0].trim()});
   toast(r.ok?'Section protected':(r.error||'Failed'),r.ok?'ok':'err');
-  if(r.ok)drawAudit();
+  if(r.ok)drawClaudeMd();     // the fence is a CLAUDE.md block, shown there
 }
-async function drawHistory(){
-  const d=await api('/api/history?'+qs(C()));const b=$('#histOut');if(!b)return;
-  const rows=(d.keys||[]).filter(k=>(k.versions||[]).length).map(k=>
-    `<div class="lbl" style="margin-top:8px">${esc(k.title)}</div>`
-    +k.versions.map(v=>`<div class="agrow">
-      <span style="min-width:130px;color:var(--dim)">${esc(v.age)}</span>
-      <span style="flex:1"><span style="color:var(--ok)">+${v.added}</span>
-        <span style="color:var(--err)">-${v.removed}</span></span>
-      <button class="btn sm" onclick="histDiff('${jsq(k.key)}',${v.ts})">diff</button>
+/* One renderer, three consumers: the Memory tab owns memory_graph, the
+   CLAUDE.md tab owns claude_md + system_prompt. `only` filters by key so
+   history sits beside the artifact it is history OF, instead of in a third tab
+   that has to explain which of the three it is showing. */
+/* Two ways a version can be summarised, and the graph needs the second one.
+   `+27808 -27783` is what a re-serialised 300 KB JSON reports whether one fact
+   changed or every one did — a true number that answers nothing. For the graph
+   the summary is its SHAPE, which is what you would restore for. */
+const HIST_SHOWN=4;
+function histSum(k,v,now){
+  if(v.shape){const s=v.shape,d=(a,b)=>{const n=(b||0)-(a||0);
+      return n?`<span style="color:var(--${n>0?'ok':'err'})">${n>0?'+':''}${n}</span>`:'';};
+    return `${s.entities} facts · ${s.relations} links · ${s.lessons} lessons`
+      +(now?` <span style="color:var(--dim2)">(now ${now.entities}${d(s.entities,now.entities)}`
+        +`, ${now.lessons}${d(s.lessons,now.lessons)} lessons)</span>`:'');}
+  return `<span style="color:var(--ok)">+${v.added}</span> <span style="color:var(--err)">-${v.removed}</span>`;
+}
+function histRows(k,vs){
+  return vs.map(v=>`<div class="agrow">
+      <span style="min-width:70px;color:var(--dim)">${esc(v.age)}</span>
+      <span style="flex:1;font-size:12px">${histSum(k.key,v,k.now)}</span>
+      <button class="btn sm" onclick="histDiff('${jsq(k.key)}',${v.ts})">what changed</button>
       <button class="btn sm pri" onclick="histRestore('${jsq(k.key)}',${v.ts},'${jsq(k.title)}','${jsq(v.age)}')">restore</button>
-      </div>`).join('')).join('');
+      </div>`).join('');
+}
+async function drawHistory(only){
+  const d=await api('/api/history?'+qs(C()));const b=$('#histOut');if(!b)return;
+  // 12 versions per key is the right thing to KEEP and the wrong thing to
+  // show — a wall of near-identical rows buries the recent one you want.
+  const rows=(d.keys||[]).filter(k=>(!only||only.includes(k.key))&&(k.versions||[]).length).map(k=>{
+    const vs=k.versions,head=vs.slice(0,HIST_SHOWN),rest=vs.slice(HIST_SHOWN);
+    return `<div class="lbl" style="margin-top:8px">${esc(k.title)}</div>`
+      +histRows(k,head)
+      +(rest.length?`<details><summary style="cursor:pointer;color:var(--dim2);font-size:12px;padding:4px 0">${rest.length} older version(s)</summary>${histRows(k,rest)}</details>`:'');
+  }).join('');
   b.innerHTML=rows||'<div class="empty">No version has been replaced yet — nothing to roll back to.</div>';
 }
 async function histDiff(key,ts){
@@ -2255,7 +2569,7 @@ async function histRestore(key,ts,title,age){
     +`so this is reversible too.`))return;
   const r=await post('/api/history/restore',{...C(),key,ts});
   toast(r.ok?(r.message||'Restored'):(r.error||'Restore failed'),r.ok?'ok':'err');
-  if(r.ok)drawAudit();
+  if(r.ok)drawProject();     // history now lives on two tabs — redraw whichever
 }
 
 /* project usage tab */
@@ -4267,6 +4581,9 @@ async function pgHooks(nav){
       <button class="btn sm" onclick="hookPurge()">${ic('del')} Purge broken</button>
       <button class="btn sm" onclick="hookAI()">${ic('ai')} AI-generate</button></h3>
       ${picker}
+      <p style="color:var(--dim);font-size:12px;margin:0 0 8px">${HKACCT
+        ?'Acting on this account only.'
+        :'Turning one off or deleting it applies to <b>every</b> account, the same as installing. Pick an account above to act on that one alone.'}</p>
       ${active||'<div style="color:var(--dim)">No hooks installed.</div>'}
       <div style="color:var(--dim2);font-size:12px;margin-top:8px">${esc(d.settings_path||'')}</div></div>
     <div class="card"><h3>Templates</h3>
@@ -4529,7 +4846,7 @@ async function pgSettings(nav){
         <input id="sMemEnts" type="number" min="50" max="20000" step="50"></div>
     </div>
     <div class="grid2">
-      <div class="fld"><label>Refresh when a project is opened</label><div class="chips" id="sMemOpen"></div></div>
+      <div class="fld"><label>Refresh when a project is opened <span style="color:var(--dim2)">— for projects <i>not</i> on the auto-memory schedule; those refresh on their own interval and never on open</span></label><div class="chips" id="sMemOpen"></div></div>
       <div class="fld"><label>Learn lessons from sessions</label><div class="chips" id="sMemLessons"></div></div>
     </div>
     <div class="mrow"><button class="btn pri" onclick="setMemLimitsSave()">Save</button></div></div>
@@ -4601,7 +4918,8 @@ async function pgSettings(nav){
     <p style="color:var(--dim);font-size:13px;margin:0">A desktop notification when a background job that ran longer than ${20}s finishes — memory builds, plans, reviews — and when the detached memory worker is done, which has no window of its own at all. Quick jobs never notify.</p></div>
   <div class="card"><h3>${ic('refresh')} Auto-memory <span class="sp"></span>
     <span class="fld" style="margin:0"><select id="amInt" onchange="amSaveInterval(this.value)" style="width:auto"></select></span></h3>
-    <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Projects checked below have their memory refreshed in the background — on GUI start and on the interval — whenever their files change. Only changed projects use Claude; nothing runs while unchanged.</p>
+    <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Projects checked below have their memory refreshed in the background — one pass when claudectl starts, then one every interval, whenever their files change. Only changed projects use Claude; nothing runs while unchanged.</p>
+    <p style="color:var(--dim);font-size:13px;margin-bottom:8px">A pass re-reads a few changed modules at most, and whatever is left waits for the <b>next</b> interval — so a big backlog is spread out rather than spent at once. Opening a checked project does not add a pass; this schedule is the only thing that spends on it.</p>
     <div id="amList"><span class="spin"></span></div></div>`))return;
   chipsFill($('#sEff'),o.efforts,null,ST.defaults.effort);
   chipsFill($('#sMod'),o.models,o.model_labels,ST.defaults.model);

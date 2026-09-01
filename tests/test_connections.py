@@ -153,3 +153,18 @@ def test_connections_screen_renders(monkeypatch, tmp_path):
                             actual, folder, 'alpha')
     assert 'ARCHITECTURE' in cap.plain
     assert 'Files' in cap.plain
+
+
+def test_build_output_is_not_indexed(monkeypatch, tmp_path):
+    """mkdocs writes `site/` and the walk had no reason to skip it, so build
+    output became a memory unit — a paid Claude call and a rule file spent on
+    generated JavaScript nobody edits."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    _mkfile(actual, 'src/app.py', 'x = 1\n')
+    _mkfile(actual, 'site/assets/javascripts/bundle.js', 'var a=1;')
+    g = connections.build_hierarchy(actual, folder)
+    ids = _ids(g)
+    assert 'dir:site' not in ids and not [i for i in ids if i.startswith('file:site/')], \
+        'generated build output was indexed'
+    assert 'dir:src' in ids

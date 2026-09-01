@@ -295,16 +295,39 @@ def test_micro_digest_within_budget(monkeypatch, tmp_path):
     assert 'E0' not in d                                     # no entity dump
 
 
-def test_micro_digest_counts_lessons(monkeypatch, tmp_path):
+def test_micro_digest_carries_the_lessons_themselves(monkeypatch, tmp_path):
+    """The digest is the ONE memory surface read on every turn, and it was
+    spending its budget on a module listing plus a lesson COUNT — "85 learned"
+    tells a session nothing it can act on. The top lessons are named now;
+    pending ones still never leave the review screen, and the entity dump this
+    replaced stays gone."""
     Sandbox(monkeypatch, tmp_path)
     mem = {'entities': [
         {'name': 'Engine', 'type': 'module', 'summary': 'core', 'repo': 'svc', 'module': 'engine'},
-        {'name': 'L1', 'type': 'lesson', 'status': 'approved', 'summary': 'x', 'repo': '', 'module': ''},
+        {'name': 'L1', 'type': 'lesson', 'status': 'approved', 'confidence': 0.9,
+         'summary': 'retries need jitter', 'repo': '', 'module': ''},
         {'name': 'L2', 'type': 'lesson', 'status': 'pending', 'summary': 'y', 'repo': '', 'module': ''}],
         'summaries': {'svc/engine': 'the engine'}, 'relations': []}
     d = memory.build_digest_micro(mem)
     assert 'lessons: 1 learned' in d                          # pending excluded
-    assert 'L1' not in d
+    assert 'L1' in d and 'retries need jitter' in d
+    assert 'L2' not in d, 'a pending lesson reached a session without review'
+
+
+def test_micro_digest_carries_the_module_dependencies(monkeypatch, tmp_path):
+    """`module_edges` is derived from real imports and went into the graph file
+    and no further — yet which module leans on which is exactly the orientation
+    a session lacks on turn one."""
+    Sandbox(monkeypatch, tmp_path)
+    mem = {'entities': [
+        {'name': 'Engine', 'type': 'module', 'summary': 'core', 'repo': 'svc', 'module': 'engine'}],
+        'summaries': {'svc/engine': 'the engine'}, 'relations': [],
+        'module_edges': [{'source': 'svc/tests', 'target': 'svc/engine', 'weight': 40},
+                         {'source': 'svc/cli', 'target': 'svc/engine', 'weight': 9}]}
+    d = memory.build_digest_micro(mem)
+    assert 'tests → engine' in d and 'cli → engine' in d
+    assert 'svc/tests' not in d, 'the repo prefix is on every edge — pure repetition'
+    assert memory.tokens_estimate(d) <= 250
 
 
 # ── digest (full, kept for preview) ──────────────────────────
@@ -887,3 +910,54 @@ def test_the_dirty_log_only_records_edit_tools(monkeypatch, tmp_path):
     cwd = str(tmp_path)
     assert memdirty_hook.record(cwd, '') == 0
     assert memory.has_dirty(cwd) is False
+
+
+def test_memory_spend_accumulates(monkeypatch, tmp_path):
+    """`last_cost_usd` only ever held the MOST RECENT cycle — the next cycle
+    overwrote it, so what memory has cost over its life was unmeasurable."""
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    _mkfile(actual, 'mod1/a.py')
+    _mkfile(actual, 'mod2/b.py')
+
+    def fake(corpus, cwd, unit='', progress=''):
+        memory.last_call_cost = 0.01          # what a real envelope records
+        return {'summary': f'summary of {unit}',
+                'entities': [{'name': f'E[{unit}]', 'type': 'module', 'summary': 's'}],
+                'relations': []}
+    monkeypatch.setattr(memory, '_extract', fake)
+
+    mem = memory.refresh_memory(actual, folder, 'alpha')
+    assert round(mem['cost_usd_total'], 4) == 0.02      # two units
+    assert mem['cost_history'] == [0.01, 0.01]
+
+    _mkfile(actual, 'mod1/a.py', 'changed = True\n')
+    mem = memory.refresh_memory(actual, folder, 'alpha')
+    assert round(mem['cost_usd_total'], 4) == 0.03, 'the total was overwritten, not added to'
+    assert mem['last_cost_usd'] == 0.01, 'the per-cycle figure must still be per-cycle'
+
+    # the ring is bounded — it feeds a sparkline, not an audit log
+    for _ in range(40):
+        memory.charge(mem)
+    assert len(mem['cost_history']) == memory.COST_HISTORY
+
+
+def test_an_old_graph_gains_the_cost_keys(monkeypatch, tmp_path):
+    """No SCHEMA_VERSION bump: _migrate setdefaults every _empty() key, so a
+    graph written before the accumulator existed reads back with it at zero."""
+    Sandbox(monkeypatch, tmp_path)
+    m = memory._migrate({'entities': [], 'schema_version': 3})
+    assert m['cost_usd_total'] == 0.0 and m['cost_history'] == []
+
+
+def test_the_dirty_log_can_be_counted_without_draining(monkeypatch, tmp_path):
+    sb = Sandbox(monkeypatch, tmp_path)
+    actual, enc, folder, _ = sb.add_project('alpha')
+    assert memory.dirty_count(actual) == 0
+    p = memory.dirty_log_path(actual)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, 'w', encoding='utf-8') as f:
+        f.write('a.py\nb.py\n\n')
+    assert memory.dirty_count(actual) == 2
+    assert memory.dirty_count(actual) == 2, 'counting drained the signal'
+    assert memory.drain_dirty(actual)                  # drain is still the remover
