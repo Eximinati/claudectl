@@ -16,9 +16,9 @@ itself — do not edit by hand. Refreshed weekly by `.github/workflows/metrics.y
 | | |
 |---|---|
 | Version in this repository | **1.8.2** |
-| Published on PyPI | not yet published |
-| Latest upload | — |
-| Releases to date | — |
+| Published on PyPI | 1.8.2 |
+| Latest upload | 2026-09-01 |
+| Releases to date | 5 |
 | License | MIT |
 | Runtime dependencies | **0** |
 
@@ -30,17 +30,17 @@ From [pypistats.org](https://pypistats.org/packages/claudectl), mirrors excluded
 
 | Last day | Last week | Last month |
 |---|---|---|
-| — | — | — |
+| 146 | 279 | 410 |
 
 ## Repository
 
 | | |
 |---|---|
-| Stars | — |
-| Forks | — |
-| Open issues and pull requests | — |
-| First commit | — |
-| Last push | — |
+| Stars | 9 |
+| Forks | 2 |
+| Open issues and pull requests | 0 |
+| First commit | 2026-06-11 |
+| Last push | 2026-09-01 |
 
 ## Codebase
 
@@ -50,9 +50,9 @@ From [pypistats.org](https://pypistats.org/packages/claudectl), mirrors excluded
 | Lines of Python | 56,806 |
 | Tests | 1,367 |
 | Documentation pages | 28 |
-| Commits | 128 |
-| Commits in the last 30 days | 61 |
+| Commits | 129 |
+| Commits in the last 30 days | 62 |
 
 Tests run on Windows, macOS and Linux across the supported Python versions on every push — see [CI](https://github.com/babarmuhammad/claudectl/actions).
 
-*Generated 2026-09-01 19:08 UTC.*
+*Generated 2026-09-01 19:12 UTC.*
