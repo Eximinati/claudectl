@@ -207,7 +207,6 @@ def save_manifest(project_path, m, proj_folder=None):
 def _gather_live(project_path, proj_folder):
     """Cheaply collect the current observable workspace facts."""
     from .claude_md import resolve_memory_files
-    from .sessions import scan_sessions
 
     sha, short, branch = _git_head(project_path) if project_path else ('', '', '')
 
@@ -224,20 +223,35 @@ def _gather_live(project_path, proj_folder):
                 'sha256': _sha256_file(path) if exists else '',
             })
 
+    # A count and the two extreme mtimes — so this must NOT parse transcripts.
+    # `scan_sessions` also builds a preview and a message count for every file
+    # (1 542 ms over 687 sessions on this repo) and both are discarded here,
+    # which is most of what made a read-only status call take seconds. The
+    # internal-session filter is kept, so `analyzed_count` is still the same
+    # number `update_manifest` baselined.
     sess = {'analyzed_count': 0, 'first_ts': 0, 'last_ts': 0, 'range_days': 0}
-    rows = []
+    stamps = []
     if proj_folder:
-        from .sessions import project_session_folders
+        from .sessions import is_internal_session, project_session_folders
         seen_sids = set()
         for folder in project_session_folders(proj_folder):
-            for r in scan_sessions(folder):
-                if r[1] not in seen_sids:          # dedup by sid across accounts
-                    seen_sids.add(r[1])
-                    rows.append(r)
-        rows.sort(key=lambda r: r[0], reverse=True)
-    if rows:
-        last_ts, first_ts = rows[0][0], rows[-1][0]
-        sess = {'analyzed_count': len(rows), 'first_ts': first_ts, 'last_ts': last_ts,
+            if not os.path.isdir(folder):
+                continue
+            for nm in os.listdir(folder):
+                if not nm.endswith('.jsonl') or nm[:-6] in seen_sids:
+                    continue                       # dedup by sid across accounts
+                p = os.path.join(folder, nm)
+                try:
+                    mtime = os.path.getmtime(p)
+                except OSError:
+                    continue
+                if is_internal_session(p):
+                    continue
+                seen_sids.add(nm[:-6])
+                stamps.append(mtime)
+    if stamps:
+        last_ts, first_ts = max(stamps), min(stamps)
+        sess = {'analyzed_count': len(stamps), 'first_ts': first_ts, 'last_ts': last_ts,
                 'range_days': round(max(0.0, last_ts - first_ts) / 86400, 1)}
 
     # MCP docs live in the global CLAUDE.md (per-server sentinel sections).
@@ -249,10 +263,19 @@ def _gather_live(project_path, proj_folder):
     # documenting a server under a non-default account wrote a file this reader
     # never opened, and the check was permanently stale. Fourth instance of the
     # import-time-binding bug this codebase keeps re-learning.
+    #
+    # Read the cache, never spawn. `mcp.mcp_servers` is filled by a background
+    # thread at import, so reading it is free; `get_mcp_status()` shells out to
+    # `claude mcp list` and took ~3 s — inside a call whose own docstring calls
+    # itself read-only. An empty list is also the legitimate answer for someone
+    # with no servers, so the cache is trusted only once `_mcp_ready` says the
+    # thread finished, the same guard ctxaudit.py:223 already uses.
     servers = []
+    mcp_ready = False
     try:
         from . import mcp
-        cur = mcp.mcp_servers or mcp.get_mcp_status()
+        mcp_ready = bool(getattr(mcp, '_mcp_ready', False))
+        cur = list(mcp.mcp_servers) if mcp_ready else []
         texts = []
         for _name, d in _global_md_paths():
             try:
@@ -279,6 +302,7 @@ def _gather_live(project_path, proj_folder):
         'claude_md_files': claude_md_files,
         'sessions': sess,
         'mcp_live': servers,
+        'mcp_ready': mcp_ready,
     }
 
 
@@ -295,15 +319,20 @@ def update_manifest(project_path, proj_folder, op, **data):
         m['claude_md_files'] = live['claude_md_files']
         m['sessions'] = live['sessions']
 
-        # MCP snapshot from live status + global-CLAUDE.md documentation
+        # MCP snapshot from live status + global-CLAUDE.md documentation.
+        # Only when the status is actually known: since _gather_live stopped
+        # spawning `claude mcp list`, an update that lands before the background
+        # thread finishes would otherwise overwrite a correct snapshot with
+        # zero servers.
         now = _now_iso()
-        m['mcp'] = {
-            'count': len(live['mcp_live']),
-            'servers': [{'name': s['name'], 'status': s['status'],
-                         'tool_count': s['tool_count'],
-                         'documented_at': now if s['documented'] else ''}
-                        for s in live['mcp_live']],
-        }
+        if live.get('mcp_ready', True):
+            m['mcp'] = {
+                'count': len(live['mcp_live']),
+                'servers': [{'name': s['name'], 'status': s['status'],
+                             'tool_count': s['tool_count'],
+                             'documented_at': now if s['documented'] else ''}
+                            for s in live['mcp_live']],
+            }
 
         # source inputs snapshot
         m['source_inputs'] = _source_inputs(m)
@@ -453,8 +482,12 @@ def _evaluate(m, live):
             add('mcp_docs', 'stale', f"undocumented: {', '.join(undoc)}")
         else:
             add('mcp_docs', 'fresh', 'all servers documented')
-    else:
+    elif live.get('mcp_ready', True):
         add('mcp_docs', 'fresh', 'no MCP servers', applicable=False)
+    else:
+        # empty because nothing has been read yet, which is a different fact
+        # from having no servers — say which one it is
+        add('mcp_docs', 'fresh', 'MCP status not read yet', applicable=False)
 
     # sessions: new since generation
     cur_sessions = live['sessions']['analyzed_count']

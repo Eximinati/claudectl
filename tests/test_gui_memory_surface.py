@@ -53,11 +53,14 @@ SURFACE = {
         'digest_tokens', 'hook_budget',
         # /api/lessons — decay needs all three numbers, not just confidence
         'last_used', 'counter', 'ttl', 'kind',
-        # /api/workspace-status — structured checks, not terminal lines
-        'checks', 'applicable', 'weight',
         # /api/worklog
         'installed', 'session_id',
     ],
+    # /api/workspace-status is fetched AFTER the paint (hashing files and
+    # walking the transcript folders is the slowest thing the tab asks for), so
+    # its fields land in the function that fills #wsBox. Same obligation, one
+    # renderer further along.
+    'fillWorkspace': ['checks', 'applicable', 'weight'],
     'drawClaudeMd': [
         'blocks', 'entries', 'present',     # /api/claude-md
         'imports',                          # /api/memory-map — broken @import
@@ -169,6 +172,25 @@ def test_every_memory_field_on_the_wire_reaches_the_screen():
     assert not missing, (
         'these fields are computed, serialised and thrown away:\n  '
         + '\n  '.join(missing))
+
+
+def test_the_memory_tab_does_not_wait_on_the_slow_call_before_painting():
+    """`/api/workspace-status` hashes the repo's key files and walks every
+    transcript folder of every account — 4.6s on this repo before the handler
+    was cut down, and still by far the most expensive thing the tab asks for.
+    Awaiting it inside `drawMemory` made the ENTIRE page wait on a card that is
+    below the fold, so the tab looked broken while three fast calls sat
+    finished. It belongs in the fill that runs after `paint()`."""
+    src = _source()
+    body = _slice(src, 'drawMemory')
+    assert 'workspace-status' not in body, \
+        'drawMemory awaits the slow call again — the page waits on it'
+    fill = _slice(src, 'fillWorkspace')
+    assert 'workspace-status' in fill
+    # and it must survive a navigation away mid-fetch: the node it writes has
+    # to be re-queried after the await, never captured before it
+    assert re.search(r"const b=\$\('#wsBox'\);if\(!b\)return;", fill), \
+        'fillWorkspace writes a node it did not re-query after the await'
 
 
 def test_the_gate_covers_the_keys_the_handlers_actually_send():

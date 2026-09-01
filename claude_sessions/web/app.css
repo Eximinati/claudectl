@@ -264,7 +264,7 @@ html.nav-sized .nav{flex:0 1 var(--nav-h);min-height:34px}
   border-bottom:1px solid var(--panel2);cursor:pointer;font-size:13px;
   transition:background var(--t-f)}
 .amrow:hover{background:rgba(125,207,255,.04);margin:0 -4px;padding:6px 4px;border-radius:var(--r-sm)}
-.amrow input{width:16px;height:16px;accent-color:var(--cyan);cursor:pointer;flex:none}
+.amrow input{cursor:pointer}
 .amrow .nm{font-weight:600;white-space:nowrap}
 .amrow .pt{color:var(--dim2);font-size:11px;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis;flex:1}
@@ -272,7 +272,7 @@ html.nav-sized .nav{flex:0 1 var(--nav-h);min-height:34px}
   padding-top:12px;border-top:1px solid var(--line);font-size:13px;cursor:pointer;user-select:none;
   transition:opacity var(--t-f)}
 .autoline:hover{opacity:.8}
-.autoline input{width:16px;height:16px;accent-color:var(--cyan);cursor:pointer}
+.autoline input{cursor:pointer}
 .autoline .ic{width:15px;height:15px;fill:var(--dim)}
 .proj .mspark{margin-left:auto;flex:none;opacity:.6;overflow:visible;
   transition:opacity var(--t-f)}
@@ -695,8 +695,8 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
    to the browser default and rendered as a white box on a dark page — which
    is exactly what happened the first time the Claude Code settings editor
    shipped. Styling the element itself makes that unreachable rather than
-   something the next author has to remember. Range and checkbox keep their
-   native painting. */
+   something the next author has to remember. Range keeps its native painting;
+   the checkbox is drawn below. */
 .fld select,.fld input,.fld textarea,
 #content input:not([type=range]):not([type=checkbox]):not([type=radio]),
 #content select,#content textarea{width:100%;background:var(--bg);
@@ -705,6 +705,39 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
   transition:border-color var(--t-f),box-shadow var(--t-f)}
 #content input:focus,#content select:focus,#content textarea:focus{
   border-color:var(--cyan);box-shadow:0 0 0 3px rgba(125,207,255,.12)}
+/* ── the check box ───────────────────────────────────────────────────────────
+   The native control paints its own tick and takes exactly one colour
+   (`accent-color`), so on every palette it stayed a Windows checkbox with a
+   cyan fill — the one control in the app that ignored the theme. This is the
+   whole thing in CSS: a themed box, and a tick made of two strokes that DRAW
+   themselves, the short arm then the long one.
+
+   Each arm is a bar scaled from its own end (`transform-origin:left center`),
+   so the draw is transform-only — no paint invalidation, nothing for the Qt
+   compositor to read back, and `html.mo-off` already zeroes the duration so
+   the tick simply appears. Geometry is in PERCENT of the padding box, not px:
+   a skin that writes a 3px border (anime) leaves 10px of inner box, and a px
+   tick would hang outside it. Radius comes from `--sk-in-r`, so a look
+   restyles the box by writing nothing new. */
+input[type=checkbox]{appearance:none;-webkit-appearance:none;
+  width:16px;height:16px;flex:none;margin:0;position:relative;cursor:pointer;
+  background:var(--bg);border:var(--sk-in-bw,1px) solid var(--line);
+  border-radius:var(--sk-in-r,var(--r-sm));vertical-align:middle;
+  transition:background var(--t-f),border-color var(--t-f),box-shadow var(--t-f)}
+input[type=checkbox]:hover:not(:disabled){border-color:var(--cyan)}
+input[type=checkbox]:checked{background:var(--cyan);border-color:var(--cyan)}
+input[type=checkbox]:disabled{opacity:.45;cursor:not-allowed}
+input[type=checkbox]::before,input[type=checkbox]::after{content:'';
+  position:absolute;height:2px;border-radius:1px;background:var(--bg);
+  transform-origin:left center;transition:transform var(--t-n)}
+input[type=checkbox]::before{left:18%;top:39%;width:29%;
+  transform:rotate(45deg) scaleX(0)}
+input[type=checkbox]::after{left:39%;top:60%;width:63%;
+  transform:rotate(-45deg) scaleX(0)}
+input[type=checkbox]:checked::before{transform:rotate(45deg) scaleX(1)}
+/* the delay is what makes two bars read as one stroke of a pen */
+input[type=checkbox]:checked::after{transform:rotate(-45deg) scaleX(1);
+  transition-delay:.08s}
 .fld textarea{min-height:90px;resize:vertical}
 .fld select:focus,.fld input:focus,.fld textarea:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(125,207,255,.12)}
 .mrow{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}

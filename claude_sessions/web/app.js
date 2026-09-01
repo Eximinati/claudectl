@@ -2099,9 +2099,13 @@ const WSFIX={claude_md:['Scaffold','cmScaffold()'],
 async function drawMemory(){
   const nav=paintNow(LOADING);
   const c=C();
-  const [st,les,ws,wl]=await Promise.all([
+  // Three fast calls, and NOT the slow one. /api/workspace-status hashes files
+  // and walks every transcript folder; awaiting it here made the whole tab wait
+  // seconds on a card that is below the fold. It fills #wsBox after the paint,
+  // the same shape drawClaudeMd uses for #spBox.
+  const [st,les,wl]=await Promise.all([
     api('/api/memory/state?'+qs(c)),api('/api/lessons?'+qs(c)),
-    api('/api/workspace-status?'+qs(c)),api('/api/worklog?'+qs(c))]);
+    api('/api/worklog?'+qs(c))]);
   if(nav!==NAV_ID)return;   // navigated away mid-fetch — don't clobber the new page
   const est=st.est||{},rules=est.rules||[],
         ruleTok=rules.reduce((a,r)=>a+(r.tokens||0),0),
@@ -2143,7 +2147,9 @@ async function drawMemory(){
       st.dirty?`<span class="tag warn">${st.dirty} queued</span>`:'0',
       st.dirty_hook?'':`<span class="hlink" onclick="go('hooks')">install hook</span>`),
     invRow('Workspace manifest','What memory was built from — commit, file hashes, session count — so staleness is a fact rather than a guess.',
-      '.claudectl/workspace-manifest.json',`score ${ws.score??'?'}`,''),
+      '.claudectl/workspace-manifest.json',
+      '<span id="wsScore" style="color:var(--dim2)">checking…</span>',
+      `<span class="hlink" onclick="showDetail('wsBox')">show ↓</span>`),
     invRow('Version snapshots','A copy of everything claudectl was about to overwrite. Nothing it shrinks is gone until it falls off this list.',
       '.claudectl/snapshots/','12 kept',
       `<span class="hlink" onclick="TAB='claudemd';drawProject()">History</span>`)];
@@ -2168,6 +2174,29 @@ async function drawMemory(){
         <div class="chips">${st.top.map(t=>`<span class="chip" style="cursor:pointer" onclick="entDetail('${jsq(t.name)}')" title="Recalled into ${t.hits} prompt(s)${t.module?' · '+esc(t.module):''} — click for what it means">${esc(t.name)} <i>${t.hits}</i></span>`).join('')}</div>`:''}
       ${(st.evicted_names||[]).length?`<div class="lbl" style="margin-top:10px" title="When the graph passes its cap, the least-used unpinned facts go. Pinned ones never do.">Dropped to stay under the cap (${st.evicted||0})</div>
         <div class="chips">${st.evicted_names.slice(0,12).map(n=>`<span class="chip">${esc(n)}</span>`).join('')}</div>`:''}
+      <div class="lbl" style="margin-top:16px">Keeping it current</div>
+      <p style="color:var(--dim);font-size:13px;margin:0 0 10px">Keeping memory current costs Claude calls. One pass runs when you open claudectl and
+        one every ${every(st.auto_interval)} after that — never sooner, however much is left to do.
+        Each pass re-reads at most a few changed modules, so a big backlog is spread across
+        passes instead of spent at once.</p>
+      <label class="autoline" style="margin-top:0" title="Refresh this project's memory in the background — on launch and then on the interval, from whichever interface is running — whenever its files change, without needing this tab open.">
+        <input type="checkbox" id="autoMem" ${st.auto_on?'checked':''} onchange="toggleAutoMem(this.checked)">
+        <span>${ic('refresh')} Keep this project's memory updated automatically</span>
+        <span class="tag" title="Change it on the Claude Code page, under auto-memory.">every ${every(st.auto_interval)}</span>
+        ${st.auto_updated?`<span class="tag">last run ${esc(String(st.auto_updated).slice(0,16))}</span>`:''}</label>
+      <div style="margin-top:12px">${INST.html('spark','memcost',{fmt:'usd',label:'what each cycle cost',noread:true})}</div>
+      <div class="kv" style="margin-top:10px">
+        <span class="k">Last cycle</span><span>${al.extracted??st.last_extracted??0} module(s)${al.lessons?` · ${al.lessons} lesson(s)`:''}${al.scanned?` · ${al.scanned} session(s) scanned`:''}${st.last_cost_usd?` · $${(+st.last_cost_usd).toFixed(3)}`:''}</span>
+        <span class="k" title="Every Claude call memory has ever paid for on this project. Asking memory is a query, not memory being built, and is not counted.">Spent in total</span><span>$${(+(st.cost_usd_total||0)).toFixed(3)}</span>
+        ${st.last_failed?`<span class="k">Failed</span><span class="warn">${st.last_failed} module(s) could not be extracted${st.last_error?` — ${esc(String(st.last_error).slice(0,160))}`:''}. Retried on the next pass, in ${every(st.auto_interval)} — not sooner, so a failing account is not called in a loop.</span>`:''}
+        ${st.last_skipped?`<span class="k">Still queued</span><span>${st.last_skipped} module(s) — the next pass takes some, in ${every(st.auto_interval)}</span>`:''}
+        ${(!st.last_failed&&!st.last_skipped&&st.pending_units)?`<span class="k">Still queued</span><span>${st.pending_units} module(s) — the next pass takes some, in ${every(st.auto_interval)}</span>`:''}
+        ${st.dirty?`<span class="k">Edited since</span><span>${st.dirty} file(s) waiting for the next cycle</span>`:''}
+      </div>
+      ${st.dirty_hook?'':`<div style="margin-top:8px"><span class="tag warn">stale-on-edit hook not installed</span>
+        <span style="color:var(--dim);font-size:12px">— memory will not notice edits until something else triggers a cycle.</span>
+        <span class="hlink" onclick="go('hooks')">Install it</span></div>`}
+      <div id="memProg"></div>
     </div>
     <div class="card"><h3>What a session costs <span class="sp"></span>
       <button class="btn sm" onclick="inlineJob('#jban','rules_sync',C(),{label:'Rebuilding rules',redraw:()=>drawMemory()})" title="Rewrite the path-scoped rule files from the current graph. Free — no Claude call.">${ic('refresh')} Rebuild rules</button></h3>
@@ -2192,7 +2221,8 @@ async function drawMemory(){
           `<span class="hlink" onclick="go('globalmd')">Global</span>`)
        +invRow('Recent work','A one-line summary of what each session changed, put back when the next one starts.',
           '.claudectl/memory/worklog.json',
-          `${(wl.entries||[]).length} entr${(wl.entries||[]).length===1?'y':'ies'}`,''))}
+          `${(wl.entries||[]).length} entr${(wl.entries||[]).length===1?'y':'ies'}`,
+          `<span class="hlink" onclick="showDetail('memWork')">show ↓</span>`))}
       ${bucket('Every prompt','prompt','the only one that grows with how much you talk')}
       ${invTable(invRow('Recall','The slice of the graph matching what you just typed, added to the message before it is sent.',
         'the UserPromptSubmit recall hook',
@@ -2220,45 +2250,23 @@ async function drawMemory(){
           <input type="checkbox" id="memRules" ${st.rules_on?'checked':''} onchange="memToggle({rules:this.checked})">
           <span>${ic('folder')} Keep the rule files in sync</span></label></details>
       ${invTable(invRow('Lessons','Things this project learned the hard way — a bug and its fix, a decision, a preference you corrected. Recall injects one when it applies.',
-        'entities inside the graph',`${st.n_lessons||0}`,''))}
+        'entities inside the graph',`${st.n_lessons||0}`,
+        `<span class="hlink" onclick="showDetail('memLessons')">show ↓</span>`))}
       ${bucket('Stored, not loaded','source',`${stored.length} records · 0 tokens — read only when you or Claude ask`)}
       <details id="memKeep"><summary style="cursor:pointer;padding:6px 0;color:var(--dim);font-size:13px">
         What claudectl keeps for itself, so it knows what to rebuild and can undo it</summary>
       ${invTable(stored.join(''))}
       </details></div></div>
-    <div class="card"><h3>What it is doing <span class="sp"></span>
-      ${INST.html('spark','memcost',{fmt:'usd',label:'per cycle',noread:true})}</h3>
-      <p style="color:var(--dim);font-size:13px;margin:0 0 10px">Keeping memory current costs Claude calls. One pass runs when you open claudectl and
-        one every ${every(st.auto_interval)} after that — never sooner, however much is left to do.
-        Each pass re-reads at most a few changed modules, so a big backlog is spread across
-        passes instead of spent at once.</p>
-      <label class="autoline" style="margin-top:0" title="Refresh this project's memory in the background — on launch and then on the interval, from whichever interface is running — whenever its files change, without needing this tab open.">
-        <input type="checkbox" id="autoMem" ${st.auto_on?'checked':''} onchange="toggleAutoMem(this.checked)">
-        <span>${ic('refresh')} Keep this project's memory updated automatically</span>
-        <span class="tag" title="Change it on the Claude Code page, under auto-memory.">every ${every(st.auto_interval)}</span>
-        ${st.auto_updated?`<span class="tag">last run ${esc(String(st.auto_updated).slice(0,16))}</span>`:''}</label>
-      <div class="kv" style="margin-top:10px">
-        <span class="k">Last cycle</span><span>${al.extracted??st.last_extracted??0} module(s)${al.lessons?` · ${al.lessons} lesson(s)`:''}${al.scanned?` · ${al.scanned} session(s) scanned`:''}${st.last_cost_usd?` · $${(+st.last_cost_usd).toFixed(3)}`:''}</span>
-        <span class="k" title="Every Claude call memory has ever paid for on this project. Asking memory is a query, not memory being built, and is not counted.">Spent in total</span><span>$${(+(st.cost_usd_total||0)).toFixed(3)}</span>
-        ${st.last_failed?`<span class="k">Failed</span><span class="warn">${st.last_failed} module(s) could not be extracted${st.last_error?` — ${esc(String(st.last_error).slice(0,160))}`:''}. Retried on the next pass, in ${every(st.auto_interval)} — not sooner, so a failing account is not called in a loop.</span>`:''}
-        ${st.last_skipped?`<span class="k">Still queued</span><span>${st.last_skipped} module(s) — the next pass takes some, in ${every(st.auto_interval)}</span>`:''}
-        ${(!st.last_failed&&!st.last_skipped&&st.pending_units)?`<span class="k">Still queued</span><span>${st.pending_units} module(s) — the next pass takes some, in ${every(st.auto_interval)}</span>`:''}
-        ${st.dirty?`<span class="k">Edited since</span><span>${st.dirty} file(s) waiting for the next cycle</span>`:''}
-      </div>
-      ${st.dirty_hook?'':`<div style="margin-top:8px"><span class="tag warn">stale-on-edit hook not installed</span>
-        <span style="color:var(--dim);font-size:12px">— memory will not notice edits until something else triggers a cycle.</span>
-        <span class="hlink" onclick="go('hooks')">Install it</span></div>`}
-      <div id="memProg"></div></div>
-    <div class="card"><h3>Lessons <span class="sp"></span>
+    <div class="card"><h3>What it learned <span class="sp"></span>
       <button class="btn sm" onclick="inlineJob('#jban','lessons_scan',C(),{label:'Learning from sessions',redraw:()=>drawMemory()})">${ic('school')} Learn from sessions${st.n_unscanned?` <span class="tag warn">${st.n_unscanned} new</span>`:''}</button>
       <button class="btn sm" onclick="lessonAct('','approve_all')">${ic('check')} Approve all pending</button></h3>
       <p style="color:var(--dim);font-size:13px;margin:0 0 10px">What this project learned the hard way, read back out of your past sessions — a bug and its
         fix, a decision and why, something you corrected. Approved ones are injected when relevant;
         one nobody uses for ${ttl} sessions is dropped, unless you pin it.</p>
-      ${lesRows?`<table class="tbl"><tr><th>status</th><th>lesson</th><th>conf</th>
+      <div id="memLessons">${lesRows?`<table class="tbl"><tr><th>status</th><th>lesson</th><th>conf</th>
         <th title="Sessions of disuse left before it is dropped.">left</th><th></th></tr>${lesRows}</table>`
         :'<div class="empty">No lessons yet.</div>'}</div>
-    <div class="card"><h3>Recent work</h3>
+      <div class="lbl" style="margin-top:16px">Recent work</div>
       <p style="color:var(--dim);font-size:12px;margin:0 0 8px">A token-free log of what each session changed, injected into the next session on start (claude-mem style).</p>
       <label class="autoline" style="margin-top:0" title="On session end, record a one-line summary + files touched; inject the last few on the next SessionStart.">
         <input type="checkbox" id="wlOn" ${wl.on?'checked':''} onchange="toggleWorklog(this.checked)">
@@ -2266,27 +2274,16 @@ async function drawMemory(){
       ${wlMissing.length?`<div style="margin-top:8px"><span class="tag warn">hook missing on ${esc(wlMissing.join(', '))}</span>
         <span style="color:var(--dim);font-size:12px">— sessions under that account record nothing.</span>
         <span class="hlink" onclick="go('hooks')">Fix</span></div>`:''}
-      ${(wl.entries||[]).length?`<table class="tbl" style="margin-top:10px"><tr><th>when</th><th>summary</th><th>files</th></tr>`
+      <div id="memWork">${(wl.entries||[]).length?`<table class="tbl" style="margin-top:10px"><tr><th>when</th><th>summary</th><th>files</th></tr>`
         +wl.entries.map(e=>`<tr${e.session_id?` style="cursor:pointer" onclick="openWorkSession('${jsq(e.session_id)}')" title="Open this session"`:''}>
           <td style="white-space:nowrap;color:var(--dim)">${esc(e.ended_at||'')}</td>
           <td>${esc(e.summary||'')}</td>
           <td style="color:var(--dim);font-size:12px">${esc((e.files||[]).join(', '))}</td></tr>`).join('')
-        +`</table>`:'<div class="empty">No sessions recorded yet.</div>'}</div>
-    <div class="card"><h3>Workspace health — score ${ws.score??'?'}
-      ${ws.safe?'<span class="tag ok">safe to launch</span>':'<span class="tag warn">attention</span>'}</h3>
+        +`</table>`:'<div class="empty">No sessions recorded yet.</div>'}</div></div>
+    <div class="card"><h3>Freshness &amp; history <span class="sp"></span><span id="wsHead"></span></h3>
       <p style="color:var(--dim);font-size:13px;margin:0 0 10px">How much of what claudectl generated still matches the code as it is now. Each row is worth
         the points beside it; clearing one raises the score.</p>
-      ${(ws.checks||[]).map(k=>{
-        const f=WSFIX[k.name]||null,na=!k.applicable;
-        return `<div class="hrow">
-          <span style="min-width:150px">${esc(k.name.replace(/_/g,' '))}</span>
-          <span style="min-width:74px">${na?'<span style="color:var(--dim2)">n/a</span>'
-            :k.state==='fresh'?'<span class="tag ok">fresh</span>'
-            :k.state==='invalid'?'<span class="tag warn">invalid</span>':'<span class="tag warn">stale</span>'}</span>
-          <span class="info" style="flex:1;color:var(--dim)">${esc(k.detail||'')}</span>
-          <span style="color:var(--dim2);font-size:11px;min-width:44px" title="Share of the freshness score this check carries.">${na?'—':'+'+(k.weight||0)}</span>
-          ${(na||k.state==='fresh'||!f)?'':`<button class="btn sm" onclick="${f[1]}">${esc(f[0])}</button>`}
-        </div>`;}).join('')||'<div class="empty">No checks ran.</div>'}
+      <div id="wsBox"><span class="spin"></span></div>
       <div class="lbl" style="margin-top:12px">History</div>
       <p style="color:var(--dim);font-size:12px;margin:0 0 6px">Every graph claudectl replaced. Eviction and rebuild both snapshot what they were about to overwrite, and restoring is itself snapshotted.</p>
       <div id="histOut"><span class="spin"></span></div></div>`);
@@ -2295,6 +2292,41 @@ async function drawMemory(){
   const hist=(st.cost_history||[]);
   if(hist.length>1)INST.set('memcost',{series:hist});
   drawHistory(['memory_graph']);
+  fillWorkspace();
+}
+/* The freshness checks, fetched AFTER the page is on screen. Hashing files and
+   walking every transcript folder is the slowest thing this tab asks for, and
+   it answers a question nobody has while the page is still blank. Writes its
+   own node, never #content — and re-queries it, because the fetch outlives a
+   navigation away. */
+async function fillWorkspace(){
+  let ws;
+  try{ws=await api('/api/workspace-status?'+qs(C()));}
+  catch(e){const b=$('#wsBox');if(b)b.innerHTML='<div class="empty">Could not read workspace status.</div>';return;}
+  const b=$('#wsBox');if(!b)return;
+  b.innerHTML=(ws.checks||[]).map(k=>{
+    const f=WSFIX[k.name]||null,na=!k.applicable;
+    return `<div class="hrow">
+      <span style="min-width:150px">${esc(k.name.replace(/_/g,' '))}</span>
+      <span style="min-width:74px">${na?'<span style="color:var(--dim2)">n/a</span>'
+        :k.state==='fresh'?'<span class="tag ok">fresh</span>'
+        :k.state==='invalid'?'<span class="tag warn">invalid</span>':'<span class="tag warn">stale</span>'}</span>
+      <span class="info" style="flex:1;color:var(--dim)">${esc(k.detail||'')}</span>
+      <span style="color:var(--dim2);font-size:11px;min-width:44px" title="Share of the freshness score this check carries.">${na?'—':'+'+(k.weight||0)}</span>
+      ${(na||k.state==='fresh'||!f)?'':`<button class="btn sm" onclick="${f[1]}">${esc(f[0])}</button>`}
+    </div>`;}).join('')||'<div class="empty">No checks ran.</div>';
+  const h=$('#wsHead');
+  if(h)h.innerHTML=`<span style="color:var(--dim2);font-size:12px">score ${ws.score??'?'}</span>
+    ${ws.safe?'<span class="tag ok">safe to launch</span>':'<span class="tag warn">attention</span>'}`;
+  const s=$('#wsScore');if(s)s.textContent=`score ${ws.score??'?'}`;
+}
+/* One bucket row states what an artifact COSTS; the table stating what is in it
+   is a card further down. The row links there instead of repeating the numbers
+   in both places, where they can disagree. */
+function showDetail(id){
+  const el=$('#'+id);if(!el)return;
+  const d=el.closest('details');if(d)d.open=true;
+  el.scrollIntoView({behavior:'smooth',block:'center'});
 }
 /* a worklog line names its session; opening it was one field away the whole
    time. `viewS` indexes into SESS, which drawSessions builds — so hand the sid
@@ -2417,12 +2449,15 @@ async function drawClaudeMd(){
         </div>${b.text?`<details style="margin:0 0 6px 12px"><summary style="cursor:pointer;color:var(--dim2);font-size:12px">show</summary>
           <div class="diff">${esc(b.text).split('\n').map(l=>`<div>${l}</div>`).join('')}</div></details>`:''}`;}).join('')}</div>
       <p style="color:var(--dim);font-size:12px;margin:10px 0 0">
-        <b>~${md.tokens||0} tok</b> of this file is read on every turn of every session in this project.</p>
+        <b>~${md.tokens||0} tok</b> of this file is read on every turn of every session in this project.
+        <code>loop.md</code> — what a bare <code>/loop</code> runs here — is edited on the
+        <span class="hlink" onclick="go('loops')">Loops</span> page, beside the loops themselves.</p>
       <details style="margin-top:8px"><summary style="cursor:pointer;color:var(--dim2);font-size:12px">The whole file</summary>
         <div style="font:12px Consolas,monospace;white-space:pre-wrap;max-height:46vh;overflow-y:auto;background:var(--code);border-radius:8px;padding:12px;margin-top:6px">${esc(md.text)}</div></details>`
         :'<div class="empty">No CLAUDE.md yet — scaffold one.</div>'}</div>
-    <div class="card"><h3>Memory files map <span class="sp"></span>
-      <span style="color:var(--dim2);font-size:12px">every CLAUDE.md that reaches this project</span></h3>
+    <div class="card"><h3>What else reaches this project <span class="sp"></span>
+      <span style="color:var(--dim2);font-size:12px">the other files a session here loads</span></h3>
+      <div class="lbl">Memory files map</div>
       ${(mm.files||[]).map(f=>`<div style="display:flex;gap:8px;padding:3px 0;align-items:center">
         <span style="width:18px">${f.exists?ic('check'):'—'}</span>
         <span style="flex:1">${esc(f.label)}</span>
@@ -2431,16 +2466,15 @@ async function drawClaudeMd(){
       </div>${(f.imports||[]).map(im=>`<div class="agrow" style="margin-left:26px">
         <span style="flex:1;color:var(--dim);font-size:12px">@import ${esc(im.ref)}</span>
         ${im.exists?ic('check'):'<span class="tag warn" title="This @import points at a file that does not exist — Claude silently loads nothing for it.">missing</span>'}
-      </div>`).join('')}`).join('')}</div>
+      </div>`).join('')}`).join('')}
+      <div class="lbl" style="margin-top:16px">System prompt</div>
+      <div id="spBox"><span class="spin"></span></div></div>
     <div class="card"><h3>${ic('refresh')} History <span class="sp"></span>
       <span style="color:var(--dim2);font-size:12px">every version claudectl replaced</span></h3>
       <p style="color:var(--dim);font-size:13px;margin:0 0 8px">Compress and prune both snapshot what they were about to
         overwrite. Nothing claudectl shrinks is gone until it falls off the end of this list.
         Restoring is itself snapshotted, so you can walk back out again.</p>
-      <div id="histOut"><span class="spin"></span></div></div>
-    <div class="card"><h3>${ic('refresh')} loop.md</h3>
-      <p style="color:var(--dim);font-size:13px;margin:0">What a bare <code>/loop</code> runs in this project. Both scopes are edited on the <span class="hlink" onclick="go('loops')">Loops</span> page, beside the loops themselves — two editors for one file is one too many.</p></div>
-    <div class="card"><h3>System prompt</h3><div id="spBox"></div></div>`))return;
+      <div id="histOut"><span class="spin"></span></div></div>`))return;
   drawHistory(['claude_md','system_prompt']);
   const sp=await api('/api/system-prompt?'+qs(c));
   const b=$('#spBox');if(!b)return;   // navigated away during the second fetch
@@ -4556,9 +4590,9 @@ async function pgHooks(nav){
   };
   const hookRow=h=>`
     <div class="hrow${h.enabled?'':' off'}" style="display:flex;align-items:center;gap:10px;padding:4px 0${h.enabled?'':';opacity:.55'}">
-      <label class="autoline" title="${h.enabled?'Disable':'Enable'} this hook">
-        <input type="checkbox" ${h.enabled?'checked':''}
-          onchange='hookToggle(${JSON.stringify(h.event)},${h.index},this.checked)'></label>
+      <input type="checkbox" ${h.enabled?'checked':''}
+        title="${h.enabled?'Disable':'Enable'} this hook"
+        onchange='hookToggle(${JSON.stringify(h.event)},${h.index},this.checked)'>
       <span class="tag">${esc(h.event)}</span>
       <span style="flex:1">${esc(h.label)}${h.enabled?'':' <span style="color:var(--dim2);font-size:11px">(disabled)</span>'}</span>
       ${h.matcher?`<code style="color:var(--dim2);font-size:11px">${esc(h.matcher)}</code>`:''}
@@ -4900,7 +4934,7 @@ async function pgSettings(nav){
     <div class="grid2">
       <div class="fld"><label>Proxy port</label><input id="foPort" placeholder="20129"></div>
       <div class="fld"><label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-        <input type="checkbox" id="foQuiet" style="width:auto;margin:0"> Hide the proxy console window</label>
+        <input type="checkbox" id="foQuiet"> Hide the proxy console window</label>
         <div style="color:var(--dim);font-size:12px;margin-top:4px">The window logs every turn — which model was
           tried, what failed, what served it. It doubles as live plan-execution progress. Hiding it keeps the log
           at <code>~/.claude/failover.log</code>.</div></div>

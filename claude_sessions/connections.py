@@ -443,7 +443,22 @@ html,body{margin:0;height:100%;background:radial-gradient(circle at 50% 42%,#0a1
 #panel{position:fixed;top:10px;right:12px;background:rgba(14,16,22,.9);border:1px solid #262a35;border-radius:8px;padding:10px 12px;width:210px}
 #panel h4{margin:0 0 6px;font-size:11px;color:#9aa3b2;text-transform:uppercase;letter-spacing:.5px}
 #panel label{display:block;cursor:pointer;line-height:1.7;user-select:none}
-#panel input[type=checkbox]{vertical-align:middle;margin-right:6px}
+/* same drawn checkbox as the app (app.css) — two bars scaled from their own
+   end, so the tick draws itself with transform only. This page is standalone
+   and has no palette vars, so the colours are literal. */
+#panel input[type=checkbox]{appearance:none;-webkit-appearance:none;
+ width:15px;height:15px;margin:0 6px 0 0;position:relative;cursor:pointer;
+ vertical-align:middle;background:#0c0e14;border:1px solid #333;border-radius:4px;
+ transition:background .12s ease,border-color .12s ease}
+#panel input[type=checkbox]:hover{border-color:#7dcfff}
+#panel input[type=checkbox]:checked{background:#7dcfff;border-color:#7dcfff}
+#panel input[type=checkbox]::before,#panel input[type=checkbox]::after{content:'';
+ position:absolute;height:2px;border-radius:1px;background:#0c0e14;
+ transform-origin:left center;transition:transform .2s ease}
+#panel input[type=checkbox]::before{left:18%;top:39%;width:29%;transform:rotate(45deg) scaleX(0)}
+#panel input[type=checkbox]::after{left:39%;top:60%;width:63%;transform:rotate(-45deg) scaleX(0)}
+#panel input[type=checkbox]:checked::before{transform:rotate(45deg) scaleX(1)}
+#panel input[type=checkbox]:checked::after{transform:rotate(-45deg) scaleX(1);transition-delay:.08s}
 #search{width:100%;box-sizing:border-box;background:#0c0e14;border:1px solid #333;color:#eee;padding:5px 7px;border-radius:5px;margin:4px 0}
 .btn{display:inline-block;background:#1c2029;border:1px solid #333;color:#cdd2da;padding:4px 10px;border-radius:5px;cursor:pointer;margin:5px 6px 0 0}
 .btn:hover{background:#272c38}#panel hr{border:0;border-top:1px solid #222732;margin:9px 0}

@@ -423,7 +423,16 @@ ROUTES = {
                  'path': 'C:/x/lib/sec.md', 'model': ''}]}],
         'known_tools': ['Read', 'Bash'], 'models': []},
     '/api/agents': {'categories': []},   # (the real /api/skills stub is below)
-    '/api/hooks': {'hooks': [], 'templates': []},
+    # two rows, not zero: the enable/disable check below is `rows == 0 or ...`,
+    # so an empty stub made it pass without looking at anything
+    '/api/hooks': {'hooks': [
+        {'event': 'Stop', 'index': 0, 'enabled': True,
+         'label': 'recent-work memory', 'matcher': ''},
+        {'event': 'PreToolUse', 'index': 0, 'enabled': False,
+         'label': 'block-rm-rf', 'matcher': 'Bash'}],
+        'settings_path': 'C:/x/settings.json',
+        'accounts': [{'name': 'default', 'dir': '', 'count': 2}],
+        'templates': []},
     '/api/omniroute/status': {'ok': False}, '/api/failover/status': {'running': False},
     '/api/memory/auto-list': {'projects': []},
     '/api/plugins': {'dir': 'C:/x/plugins', 'marketplaces': [
@@ -1183,17 +1192,27 @@ def main():
             "return {near:cell('Migrations run'),pinned:cell('Money is integer')};})()")
         check('a lesson says how close it is to being dropped',
               decay['near'] == '2' and decay['pinned'] == 'kept', decay)
-        # structured checks, not an ANSI-stripped <pre> blob
+        # structured checks, not an ANSI-stripped <pre> blob — and they arrive
+        # AFTER the paint now, so wait for the fill rather than the page
+        pg.wait_for_selector('#wsBox .hrow', timeout=5000)
         wsr = pg.evaluate(
-            "(()=>{const c=[...document.querySelectorAll('.card')]"
-            ".find(x=>x.innerText.startsWith('Workspace health'));"
+            "(()=>{const c=document.querySelector('#wsBox');"
             "return c?{rows:c.querySelectorAll('.hrow').length,"
-            "fix:c.querySelectorAll('.hrow .btn').length,pre:c.innerText}:null;})()")
+            "fix:c.querySelectorAll('.hrow .btn').length,pre:c.innerText,"
+            "head:(document.querySelector('#wsHead')||{}).innerText||''}:null;})()")
         check('workspace checks render as rows with states',
               bool(wsr) and wsr['rows'] == 7 and 'fresh' in wsr['pre']
               and 'stale' in wsr['pre'], wsr and wsr['rows'])
         check('every stale check offers the thing that fixes it',
               bool(wsr) and wsr['fix'] >= 3, wsr and wsr['fix'])
+        # the score is what the header and the manifest row both quote, and both
+        # are written by the same late fill — a card that fills its rows but not
+        # its header reads as "no score" forever
+        check('the freshness score reaches the header and the manifest row',
+              bool(wsr) and 'score' in wsr['head'].lower()
+              and 'score' in pg.evaluate(
+                  "(document.querySelector('#wsScore')||{}).innerText||''").lower(),
+              wsr and wsr['head'])
         check('memory history is on the memory tab',
               pg.evaluate("!!document.querySelector('#histOut')"))
         # a name and a hit count says a fact matters without saying what it is

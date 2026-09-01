@@ -189,7 +189,13 @@ def test_vendor_is_served_not_inlined():
     pure cost. It is a separate cacheable route instead — and stage.js, which IS
     ours, stays inside PAGE so the string-matching tests can still see it."""
     assert 'three.module.min' not in PAGE.replace('"/vendor/three.module.min.js"', '')
-    assert len(PAGE) < 600_000, f'page is {len(PAGE)} bytes — is a library inlined?'
+    # The ceiling exists to catch an INLINED BUNDLE, so it is set against the
+    # smallest one there is to inline: anime.esm.min.js at ~118KB (three is
+    # ~365KB). 650KB leaves the page room to grow by a normal feature's worth of
+    # markup and still fails the moment a vendor file lands inside it — the old
+    # 600KB was 260 bytes above the page as shipped, so the next edit of any
+    # size was going to fail it for the wrong reason.
+    assert len(PAGE) < 650_000, f'page is {len(PAGE)} bytes — is a library inlined?'
     assert 'const STAGE = {' in PAGE, 'stage.js must stay in the bundle'
 
 
