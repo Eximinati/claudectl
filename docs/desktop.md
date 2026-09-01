@@ -37,6 +37,10 @@ three.js and anime.js (both MIT, served from `/vendor/`, never a CDN).
   account, its `loop.md` sibling and the cross-project conventions worth promoting into it.
 - **Output styles** — by scope, with the active one and the file that pins it named, plus
   four claudectl starters to copy (Terse, Reviewer, Pair, Ship).
+- **Logs** — what claudectl itself did and why it failed: its own headless Claude calls,
+  background jobs, the auto-memory scheduler, the failover proxy. Filter by level or by
+  text. Before this page every one of those failures went to a NullHandler. See
+  [Logs](tui.md#logs).
 - **Skills / Worklog / Review / model-routing panels** — Skills manager, worklog toggle + entry history, one-click code review (working diff or staged-only), and OmniRoute free-tier configuration.
 
 Icons are inline Material SVG — no CDN, no emoji.

@@ -49,6 +49,12 @@ def _run_cancellable(cmd, input_text=None, capture_output=True, text=True,
     job = getattr(_JOBCTX, 'job', None)
     if job and job.get('cancel_event', threading.Event()).is_set():
         raise JobCancelled
+    # Don't spend an account that has nothing left. A no-op for anything that
+    # isn't `claude … -p`, and a no-op when the usage cache says nothing.
+    from . import quota
+    env, _blocked = quota.preflight(cmd, env)
+    if _blocked:
+        return ''
     try:
         # CREATE_NO_WINDOW: a captured child shows nothing in its console,
         # so the window is pure flicker. See proc.no_window_flags.
@@ -91,16 +97,24 @@ def _run_cancellable(cmd, input_text=None, capture_output=True, text=True,
             from . import memory as _mem
             _mem.last_call_error = 'claude exited %s: %s' % (
                 proc.returncode, (stdout or '(no output)')[:300])
+            from . import events, quota
+            quota.note_failure(env, stdout)
+            events.record('subprocess', _mem.last_call_error,
+                          detail=' '.join(str(c) for c in cmd[:2]))
             return ''
         return stdout
     except subprocess.TimeoutExpired:
         try: proc.kill()
         except Exception: pass
+        msg = ('timed out after %ss — upstream may be an unresponsive '
+               'OmniRoute/failover endpoint' % timeout)
         if job is not None:
-            job.setdefault('messages', []).append(
-                {'ok': False, 'text': 'timed out after %ss — upstream may be an '
-                                      'unresponsive OmniRoute/failover endpoint'
-                                      % timeout})
+            job.setdefault('messages', []).append({'ok': False, 'text': msg})
+        # a job's message list is not a record, and the two unattended callers
+        # have no job at all — so the timeout was reaching nothing
+        from . import events
+        events.record('subprocess', msg,
+                      detail=' '.join(str(c) for c in cmd[:2]))
         return ''
     except Exception:
         try: proc.kill()
@@ -469,6 +483,7 @@ def _auto_scan_pass():
     """
     from . import memory
     owed = False
+    refreshed = 0
     for path, folder, _enc in _auto_projects():
         try:
             if memory.scan_lock_status(path) is not None:
@@ -477,10 +492,19 @@ def _auto_scan_pass():
             if not memory.is_stale(path, folder):
                 continue                                  # nothing changed
             _refresh_project(path, folder, auto_cap=6)    # blocking, sequential
+            refreshed += 1
             if memory.is_stale(path, folder):
                 owed = True                               # capped — more to do
         except Exception:
             _c.log.exception('gui: auto-scan pass failed for %s', path)
+    # Only when the pass DID something or still owes work. A heartbeat every
+    # MIN_INTERVAL would burn the event log's cap inside a day and drown the
+    # errors it exists to show.
+    if refreshed or owed:
+        from . import events
+        events.record('scheduler', 'auto-memory pass: %d refreshed%s'
+                      % (refreshed, ', more still owed' if owed else ''),
+                      level='info')
     return owed
 
 
@@ -1390,6 +1414,13 @@ def api_background_agents(q, body):
     from . import clientstate
     return {'daemon': clientstate.daemon_roster(q.get('cfgdir') or None),
             'teams': clientstate.teams(q.get('cfgdir') or None)}
+
+
+def api_logs(q, body):
+    """claudectl's own event log — what it did and what failed, newest first."""
+    from . import events
+    return {'events': events.read(), 'path': events.path(),
+            'cap': events.MAX_BYTES, 'debug_log': _c.log_file_path()}
 
 
 def api_disk(q, body):
@@ -2668,7 +2699,7 @@ def api_job_start(q, body):
                 "output the file body only.")
             content = (memory._claude_stdin(prompt, cwd=path or '.') or '').strip()
             if not content:
-                raise RuntimeError('No output from Claude')
+                raise RuntimeError(memory.why_failed())
             if not _pager_confirm(f'loop.md ({scope}) — approve to write', content):
                 return {'ok': False, 'rejected': True}
             os.makedirs(os.path.dirname(md_path), exist_ok=True)
@@ -2686,7 +2717,7 @@ def api_job_start(q, body):
             prompt = skills.build_ai_prompt(sk_name, role, proj)
             content = (memory._claude_stdin(prompt, cwd=path or '.') or '').strip()
             if not content:
-                raise RuntimeError('No output from Claude')
+                raise RuntimeError(memory.why_failed())
             if not _pager_confirm(f'SKILL / {skills._slug(sk_name)} — approve to write',
                                   content):
                 return {'ok': False, 'rejected': True}
@@ -3508,6 +3539,7 @@ GET_ROUTES = {
     '/api/history': api_history,
     '/api/history/diff': api_history_diff,
     '/api/deny': api_deny_scan,
+    '/api/logs': api_logs,
     '/api/workspace-status': api_workspace_status,
     '/api/recall-preview': api_recall_preview,
     '/api/claude-md': api_claude_md_get,

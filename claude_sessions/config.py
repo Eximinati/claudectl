@@ -12,13 +12,49 @@ choice_file = os.environ.get('CHOICE_FILE', os.path.join(_TEMP, 'choice_claude.t
 
 
 # ── logging ──────────────────────────────────────────────────
-# Quiet by default; file logging to %TEMP%\claudectl.log when CLAUDECTL_DEBUG
-# is set. Background-thread/render failures log here instead of vanishing.
+# Verbose file logging to %TEMP%\claudectl.log when CLAUDECTL_DEBUG is set,
+# which is off for everyone. That is why the handler below exists: WARNING and
+# above ALSO go to the event log, so every `log.exception` already scattered
+# through this codebase — every GUI job crash, every faulted API handler, the
+# bg-scan worker, the failover proxy — becomes something the Logs screen can
+# show. One handler instead of ~38 hand-placed calls that would drift.
+
+class _EventHandler(logging.Handler):
+    """Fan WARNING+ records into the event log.
+
+    `events` imports this module, so the import has to be deferred into emit();
+    and emit() must swallow everything, because a handler that raises during a
+    log call breaks the call site it was only supposed to observe.
+    """
+
+    def emit(self, rec):
+        try:
+            from . import events
+            detail = ''
+            if rec.exc_info:
+                import traceback
+                detail = ''.join(traceback.format_exception(*rec.exc_info))[-1000:]
+            events.record(rec.module, rec.getMessage(), detail=detail,
+                          level='error' if rec.levelno >= logging.ERROR else 'warn')
+        except Exception:
+            pass
+
+
+def log_file_path():
+    """Where the verbose DEBUG log goes when CLAUDECTL_DEBUG is set. Reported
+    by the Logs screen because it was documented nowhere at all."""
+    return os.path.join(_TEMP, 'claudectl.log')
+
+
 log = logging.getLogger('claudectl')
 log.addHandler(logging.NullHandler())
+_eh = _EventHandler()
+_eh.setLevel(logging.WARNING)
+log.addHandler(_eh)
+log.setLevel(logging.WARNING)
 if os.environ.get('CLAUDECTL_DEBUG'):
     try:
-        _h = logging.FileHandler(os.path.join(_TEMP, 'claudectl.log'), encoding='utf-8')
+        _h = logging.FileHandler(log_file_path(), encoding='utf-8')
         _h.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
         log.addHandler(_h)
         log.setLevel(logging.DEBUG)
@@ -91,6 +127,13 @@ _DEFAULT_SETTINGS = {
     'launch_autocompact': '',      # --autocompact: 'auto' | '200k' | ... ('' = unset)
     'headless_budget_usd': 0,      # --max-budget-usd cap on claudectl's OWN
                                    # `claude -p` calls (0 = no cap)
+    #: what to do when the account is out of quota and claudectl wants to make
+    #: one of its OWN Claude calls. 'off' = launch anyway (the old behaviour:
+    #: the call fails and you are told "No output from Claude") | 'prompt' =
+    #: offer an account that still has headroom, and skip unattended work
+    #: rather than choose for you | 'auto' = switch without asking. Default is
+    #: 'prompt' because spending a second account's quota is opt-in.
+    'headless_quota': 'prompt',
     'ui_mode': 'tui',              # default interface: 'tui' | 'gui' (desktop app)
     'gui_shell': 'auto',          # GUI window: 'auto' | 'qt' | 'edge' | 'browser'
     #: 'notify' = say so in the banner | 'auto' = also install it on quit |

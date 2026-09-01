@@ -20,6 +20,17 @@ Safe to edit by hand or delete to reset. Settings written by a newer claudectl a
 preserved by an older one: the reader carries keys it does not recognise, so syncing the
 file between two machines with different versions cannot erase either one's configuration.
 
+Two more files sit beside it, both account-independent for the same reason:
+
+| File | Purpose |
+|------|---------|
+| `~/.claude/claudectl-events.jsonl` | claudectl's own event log — what it did and what failed. Capped at 256 KB. See [Logs](tui.md#logs) |
+| `~/.claude/failover.log` | the local failover proxy's request log, when it is running |
+
+`headless_quota` (`prompt` / `auto` / `off`) decides what happens when claudectl wants to
+make one of its own Claude calls and the account's limit is already full — see
+[Rate limits and a second account](tui.md#rate-limits-and-a-second-account).
+
 ## Per-project files
 
 Each project gets a folder at `~/.claude/projects/<encoded-name>/`. claudectl reads and
@@ -127,6 +138,8 @@ per-project file for exactly that reason.
     ├── accounts.py         # multiple CLAUDE_CONFIG_DIR accounts
     ├── denygen.py          # generated permissions.deny rules for heavy paths
     ├── health.py           # project health checks + auto-fixes
+    ├── quota.py            # don't spend an exhausted account — offer one with headroom
+    ├── events.py           # claudectl's own event log + the Logs screen
     ├── *_hook.py           # the hook scripts themselves (guard, recall, worklog, …)
     │
     │  # memory & context

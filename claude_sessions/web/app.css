@@ -433,6 +433,17 @@ html.mo-off .btn:hover,html.mo-off .btn:active{transform:none}
    Inside a section that is a screenful of nothing above one line of text. */
 .sect .empty{margin:6px 0;text-align:left;font-size:12.5px}
 
+/* logs page rows — the detail is a <pre>, so it needs the only wrap rule on
+   the page: a stack trace with no soft wrap is what makes a card overflow the
+   audit in tools/shot_gui.py. */
+.lgrow{padding:8px 0;border-top:1px solid var(--panel2);min-width:0}
+.lgrow:first-of-type{border-top:0}
+.lghd{display:flex;align-items:center;gap:8px}
+.lghd b{font-size:13px}
+.lgmsg{font-size:13px;margin-top:3px;overflow-wrap:anywhere}
+.lgdet{color:var(--dim);font:11.5px/1.55 var(--mono);margin:4px 0 0;
+  max-height:9em;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+
 /* accounts page rows */
 .arow2{display:flex;align-items:center;gap:10px;padding:8px 0;
   border-top:1px solid var(--panel2);flex-wrap:wrap}

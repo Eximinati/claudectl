@@ -7,6 +7,49 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Logs, in both interfaces.** A new **⚙ Logs** screen in the TUI and **Logs**
+  page in the GUI, over one append-only file at
+  `~/.claude/claudectl-events.jsonl`: claudectl's own headless Claude calls and
+  why they failed, background job crashes, auto-memory scheduler passes, the
+  failover proxy, and any state file it had to quarantine. Newest first,
+  filterable by level and by text, capped at 256 KB.
+
+  Until now those failures went nowhere at all. The `claudectl` logger carried a
+  `NullHandler` unless `CLAUDECTL_DEBUG` was set — which is off for everyone —
+  so around forty `log.exception` sites, including *every* background job crash
+  and *every* faulted API handler, wrote to nothing. One logging handler now
+  fans them all in; no per-turn path writes to the log, and no hook touches it.
+- **`headless_quota` setting** — `prompt` (default), `auto` or `off`. Decides
+  what happens when claudectl wants to make one of its own Claude calls and the
+  account's limit is already full.
+
+### Fixed
+
+- **claudectl spent accounts that had nothing left.** Every internal
+  `claude -p` call — AI agents, AI skills, MCP analysis, system prompts, AI
+  CLAUDE.md, memory and lessons extraction, Plan → Execute and its council,
+  scheduled loops — launched without checking the account's rate-limit window.
+  On a full window the call failed and you were told "No output from Claude",
+  while a second configured account sat there with headroom.
+
+  claudectl now stops and offers the accounts that still have headroom: a picker
+  in the TUI, the existing approval modal in the GUI. Unattended work (the
+  scheduler, the detached scan worker, a scheduled loop) never prompts — it
+  records the reason and skips, rather than quietly spending an account you did
+  not offer. The check reads the usage data the plan-usage poller already
+  fetched, so it costs no network call; an unknown limit is never treated as a
+  full one. `claude mcp`, `claude plugin` and `claude --version` are untouched —
+  they cost no quota.
+- **The two foreground runners destroyed the reason a call failed.**
+  `run_with_progress` and `run_with_progress_stdin` sent the child's stderr to
+  `DEVNULL` and returned nothing on a nonzero exit, so a rate limit, an expired
+  login and a genuine crash were all reported identically as "No output from
+  Claude". They now capture stderr and latch it in the same place
+  `_run_cancellable` already did, and the callers report what `claude` actually
+  said.
+
 ## [1.8.2] - 2026-09-01
 
 Memory was twelve things and the interface could name three of them. This

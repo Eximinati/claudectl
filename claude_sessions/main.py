@@ -145,6 +145,7 @@ MAIN_ACTIONS = [
     ('⚙  Updates (Claude Code + plugins)',   '__updates__',          '/api/versions'),
     ('⚙  Global CLAUDE.md  /  MCP Analysis', '__global_claude_md__', '/api/global-claude-md'),
     ('⚙  Accounts (switch / run 2 at once)', '__accounts__',         '/api/accounts'),
+    ('⚙  Logs (what claudectl did, what failed)', '__logs__',        '/api/logs'),
     ('⚙  Settings',                          '__settings__',         '/api/settings'),
     ('?  Help',                              '__help__',             ''),   # the GUI's help page is generated in the browser from NAV_GROUPS/TABS — there is nothing for it to fetch
 ]
@@ -479,6 +480,11 @@ def run():
 
         elif sel == '__settings__':
             settings_menu()
+            continue
+
+        elif sel == '__logs__':
+            from .events import logs_screen
+            logs_screen()
             continue
 
         elif sel == '__hidden_projects__':

@@ -449,8 +449,13 @@ def _run_claude(row):
             '--permission-mode', row.get('perm') or 'auto']
     args += _budget_args()
     prompt = row.get('prompt') or _default_prompt(row)
-    r = proc.run(args, cwd=row.get('path') or None,
-                 env=account_env(row.get('cfgdir') or None),
+    # A loop fires unattended, so the guard reports rather than asks; the reason
+    # lands in row['last_error'], the journal and the notification for free.
+    from . import quota
+    env, blocked = quota.preflight(args, account_env(row.get('cfgdir') or None))
+    if blocked:
+        return '', blocked, 1
+    r = proc.run(args, cwd=row.get('path') or None, env=env,
                  stdin=prompt, timeout=3600)
     if r is None:
         return '', 'could not start claude', 127

@@ -229,7 +229,7 @@ def main():
             pg.wait_for_timeout(700)
             pg.screenshot(path=os.path.join(OUT, f'_shot_{name}.png'))
         pg.set_viewport_size({'width': 1600, 'height': 1000})
-        for page in ('usage', 'mcp', 'accounts', 'settings'):
+        for page in ('usage', 'mcp', 'accounts', 'logs', 'settings'):
             pg.evaluate(f"go('{page}')")
             pg.wait_for_timeout(800)
             pg.screenshot(path=os.path.join(OUT, f'_shot_{page}.png'))

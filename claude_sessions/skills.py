@@ -779,7 +779,8 @@ def _new_skill_ai(project_path):
         flash("Cancelled", ok=False); return
     content = (out or '').strip()
     if not content:
-        flash("No output from Claude", ok=False, secs=1.4); return
+        from .memory import why_failed
+        flash(why_failed(), ok=False, secs=2.4); return
     if not _pager_confirm(f"SKILL  /  {_slug(name)}  — approve to write", content):
         _cls(); print("\n  Rejected — not written.\n"); pause("  Press Enter..."); return
     if write_skill_raw(_dest_dir(project_path), name, content):

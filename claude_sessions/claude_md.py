@@ -888,11 +888,23 @@ def ai_scaffold_claude_md(project_path, proj_folder=None):
         from .memory import extract_model
         _mf = ['--model', extract_model()] if extract_model() else []
         from .proc import no_window_flags
+        argv = [claude_exe, '-p', *_mf, '--output-format', 'stream-json',
+                '--verbose', '--allowedTools', '']
+        # This is the one `claude -p` that spawns itself instead of going
+        # through ui.run_with_progress*, so it needs the quota guard by hand.
+        from . import quota
+        env, blocked = quota.preflight(argv, None)
+        if blocked:
+            print(f"\n  {blocked}")
+            print(f"  Falling back to standard scaffold...")
+            time.sleep(2)
+            scaffold_claude_md(project_path, proj_folder)
+            return
         proc = subprocess.Popen(
-            [claude_exe, '-p', *_mf, '--output-format', 'stream-json', '--verbose', '--allowedTools', ''],
+            argv,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding='utf-8', errors='ignore',
-            cwd=project_path, creationflags=no_window_flags
+            cwd=project_path, env=env, creationflags=no_window_flags
         )
 
         # Writer thread: feed the prompt and close stdin. Threaded so a prompt

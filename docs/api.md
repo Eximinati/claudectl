@@ -45,6 +45,7 @@ a handler sees them; a missing or malformed one is a 400.
 | `/api/hooks` | `api_hooks_get` | Every hook in ONE account, enabled and disabled alike. |
 | `/api/inject/sessions` | `api_inject_sessions` | — |
 | `/api/lessons` | `api_lessons_get` | — |
+| `/api/logs` | `api_logs` | claudectl's own event log — what it did and what failed, newest first. |
 | `/api/loop-md` | `api_loop_md_get` | — |
 | `/api/loops` | `api_loops` | Loops claudectl started, with live state read off the process and the |
 | `/api/mcp` | `api_mcp_get` | — |

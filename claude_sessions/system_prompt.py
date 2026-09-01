@@ -123,7 +123,8 @@ def ai_generate_system_prompt(sp_path, project_name, project_path, proj_folder):
         open_in_editor(sp_path)
     else:
         _cls()
-        print(f"\n  ✘ No output from Claude (timeout or empty response).\n")
+        from .memory import why_failed
+        print(f"\n  ✘ {why_failed('No output from Claude (timeout or empty response).')}\n")
         pause("  Press Enter...")
 
 

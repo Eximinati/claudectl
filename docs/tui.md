@@ -19,7 +19,7 @@ used.
 - Quick-resume items appear at the top (★ = most recent session, ☆ = older sessions). These are the 5 most recently used sessions across all projects; selecting one resumes that exact session without navigating into the project's list.
 - All other projects follow, sorted by recency — type to filter live
 - The MCP status footer shows connected MCP servers once the background check completes
-- Bottom menu: **🔍 Search all sessions**, **📦 Hide / restore projects**, **⚙ Usage stats**, **⚙ MCP servers**, **⚙ Agents**, **⚙ Hooks**, **⚙ Global CLAUDE.md**, **⚙ Settings**, **? Help**
+- Bottom menu: **🔍 Search all sessions**, **📦 Hide / restore projects**, **⚙ Usage stats**, **⚙ MCP servers**, **⚙ Agents**, **⚙ Skills**, **⚙ Hooks**, **⚙ Updates**, **⚙ Global CLAUDE.md**, **⚙ Accounts**, **⚙ Logs**, **⚙ Settings**, **? Help**
 
 ## Built-in screens
 
@@ -40,6 +40,13 @@ sessions stay resumable, and restoring is one keypress. The main screen says how
 are being filtered; in the GUI a project page has a **Hide** button and the sidebar grows a
 **Show N hidden projects** button while any are hidden.
 
+**⚙ Logs** — what claudectl itself did, and what failed. Its own headless Claude calls,
+background jobs, the auto-memory scheduler, the failover proxy and any state file it had to
+quarantine, newest first. Type `/` to search the stream, `e` to open the raw file. Before
+this screen existed those failures went nowhere: a background job that crashed left no
+trace, and a Claude call that failed because the account was out of quota was reported as
+"No output from Claude". See [Logs](#logs) below.
+
 **⚙ Global CLAUDE.md / MCP Analysis** — lists all connected MCP servers; select one to run
 Claude with a prompt that calls the MCP's `tools/list` endpoint and formats the result as
 markdown, written into `~/.claude/CLAUDE.md` inside a per-server sentinel block (cleanly
@@ -53,6 +60,58 @@ when a background job that ran longer than 20 seconds finishes, and when the det
 memory worker is done. That worker is the reason this exists: it runs headless, outlives
 the screen that started it, and had no way to tell anyone it had finished. Quick jobs never
 notify. **⚙ Settings → Notifications** turns it off.
+
+## Logs
+
+claudectl does a lot of work you are not watching: the auto-memory scheduler, a detached
+scan worker, background jobs in the GUI, the failover proxy, and its own headless `claude -p`
+calls for every generate-this-for-me feature. All of those failures used to go nowhere — the
+logger only wrote a file when `CLAUDECTL_DEBUG` was set, which is off for everyone.
+
+**⚙ Logs** (TUI) and the **Logs** page (GUI) read one append-only file:
+
+```
+~/.claude/claudectl-events.jsonl
+```
+
+One line per event — `error`, `warn` or `info` — with the source, the message, and the
+detail (a stack trace, or exactly what `claude` printed on stderr). It is capped at 256 KB
+and drops its oldest half when it gets there, so it never needs attention. Nothing on a
+per-turn path writes to it: every writer is a claudectl-owned process, never a hook.
+
+For verbose tracing of a specific problem, set `CLAUDECTL_DEBUG=1` and read
+`%TEMP%\claudectl.log` — that one is DEBUG-level and unbounded, and is meant to be turned
+on for one run and off again.
+
+## Rate limits and a second account
+
+When claudectl wants to make one of its own Claude calls and the account's session or weekly
+window is **already full**, it no longer launches the call anyway. It stops, and offers any
+other configured account that still has headroom:
+
+```
+SESSION LIMIT FULL (RESETS 15:00) — RUN UNDER ANOTHER ACCOUNT?
+  work      12% used
+  personal  40% used
+  Run under the current account anyway
+  Cancel
+```
+
+The GUI asks the same question through the job approval modal. Unattended work — the
+scheduler, the detached worker, a scheduled loop — never prompts: it records the reason in
+the Logs and skips, rather than quietly spending an account you did not offer.
+
+**⚙ Settings → `headless_quota`** controls it:
+
+| Value | Behaviour |
+|---|---|
+| `prompt` *(default)* | offer another account; unattended work skips and says why |
+| `auto` | switch to the account with the most headroom, no question asked |
+| `off` | launch anyway — the old behaviour |
+
+The check reads the usage data the plan-usage poller already fetched, so it costs no
+network call and adds no latency. If that poller has not run yet, the call goes ahead as
+before: an unknown limit is never treated as a full one.
 
 ## Loops
 

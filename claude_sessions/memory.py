@@ -384,6 +384,8 @@ def _claude_stdin(prompt, cwd, timeout=EXTRACT_TIMEOUT,
     exe = get_claude_exe()
     if not exe:
         last_call_error = 'the claude executable was not found'
+        from . import events
+        events.record('memory', last_call_error)
         return ''
     prompt = (prompt or '') + '\n\n' + HEADLESS_MARK
     args = [exe, '-p', '--max-turns', '20', '--disallowedTools', 'Write,Edit,NotebookEdit,Bash']
@@ -409,6 +411,13 @@ def _claude_stdin(prompt, cwd, timeout=EXTRACT_TIMEOUT,
 #: frames below the code that has to report it. Set by gui_api._run_cancellable
 #: on a nonzero exit, cleared at the start of each call.
 last_call_error = ''
+
+def why_failed(default='No output from Claude'):
+    """What the last headless call actually said, for a caller that would
+    otherwise report "No output from Claude" — which, for a rate-limited
+    account, was every one of them."""
+    return last_call_error or default
+
 
 #: last `total_cost_usd` reported by a _claude_json envelope, or None. The JSON
 #: output format carries the real figure, which is strictly better than the

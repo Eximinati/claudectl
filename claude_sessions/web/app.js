@@ -634,6 +634,7 @@ const NAV_GROUPS=[
   ['System',   [
     ['accounts','group','Accounts','Every Claude login, and the sync that levels them all up to the same provisioning.',()=>pgAccounts],
     ['client','ai','Claude Code','What Claude Code records about itself: versions, disk, background agents, its own settings.',()=>pgClient],
+    ['logs','history','Logs','What claudectl itself did and why it failed — its own Claude calls, background jobs, the scheduler and the proxy, newest first.',()=>pgLogs],
     ['settings','settings','Settings','Launch defaults, paths and limits, models, appearance, updates and telemetry.',()=>pgSettings],
     ['helpp','help','Help','This page: every screen in the app and every key in the terminal UI.',()=>pgHelp]]],
 ];
@@ -3548,6 +3549,46 @@ async function pgMcp(nav){
     setRead('mcp',up);
     setUnit('mcp','/'+srv.length);
   }
+}
+
+/* ── what claudectl itself did ───────────────────────────────────────────────
+   Until this page existed a failure inside claudectl went to a NullHandler: the
+   logger only wrote a file when CLAUDECTL_DEBUG was set, so every background job
+   crash, every faulted handler and every one of claudectl's own Claude calls
+   failing against a rate-limited account vanished. The level chips ride
+   bindFilter's `extra` predicate rather than a query parameter, so the endpoint
+   takes no arguments and switching level costs no round trip. */
+let LOGLVL='';
+function logLvl(v){LOGLVL=(LOGLVL===v?'':v);drawPage('logs');}
+async function pgLogs(nav){
+  const d=await api('/api/logs');
+  const ev=d.events||[],now=Date.now()/1000;
+  const n={error:0,warn:0,info:0};
+  ev.forEach(e=>{if(n[e.lvl]!==undefined)n[e.lvl]++;});
+  const tone={error:'err',warn:'warn',info:'ok'};
+  const chips=['error','warn','info'].map(l=>
+    `<span class="chip${LOGLVL===l?' on':''}" onclick="logLvl('${l}')">${l} ${n[l]}</span>`).join('');
+  const rows=ev.map(e=>{
+    const lvl=e.lvl||'error';
+    return `<div class="lgrow" data-lvl="${esc(lvl)}" data-f="${esc(lvl+' '+(e.src||'')+' '+(e.msg||'')+' '+(e.detail||'')+' '+(e.proj||''))}">
+      <div class="lghd"><span class="tag ${tone[lvl]||'err'}">${esc(lvl)}</span>
+        <b>${esc(e.src||'?')}</b>
+        <span class="sp"></span>
+        <span class="aage">${esc(fmtAge(Math.max(0,now-(e.ts||0))))}</span></div>
+      <div class="lgmsg">${esc(e.msg||'')}</div>
+      ${e.proj?`<div class="asub">${esc(e.proj)}</div>`:''}
+      ${e.detail?`<pre class="lgdet">${esc(e.detail)}</pre>`:''}
+    </div>`;}).join('');
+  if(!paint(nav,`<div class="card"><h3>${ic('history')} Logs <span class="sp"></span>
+    <span class="tag${n.error?' err':''}">${n.error} error${n.error===1?'':'s'}</span></h3>
+    <p style="color:var(--dim);font-size:12.5px;margin:0 0 8px">Everything claudectl did on its own: its headless Claude calls, background jobs, the auto-memory scheduler, the failover proxy. Newest first, capped at ${Math.round((d.cap||0)/1024)} KB on disk.</p>
+    ${ev.length?`<div class="chips" style="margin-bottom:10px">${chips}</div>
+    <input id="lgq" class="in" placeholder="Filter events…" style="margin-bottom:8px">
+    <span id="lgn" style="color:var(--dim);font-size:12px"></span>
+    ${rows}`:`<div style="color:var(--dim)">Nothing recorded yet — claudectl writes here when one of its own calls, jobs or scheduled passes fails.</div>`}
+    <p style="color:var(--dim);font-size:12px;margin:12px 0 0">File: <code>${esc(d.path||'')}</code><br>
+      Verbose tracing: set <code>CLAUDECTL_DEBUG=1</code> and read <code>${esc(d.debug_log||'')}</code>.</p></div>`))return;
+  bindFilter('lgq','.lgrow','lgn',el=>!LOGLVL||el.dataset.lvl===LOGLVL);
 }
 
 /* ── the account's global instructions ───────────────────────────────────────

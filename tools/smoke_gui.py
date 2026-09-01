@@ -139,6 +139,23 @@ ROUTES = {
                                    'tok_fmt': '%dk' % i, 'cost': i * .1}
                                   for i in range(14)]},
     '/api/usage/projects': {'projects': []},
+    # Content, not empties, for the same reason as the block below: an empty
+    # log renders one line and the overflow audit has nothing to measure.
+    '/api/logs': {
+        'events': [
+            {'ts': _NOW - 90, 'lvl': 'error', 'src': 'subprocess',
+             'msg': 'claude exited 1: Claude AI usage limit reached',
+             'detail': 'Claude AI usage limit reached|resets at 3pm',
+             'proj': '/demo/acme-api'},
+            {'ts': _NOW - 400, 'lvl': 'warn', 'src': 'quota',
+             'msg': 'session limit full (resets 15:00)',
+             'detail': 'claudectl did not start a Claude call it wanted to make',
+             'proj': ''},
+            {'ts': _NOW - 7200, 'lvl': 'info', 'src': 'scheduler',
+             'msg': 'auto-memory pass: 1 refreshed, more still owed',
+             'detail': '', 'proj': ''}],
+        'path': 'C:/Users/demo/.claude/claudectl-events.jsonl',
+        'cap': 262144, 'debug_log': 'C:/Temp/claudectl.log'},
     '/api/accounts': {'accounts': [
         {'name': 'default', 'resolved': '~/.claude', 'active': True, 'dir': ''},
         {'name': 'teamA', 'resolved': '~/.claude-teamA', 'active': False, 'dir': 'w'}]},

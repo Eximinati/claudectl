@@ -170,10 +170,17 @@ def run_with_progress(args, crumbs, label, timeout=120, cwd=None, env=None):
         except Exception:
             return None, False
     import threading
+    from . import quota
+
+    # The silent path is guarded inside _run_cancellable above, so each path is
+    # guarded exactly once and a switched account is never re-asked about.
+    env, blocked = quota.preflight(args, env)
+    if blocked:
+        return None, False
 
     try:
         proc = subprocess.Popen(
-            args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding='utf-8', errors='ignore', cwd=cwd, env=env,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except Exception:
@@ -184,6 +191,13 @@ def run_with_progress(args, crumbs, label, timeout=120, cwd=None, env=None):
     reader = threading.Thread(target=lambda: chunks.append(proc.stdout.read()),
                               daemon=True)
     reader.start()
+    # stderr on its own thread for the same reason, and it is captured rather
+    # than DEVNULLed because throwing it away is what made every failure read
+    # as "No output from Claude" — including a rate-limited account.
+    errs = []
+    errdr = threading.Thread(target=lambda: errs.append(proc.stderr.read()),
+                             daemon=True)
+    errdr.start()
 
     flush_input()
     start = time.time()
@@ -214,9 +228,23 @@ def run_with_progress(args, crumbs, label, timeout=120, cwd=None, env=None):
         time.sleep(0.1)
 
     reader.join(timeout=5)
+    errdr.join(timeout=5)
     if proc.returncode:
+        _note_failure(args, env, proc.returncode, errs)
         return None, False
     return (chunks[0] if chunks else ''), False
+
+
+def _note_failure(args, env, code, errs):
+    """One latch for a failed child, the same one gui_api._run_cancellable
+    writes — so a caller has ONE place to read why, not two."""
+    from . import memory as _m, quota
+    _m.last_call_error = 'claude exited %s: %s' % (
+        code, (''.join(c for c in errs if c).strip() or '(no output)')[:300])
+    quota.note_failure(env, _m.last_call_error)
+    from . import events
+    events.record('subprocess', _m.last_call_error,
+                  detail=' '.join(str(a) for a in list(args)[:2]))
 
 
 def run_with_progress_stdin(args, stdin_text, crumbs, label, timeout=240, cwd=None, env=None):
@@ -239,10 +267,16 @@ def run_with_progress_stdin(args, stdin_text, crumbs, label, timeout=240, cwd=No
         except Exception:
             return None, False
     import threading
+    from . import quota
+
+    env, blocked = quota.preflight(args, env)     # see run_with_progress
+    if blocked:
+        return None, False
+
     try:
         proc = subprocess.Popen(
             args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, encoding='utf-8', errors='ignore',
+            stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='ignore',
             cwd=cwd, env=env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except Exception:
         return None, False
@@ -259,6 +293,10 @@ def run_with_progress_stdin(args, stdin_text, crumbs, label, timeout=240, cwd=No
     reader = threading.Thread(target=lambda: chunks.append(proc.stdout.read()),
                               daemon=True)
     reader.start()
+    errs = []
+    errdr = threading.Thread(target=lambda: errs.append(proc.stderr.read()),
+                             daemon=True)
+    errdr.start()
 
     flush_input()
     start = time.time()
@@ -285,7 +323,9 @@ def run_with_progress_stdin(args, stdin_text, crumbs, label, timeout=240, cwd=No
         time.sleep(0.1)
 
     reader.join(timeout=5)
+    errdr.join(timeout=5)
     if proc.returncode:
+        _note_failure(args, env, proc.returncode, errs)
         return None, False
     return (chunks[0] if chunks else ''), False
 
