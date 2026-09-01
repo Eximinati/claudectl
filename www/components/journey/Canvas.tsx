@@ -50,6 +50,10 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
     if (!canvas) return;
     const html = document.documentElement;
     const ambient = mode === 'ambient';
+    // A content route is a page somebody is reading. The scene sits further back
+    // there — the luminance ceiling this project already learned the hard way,
+    // expressed as one class rather than a second set of materials.
+    html.classList.toggle('scene-ambient', ambient);
 
     /** Fail open: a canvas we cannot drive is worse than no canvas. */
     const drop = () => {
@@ -313,6 +317,7 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
       scene = null;
       camera = null;
       html.classList.remove('journey-on');
+      html.classList.remove('scene-ambient');
     };
     // Crossing between the landing page and the rest is the only thing that
     // rebuilds the scene. Inner-page to inner-page keeps the same canvas.

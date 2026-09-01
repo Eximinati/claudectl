@@ -234,6 +234,32 @@ def test_each_deployment_carries_its_own_build_config():
         'www/ must state .next, or a stale dashboard override decides: %r' % www.get('outputDirectory')
 
 
+def test_nothing_opaque_is_painted_over_the_scene():
+    """A block's own background is painted AFTER its negative-z-index descendants.
+
+    The marketing site puts its WebGL canvas at `z-index: -1` and a static wash at
+    `-3`, both children of <body>. `body { background: ... }` therefore covered
+    both, and the landing page shipped as a flat colour: the scene drew every
+    frame, the framebuffer was full, and no pixel of it reached the screen. The
+    ground colour goes on <html>, whose background is the root's and paints
+    first.
+
+    Read as text rather than parsed: a CSS parser is a dependency, and the rule
+    being guarded is one declaration in one block."""
+    css = _read(os.path.join(ROOT, 'www', 'app', 'globals.css'))
+
+    def block(selector):
+        m = re.search(r'(?:^|\})\s*%s\s*\{([^}]*)\}' % re.escape(selector), css, re.M)
+        return m.group(1) if m else ''
+
+    assert 'background' in block('html'), \
+        'the ground colour must be on <html>, which paints before the scene'
+    body = block('body')
+    assert body, 'no body rule found in globals.css'
+    assert not re.search(r'(?<!-)\bbackground(-color)?\s*:', body), \
+        'body has a background, which paints over #journey and the wash: %r' % body.strip()
+
+
 def test_the_docs_toolchain_stays_out_of_the_shipped_package():
     """Zero runtime dependencies is a marketed claim. mkdocs belongs to
     requirements-docs.txt, the way ruff/build/playwright belong to their CI job."""

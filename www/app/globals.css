@@ -39,8 +39,13 @@ html {
   background: var(--color-bg);
 }
 
+/* NO background on body. This is load-bearing, not an omission.
+   A block's own background is painted AFTER its negative-z-index descendants, so
+   an opaque `background` here covers both #journey (z-index -1) and the wash
+   below (-3) — the scene rendered perfectly and nothing was ever visible on the
+   page. The ground colour belongs on <html>, whose background is the root's and
+   paints first. */
 body {
-  background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
@@ -220,6 +225,11 @@ body::after {
 }
 html.journey-on #journey {
   opacity: 1;
+}
+/* Every route that is not the landing page. The scene is the same; it just sits
+   further back behind text somebody is there to read. */
+html.journey-on.scene-ambient #journey {
+  opacity: 0.42;
 }
 
 /* The only rule from lenis/dist/lenis.css this page needs — the other four
