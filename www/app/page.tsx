@@ -1,4 +1,3 @@
-import { JourneyCanvas } from '@/components/journey/Canvas';
 import { Stations } from '@/components/journey/Stations';
 
 /**
@@ -12,9 +11,8 @@ import { Stations } from '@/components/journey/Stations';
  */
 export default function Home() {
   return (
-    <>
-      <JourneyCanvas />
-      <Stations />
-    </>
+    // The canvas is mounted once for the whole site in app/layout.tsx; this route
+    // is what puts it in journey mode.
+    <Stations />
   );
 }

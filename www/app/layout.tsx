@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { Header } from '@/components/site/Header';
 import { Footer } from '@/components/site/Footer';
+import { Backdrop } from '@/components/site/Backdrop';
 import { SITE, url } from '@/lib/site';
 import { HOME } from '@/lib/content';
 import { jsonLd } from '@/lib/meta';
@@ -89,6 +90,7 @@ export default function RootLayout({ children }: LayoutProps<'/'>) {
         >
           Skip to content
         </a>
+        <Backdrop />
         <Header />
         <main id="main" className="flex-1">
           {children}

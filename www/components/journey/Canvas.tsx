@@ -32,13 +32,24 @@ const DAMP = 6.5;
 /** Seconds the station-01 joint sweep takes on arrival. */
 const LIT_SECONDS = 1.4;
 
-export function JourneyCanvas() {
+/**
+ * `journey` is the landing page: scroll drives the camera from station to
+ * station. `ambient` is every other route: the same constellation parked at the
+ * finale's pull-back, turning slowly, with no scroll coupling and no Lenis.
+ *
+ * One scene, one branch. The alternative was eleven static pages — the site
+ * stopped moving the moment you clicked Features, which is the opposite of the
+ * point. It stays quiet on purpose: this project has already learned that drama
+ * belongs in the interface and the background has a luminance ceiling.
+ */
+export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambient' }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
     const html = document.documentElement;
+    const ambient = mode === 'ambient';
 
     /** Fail open: a canvas we cannot drive is worse than no canvas. */
     const drop = () => {
@@ -47,13 +58,15 @@ export function JourneyCanvas() {
     };
 
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
-    // Reduced motion gets no scene at all. A single static frame would still
-    // have to be re-rendered on scroll to mean anything, and that is the motion
-    // being declined.
-    if (reduced.matches) {
-      drop();
-      return;
-    }
+    // Reduced motion gets the scene STILL, not removed. Declining motion is not
+    // the same as declining the picture, and removing the canvas left the whole
+    // site looking like an unstyled document to anyone whose OS has animation
+    // effects switched off — which on Windows 11 is one toggle in Accessibility,
+    // and is not a rare setting.
+    //
+    // One frame is drawn and the loop never starts: `awake()` is false while
+    // `still`, so nothing reschedules.
+    let still = reduced.matches;
 
     let cancelled = false;
     let lost = false;
@@ -76,7 +89,14 @@ export function JourneyCanvas() {
     let prev = 0;
 
     const awake = () =>
-      !cancelled && !lost && !reduced.matches && !document.hidden && focused;
+      !cancelled && !lost && !still && !document.hidden && focused;
+
+    /** One frame, then nothing. The still path for reduced motion. */
+    const paintOnce = () => {
+      lit = 1;
+      progress = targetProgress();
+      frame(performance.now());
+    };
 
     const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
 
@@ -102,6 +122,9 @@ export function JourneyCanvas() {
     /** Target progress in 0..1: which panel the viewport top sits in, and how
      *  far through it. Arriving at a panel parks the camera at its station. */
     const targetProgress = () => {
+      // Ambient parks at the finale, where the camera holds the whole
+      // constellation. Nothing to measure, nothing to chase.
+      if (ambient) return 1;
       const y = window.scrollY;
       if (tops.length < 2) {
         // The panels moved or have not rendered: fall back to the document's
@@ -150,7 +173,9 @@ export function JourneyCanvas() {
       // Frame-rate-independent damping: the camera settles into a station, it
       // never snaps to it.
       progress += (targetProgress() - progress) * (1 - Math.exp(-DAMP * dt));
-      clock += dt;
+      // Ambient runs the scene clock at a third speed. It is behind body copy on
+      // a page somebody is reading, so it drifts rather than performs.
+      clock += ambient ? dt * 0.34 : dt;
       // The station-01 joint sweep is an arrival, not a scroll position — you
       // are already parked at station 01 when the page loads. It is a uniform,
       // so CSS cannot own this one.
@@ -175,7 +200,9 @@ export function JourneyCanvas() {
 
     const wake = () => {
       if (raf || !renderer || !awake()) return;
-      if (LenisCtor && !lenis) lenis = new LenisCtor({ lerp: 0.09 });
+      // No smooth-scroll driver on a reading page: it would take the wheel over
+      // for a scene that no longer answers to scroll.
+      if (LenisCtor && !lenis && !ambient) lenis = new LenisCtor({ lerp: 0.09 });
       prev = 0;
       raf = requestAnimationFrame(frame);
     };
@@ -216,9 +243,13 @@ export function JourneyCanvas() {
     });
 
     const onReduced = () => {
-      if (!reduced.matches) return;
-      sleep();
-      drop();
+      still = reduced.matches;
+      if (still) {
+        sleep();
+        paintOnce();
+      } else {
+        wake();
+      }
     };
     reduced.addEventListener('change', onReduced);
     off.push(() => reduced.removeEventListener('change', onReduced));
@@ -267,7 +298,8 @@ export function JourneyCanvas() {
 
       resize();
       measure();
-      wake();
+      if (still) paintOnce();
+      else wake();
     })();
 
     return () => {
@@ -282,7 +314,9 @@ export function JourneyCanvas() {
       camera = null;
       html.classList.remove('journey-on');
     };
-  }, []);
+    // Crossing between the landing page and the rest is the only thing that
+    // rebuilds the scene. Inner-page to inner-page keeps the same canvas.
+  }, [mode]);
 
   return <canvas id="journey" ref={ref} aria-hidden="true" />;
 }

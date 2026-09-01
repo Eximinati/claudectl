@@ -23,7 +23,7 @@ export function PageHeader({
   children?: ReactNode;
 }) {
   return (
-    <header className="mx-auto max-w-4xl px-5 pt-14 sm:pt-20">
+    <header className="reveal mx-auto max-w-4xl px-5 pt-14 sm:pt-20">
       {eyebrow ? (
         <p className="mb-3 font-mono text-[0.7rem] uppercase tracking-[0.16em] text-cyan/80">
           {eyebrow}
@@ -66,7 +66,7 @@ export function DocSections({
 
 /** Body wrapper for the routes that render markdown rather than a Doc. */
 export function PageBody({ children }: { children: ReactNode }) {
-  return <div className="mx-auto max-w-4xl px-5 py-16">{children}</div>;
+  return <div className="reveal mx-auto max-w-4xl px-5 py-16">{children}</div>;
 }
 
 /** A link that looks like a button. next/link renders a plain anchor for an

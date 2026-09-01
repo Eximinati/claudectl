@@ -59,7 +59,7 @@ export default function BlogIndex() {
       ) : (
         <ul className="rise mt-14 space-y-4">
           {posts.map((post) => (
-            <li key={post.slug}>
+            <li key={post.slug} className="reveal">
               <Link
                 href={`/blog/${post.slug}`}
                 className="panel block p-5 no-underline transition-transform duration-200 hover:-translate-y-0.5 sm:p-6"

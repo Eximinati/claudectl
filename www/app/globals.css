@@ -250,11 +250,33 @@ html.lenis body {
   animation-range: entry 5% cover 26%;
 }
 
+/* The same mechanism for the content routes, which otherwise had no motion at
+   all — measured: the landing page ran six animations and every other page ran
+   zero, so the site stopped moving the moment you left it. Shorter travel than a
+   station, because these fire on a paragraph rather than a whole panel. */
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 16px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.reveal {
+  animation: reveal-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-timeline: view();
+  animation-range: entry 2% cover 20%;
+}
+
 @media (prefers-reduced-motion: reduce) {
   /* Back onto the document timeline, where the block above has already collapsed
      every duration to nothing. A view timeline ignores duration, so without this
      the reveal would stay scroll-linked — which is the motion being declined. */
-  .station-in {
+  .station-in,
+  .reveal {
     animation-timeline: none;
   }
   #journey {

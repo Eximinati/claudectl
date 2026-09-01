@@ -88,7 +88,10 @@ function BlockView({ block }: { block: Block }) {
 
 export function SectionView({ section }: { section: Section }) {
   return (
-    <section id={section.id} className="scroll-mt-20">
+    // `reveal` is the site-wide scroll entrance: a native view timeline, so no
+    // observer and no JS. Where animation-timeline is unsupported it plays once
+    // on load and fills forwards, which leaves the copy visible either way.
+    <section id={section.id} className="reveal scroll-mt-20">
       {section.eyebrow ? (
         <p className="mb-2 font-mono text-[0.7rem] uppercase tracking-[0.16em] text-cyan/80">
           {section.eyebrow}
