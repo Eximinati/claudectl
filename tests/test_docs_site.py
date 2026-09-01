@@ -225,6 +225,14 @@ def test_each_deployment_carries_its_own_build_config():
         assert leaked not in www_cmds, \
             'www/vercel.json carries the docs toolchain (%r): %s' % (leaked, www_cmds)
 
+    # Both projects were once the same project, so the dashboard still carried
+    # `site` as the output directory and the Next build was rejected for not
+    # producing one. Each config states its own, and vercel.json wins over a
+    # dashboard setting — which is the only way to stop that leftover mattering.
+    assert root.get('outputDirectory') == 'site', 'the docs build emits site/'
+    assert www.get('outputDirectory') == '.next', \
+        'www/ must state .next, or a stale dashboard override decides: %r' % www.get('outputDirectory')
+
 
 def test_the_docs_toolchain_stays_out_of_the_shipped_package():
     """Zero runtime dependencies is a marketed claim. mkdocs belongs to
