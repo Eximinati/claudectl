@@ -7,6 +7,98 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-09-01
+
+Memory was twelve things and the interface could name three of them. This
+release makes the whole layer legible — what exists, what writes it, when it
+reaches a session and what it costs — and fixes the four ways it was quietly
+spending more of your limit than you asked it to.
+
+### Fixed
+
+- **Path-scoped rule files were loaded on every turn, not lazily.** They were
+  written with `globs:` frontmatter — Cursor's key. Claude Code reads `paths:`,
+  and a rule file without it is loaded unconditionally, so the entire point of
+  splitting memory into one file per module was lost while the UI reported each
+  one as free until Claude opened a matching path. Measured on this repo:
+  **22 238 → 18 363 always-on tokens, 3 875 off every single turn.** Existing
+  rule files are rewritten with the correct key on the next sync — free, no
+  Claude call.
+- **A failed memory cycle was reported as progress.** Failed and skipped units
+  were summed into one `pending_units`, and every surface worded it "the next
+  cycle takes them" — so on a rate-limited account six *failed* extractions an
+  hour read as work safely queued. Failures are now counted as failures and
+  shown with the error that caused them. A nonzero exit also discarded the real
+  error text whenever no job was attached, which is exactly the scheduler and
+  the detached background worker.
+- **Auto-memory no longer speeds up when it has a backlog.** A capped cycle used
+  to schedule the next pass 45 seconds later, again and again until the project
+  caught up. Across several opted-in projects that is most of a daily limit
+  inside an hour, and on a failing account it was the same dead calls in a loop.
+  One pass runs when claudectl starts and one every interval you configured: the
+  per-cycle cap decides how much a pass may spend, the interval decides how
+  often that happens, and nothing else schedules work.
+- **Opening a project no longer adds an unscheduled memory cycle.** Opting a
+  project into background auto-memory also implied "refresh whenever you open
+  it", so the configured interval bounded nothing — and the GUI never consulted
+  the per-project flag at all, deciding from the global setting alone. Background
+  auto-memory now owns the spend; **Build with Claude** still refreshes on demand.
+- **Disabling or deleting a hook applies to every account.** Installing one
+  already did. Turning one off wrote only the account you happened to be looking
+  at, so a hook installed once and disabled once kept firing from the others —
+  with the UI showing it as off. Selecting an account still acts on that one alone.
+- **Session topics no longer list claudectl talking to itself.** `claude -p`
+  leaves a transcript like any other session, so the CLAUDE.md SESSIONS block was
+  spending always-on tokens describing claudectl extracting a module or
+  distilling lessons.
+- **Opening the recall preview no longer counts as reinforcement.** It appended
+  to the hits log, so inspecting memory reshaped which facts survived eviction.
+- **The reinforcement log says how many hits are waiting to be folded in**,
+  instead of a fixed phrase derived from an unrelated number.
+- **Lifetime memory spend includes lesson scans**, which are Claude calls like
+  any other.
+- **A broken `@import` in a CLAUDE.md is flagged.** Claude loads nothing for it
+  and says nothing about it.
+
+### Added
+
+- **The Memory tab inventories every memory artifact** — the graph, the CLAUDE.md
+  digest, the AUTOGEN and SESSIONS blocks, the path-scoped rule files, the
+  worklog, both sidecars, the cross-project conventions block, the workspace
+  manifest, lessons, version snapshots and the per-prompt injection — grouped by
+  **when each one reaches a session**: always on, every prompt, when relevant, or
+  stored and never loaded. Each row says what it does for you, what it costs and
+  what to press. The always-on total is given as a share of the context window,
+  which is the only denominator that makes a token count mean anything.
+- **What a cycle spent and what it dropped.** Cost per cycle, cumulative spend
+  for the project, the names eviction removed, the facts recall reinforces most
+  (clickable, showing what each one actually is), and how many sessions each
+  lesson is from being dropped.
+- **The CLAUDE.md tab shows the file block by block** — your prose, KEEP-fenced
+  regions, AUTOGEN, SESSIONS and the memory digest — each with its token cost and
+  the one button that regenerates that block alone.
+- **Workspace health is per-check rows**, each carrying the points it is worth
+  and the button that clears it, instead of terminal output.
+- **Version history sits beside the artifact it belongs to** — graph history on
+  the Memory tab, CLAUDE.md history on the CLAUDE.md tab — with recent versions
+  shown and the rest collapsed.
+- **The recall preview says why each entity was picked.**
+- **The next pass is stated wherever a cycle left work queued**, so "still
+  queued" has an answer to "until when".
+
+### Changed
+
+- **The CLAUDE.md memory digest carries facts, not a table of contents.** It was
+  spending its budget listing module names — which tells a session nothing `ls`
+  would not — and now spends it on the highest-signal lessons and the module
+  dependency edges.
+- **The Audit tab is now only what a turn costs across every surface at once**,
+  project-scoped and account-scoped together, with the version history it used to
+  host moved beside the files it belongs to.
+- Generated files (`.claude/rules/claudectl-mem-*.md`, `docs/api.md`,
+  `plugin/skills/`) are marked `linguist-generated`, so their diffs collapse in
+  review.
+
 ## [1.8.1] - 2026-08-31
 
 ### Fixed
