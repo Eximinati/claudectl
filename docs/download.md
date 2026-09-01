@@ -10,7 +10,7 @@ jsonld: |
     "name": "claudectl",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "Windows, macOS, Linux",
-    "url": "https://claudectl.vercel.app/download/",
+    "url": "https://claudectl.space/download/",
     "downloadUrl": "https://pypi.org/project/claudectl/",
     "installUrl": "https://pypi.org/project/claudectl/",
     "codeRepository": "https://github.com/babarmuhammad/claudectl",

@@ -7,7 +7,7 @@ site_description: >-
 # copies emit this URL, so search and answer engines index one of them rather
 # than splitting the same content across two domains. Asset and page links stay
 # relative, which is why one site_url serves both.
-site_url: https://claudectl.vercel.app/
+site_url: https://claudectl.space/
 site_author: Babar Muhammad Anas
 repo_url: https://github.com/babarmuhammad/claudectl
 repo_name: babarmuhammad/claudectl
