@@ -176,6 +176,29 @@ def test_every_renamed_page_still_answers_on_its_old_url():
     assert not missing, 'redirects point at pages that do not exist: %s' % missing
 
 
+def test_an_off_host_redirect_is_scoped_to_the_host_it_is_correct_on():
+    """A redirect to an absolute URL is a LOOP on any deployment that also serves
+    that URL's host, and Vercel answers the loop 308 forever rather than erroring.
+
+    This shipped: while the docs build still answered on claudectl.space, its own
+    rule `/features -> https://claudectl.space/features/` matched its own
+    destination. curl -L gave up at twelve hops. `has: host` is what makes the
+    rule fire only on docs.claudectl.space, where the destination is off-host and
+    the redirect is the whole point."""
+    import json
+    v = json.loads(_read(os.path.join(ROOT, 'vercel.json')))
+    bad = []
+    for r in v.get('redirects', []):
+        if not r['destination'].startswith('http'):
+            continue
+        hosts = [h.get('value') for h in r.get('has', []) if h.get('type') == 'host']
+        if not hosts:
+            bad.append(r['source'])
+    assert not bad, (
+        'these redirects leave the deployment without a host condition, so they '
+        'loop wherever this build also serves the destination host: %s' % bad)
+
+
 def test_the_docs_toolchain_stays_out_of_the_shipped_package():
     """Zero runtime dependencies is a marketed claim. mkdocs belongs to
     requirements-docs.txt, the way ruff/build/playwright belong to their CI job."""
