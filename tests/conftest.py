@@ -191,6 +191,27 @@ def _stats_cache_is_never_the_real_one(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _model_catalogue_is_never_the_real_one(monkeypatch, tmp_path_factory):
+    """`models._cache_path()` is `<config_dir>/claudectl-models.json` — the
+    account's REAL live catalogue, refreshed daily by a background thread.
+
+    Same class of leak as `stats.cache_file` above, with a sharper edge: this
+    one decides what `config.models()` answers, so a test comparing the roster
+    against the bundled floor passes or fails depending on what Anthropic
+    shipped and whether the poller had run yet.
+    `test_model_card_rows_covers_roster_with_swe` went red the hour a new Fable
+    landed in the cache and was green in CI the whole time, because a clean
+    machine has no catalogue and falls back to the floor.
+
+    A test that WANTS a catalogue redirects `_cache_path` itself
+    (`tests/test_models.py`) — its monkeypatch runs after this fixture and wins.
+    """
+    from claude_sessions import models
+    p = str(tmp_path_factory.mktemp('catalogue') / 'claudectl-models.json')
+    monkeypatch.setattr(models, '_cache_path', lambda: p)
+
+
+@pytest.fixture(autouse=True)
 def _no_network(monkeypatch):
     """No test reaches a REMOTE host; loopback is left alone.
 
