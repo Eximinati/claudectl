@@ -3,6 +3,8 @@ import { notFound } from 'next/navigation';
 import { allPosts } from '@/lib/blog';
 import { TocDetails, TocRail } from '@/components/blog/Toc';
 import { humanDate, readingTime, withHeadingIds } from '@/components/blog/prose';
+import { splitHeadings } from '@/lib/build-data';
+import { ProseSections } from '@/components/Page';
 import { breadcrumbs, jsonLd, meta } from '@/lib/meta';
 import { SITE, url } from '@/lib/site';
 
@@ -130,13 +132,15 @@ export default async function PostPage({ params }: Props) {
             <TocDetails headings={headings} />
           </div>
 
-          {/* The header is sticky, so an anchored h2 needs clearance — and the
-              headings come from an HTML string, so the offset has to be applied
-              from the container. */}
-          <div
-            className="prose mt-10 [&_h2]:scroll-mt-24"
-            dangerouslySetInnerHTML={{ __html: html }}
-          />
+          {/* The post's own <h2>s become sections on the rail. Its prose fills
+              the column, exactly like /changelog, so it gets the same answer:
+              the column moves right and the solids run down the left. The TOC
+              rail stays — the spine shows you where you are, the TOC is how you
+              jump. `withHeadingIds` has already anchored every heading, and
+              splitHeadings keeps those ids rather than minting new ones. */}
+          <div className="mt-10">
+            <ProseSections sections={splitHeadings(html)} />
+          </div>
 
           {post.faq.length > 0 && (
             <section className="mt-16">

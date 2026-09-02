@@ -32,16 +32,22 @@ const SIDE = [
   'justify-center',
 ] as const;
 
-/** A station that earns a real screenshot instead of another abstract panel.
- *  Station 04's solid already carries tui-sessions.png in 3D; the GUI shot next
- *  to it is the deliberate echo. */
+/** The three stations that earn a real screenshot instead of another abstract
+ *  panel — and these are the SAME three files scene.ts hangs on framed planes in
+ *  3D, at the same stations.
+ *
+ *  So this markup is the fallback, not a second copy: `html.journey-on
+ *  .shot-fallback` hides it the moment GL has actually painted. A visitor with
+ *  no WebGL, a dead context or a machine that cannot run the scene still sees
+ *  every picture and its alt text; everybody else sees it fly in on its node
+ *  face, once, and never twice on one screen. */
 const SHOTS: Record<string, { src: string; alt: string }> = {
   memory: {
     src: '/img/gui-memory.png',
     alt: 'The memory tab: entities, relations and lessons extracted from a codebase, with token budgets per surface.',
   },
   workspace: {
-    src: '/img/gui-sessions.png',
+    src: '/img/tui-sessions.png',
     alt: 'The session browser: every Claude Code session in a project, searchable, with tokens and cost per session.',
   },
   tokens: {
@@ -61,7 +67,7 @@ function Shot({ id }: { id: string }) {
   const shot = SHOTS[id];
   if (!shot) return null;
   return (
-    <figure className="mt-7">
+    <figure className="shot-fallback mt-7">
       <Image
         src={shot.src}
         alt={shot.alt}

@@ -1,7 +1,10 @@
-import { CONDUCT_HTML } from '@/lib/build-data';
+import { CONDUCT_HTML, splitHeadings } from '@/lib/build-data';
 import { breadcrumbs, jsonLd, meta } from '@/lib/meta';
 import { SITE } from '@/lib/site';
-import { Cta, PageBody, PageHeader } from '@/components/Page';
+import { Cta, PageBody, PageHeader, ProseSections } from '@/components/Page';
+
+/** The Covenant's own clauses are the sections — nothing to invent. */
+const CLAUSES = splitHeadings(CONDUCT_HTML);
 
 export const metadata = meta({
   title: 'Code of conduct',
@@ -34,12 +37,12 @@ export default function CodeOfConductPage() {
         <Cta href="/contributing">Contributing</Cta>
       </PageHeader>
 
-      <PageBody>
-        {CONDUCT_HTML ? (
-          <div className="prose" dangerouslySetInnerHTML={{ __html: CONDUCT_HTML }} />
-        ) : (
-          /* Read from the repository at build time, so a checkout without the
-             file degrades to a link instead of failing the route. */
+      {CLAUSES.length > 1 ? (
+        <ProseSections sections={CLAUSES} />
+      ) : (
+        <PageBody>
+          {/* Read from the repository at build time, so a checkout without the
+              file degrades to a link instead of failing the route. */}
           <div className="panel p-6">
             <h2 className="text-lg font-semibold text-text">Read it on GitHub</h2>
             <p className="mt-2 text-[0.95rem] leading-[1.7] text-dim">
@@ -60,8 +63,8 @@ export default function CodeOfConductPage() {
               .
             </p>
           </div>
-        )}
-      </PageBody>
+        </PageBody>
+      )}
     </>
   );
 }

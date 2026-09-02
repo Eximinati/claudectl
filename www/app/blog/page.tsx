@@ -31,7 +31,7 @@ export default function BlogIndex() {
   };
 
   return (
-    <div className="mx-auto max-w-4xl px-5 py-16 sm:py-20">
+    <div className="py-16 sm:py-20">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: jsonLd(ld).text }}
@@ -48,18 +48,22 @@ export default function BlogIndex() {
         }}
       />
 
-      <h1 className="text-balance text-3xl font-semibold tracking-tight text-text sm:text-[2.5rem] sm:leading-[1.15]">
-        Blog
-      </h1>
-      <p className="mt-4 max-w-3xl text-pretty text-lg leading-[1.65] text-dim">
-        {DESCRIPTION}
-      </p>
+      <div className="mx-auto max-w-[74rem] px-5">
+        <h1 className="text-balance text-3xl font-semibold tracking-tight text-text sm:text-[2.5rem] sm:leading-[1.15]">
+          Blog
+        </h1>
+        <p className="mt-4 max-w-3xl text-pretty text-lg leading-[1.65] text-dim">
+          {DESCRIPTION}
+        </p>
+      </div>
 
       {posts.length === 0 ? (
-        <p className="mt-14 text-dim2">No posts yet.</p>
+        <p className="mx-auto mt-14 max-w-[74rem] px-5 text-dim2">No posts yet.</p>
       ) : (
+        // A rail on the LEFT, so the index does not read as the FAQ with
+        // different words in it.
         <Spine
-          dense
+          layout="rail-left"
           items={posts.map((post) => ({
             key: post.slug,
             // A longer post is a bigger solid: same derived-weight rule the rest

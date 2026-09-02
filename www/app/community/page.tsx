@@ -35,7 +35,9 @@ export default function CommunityPage() {
         <Cta href="/code-of-conduct">Code of conduct</Cta>
       </PageHeader>
 
-      <DocSections doc={COMMUNITY} />
+      {/* Chorded to each other rather than chained: a community is a mesh, not
+          a queue. */}
+      <DocSections doc={COMMUNITY} layout="triad" />
     </>
   );
 }

@@ -16,7 +16,9 @@
 </p>
 
 <p align="center">
-  <b>📖 Full documentation → <a href="https://docs.claudectl.space/">docs.claudectl.space</a></b><br>
+  <b>🌐 <a href="https://claudectl.space">claudectl.space</a>
+  &nbsp;·&nbsp;
+  📖 Full documentation → <a href="https://docs.claudectl.space/">docs.claudectl.space</a></b><br>
   <sub>Everything below is the short version. Every feature, key binding and file is
   documented in detail on the docs site.</sub>
 </p>

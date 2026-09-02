@@ -59,7 +59,9 @@ export default function AboutPage() {
         ) : null}
       </div>
 
-      <DocSections doc={ABOUT} />
+      {/* Three short sections, so the solids circle one point rather than
+          marching down a rail nothing needs. */}
+      <DocSections doc={ABOUT} layout="orbit" />
     </>
   );
 }

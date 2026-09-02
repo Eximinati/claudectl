@@ -22,10 +22,11 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/babarmuhammad/claudectl"
-Documentation = "https://babarmuhammad.github.io/claudectl/"
+Homepage = "https://claudectl.space"
+Documentation = "https://docs.claudectl.space/"
+Source = "https://github.com/babarmuhammad/claudectl"
 Issues = "https://github.com/babarmuhammad/claudectl/issues"
-Changelog = "https://github.com/babarmuhammad/claudectl/blob/main/CHANGELOG.md"
+Changelog = "https://claudectl.space/changelog"
 
 [project.scripts]
 # cli:run, not main:run — main's import chain pulls urllib/ssl/http.client via

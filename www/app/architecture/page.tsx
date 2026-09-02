@@ -34,8 +34,11 @@ export default function ArchitecturePage() {
         <Cta href={`${SITE.docs}/architecture/`}>Architecture docs</Cta>
       </PageHeader>
 
+      {/* A page about layers: one column, and the three solids nest front to
+          back inside it rather than travelling across the page. */}
       <DocSections
         doc={ARCHITECTURE}
+        layout="depth"
         after={{
           graph: (
             <Shot

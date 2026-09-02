@@ -110,6 +110,52 @@ export const CONDUCT_HTML = renderRepoMarkdown('CODE_OF_CONDUCT.md');
    lib/content.ts is the fallback for when it cannot be read. */
 export const CONTRIBUTING_HTML = renderRepoMarkdown('CONTRIBUTING.md');
 
+/** One `<h2>` and everything under it. */
+export type HtmlSection = { id: string; title: string; html: string };
+
+/**
+ * Split rendered markdown at its `<h2>` boundaries.
+ *
+ * The routes that render a repository file straight to HTML — changelog,
+ * contributing, code of conduct — had no sections at all, so they were the only
+ * pages with nothing for the section rail to show. A release IS a section; so is
+ * "Running the tests". This is what gives them one without duplicating the
+ * source file as hand-written data.
+ *
+ * Anything before the first heading (a preamble) becomes a leading section with
+ * no title, rather than being dropped.
+ */
+export function splitHeadings(html: string | null): HtmlSection[] {
+  if (!html) return [];
+  const parts = html.split(/(?=<h2\b)/);
+  const seen = new Set<string>();
+  const out: HtmlSection[] = [];
+  for (const part of parts) {
+    let body = part.trim();
+    if (!body) continue;
+    const open = body.match(/<h2\b([^>]*)>([\s\S]*?)<\/h2>/);
+    const title = htmlToText(open?.[2] ?? '');
+    // A heading that already carries an id keeps it — blog posts anchor theirs
+    // before this runs, and rewriting one breaks a link somebody already has.
+    const existing = open?.[1].match(/\bid="([^"]*)"/)?.[1];
+    // Slug collision is real without one: CHANGELOG.md repeats "Fixed" under
+    // every release, and two elements with one id sends half the anchors nowhere.
+    let id = existing
+      ?? (title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+        || `part-${out.length}`);
+    while (seen.has(id)) id = `${id}-${out.length}`;
+    seen.add(id);
+    // The id goes on the HEADING, never on a wrapper: the caller renders these
+    // side by side with the original markup on some routes, and two elements
+    // claiming one anchor is the same bug as a collision.
+    if (open && !existing) {
+      body = body.replace(/<h2\b([^>]*)>/, `<h2$1 id="${id}">`);
+    }
+    out.push({ id, title, html: body });
+  }
+  return out;
+}
+
 /** Plain text of a rendered markdown page, for /llms-full.txt. */
 export function htmlToText(html: string): string {
   return html

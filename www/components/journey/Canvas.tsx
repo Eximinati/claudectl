@@ -3,7 +3,7 @@
 /**
  * Mounts the journey scene behind the copy.
  *
- * Three rules shape the whole file, and this project has paid for each one:
+ * Four rules shape the whole file, and this project has paid for each one:
  *
  *  1. ONE requestAnimationFrame chain, and it PARKS. A loop that runs while
  *     nothing is visible is a bug, not a feature. Parking destroys the Lenis
@@ -18,24 +18,34 @@
  *  3. Progress is derived from window.scrollY and measured panel offsets, never
  *     from Lenis. Lenis smooths what the browser reports; if it fails to load,
  *     is asleep, or is destroyed, the journey is still exactly right.
+ *  4. A ROUTE CHANGE re-measures and SNAPS. The GL context is deliberately not
+ *     rebuilt when you navigate between two content routes — but the scene was
+ *     then still driving the previous page's section offsets and weights, so
+ *     leaving a nine-section page for a three-section one left the solids flying
+ *     in from index eight. The effect below with `[pathname]` is the fix, and it
+ *     is why switching pages stopped tearing the animation.
  *
  * three and lenis are imported inside the effect so neither is in the initial
  * bundle. Every import here is `import type` for the same reason.
  */
 import { useEffect, useRef } from 'react';
+import { usePathname } from 'next/navigation';
 import type * as THREE from 'three';
 import type Lenis from 'lenis';
-import type { Journey } from './scene';
+import type { Journey, LayoutName, Slot } from './scene';
 
 /** How fast progress chases the scroll, in e-folds per second. */
 const DAMP = 6.5;
 /** Seconds the station-01 joint sweep takes on arrival. */
 const LIT_SECONDS = 1.4;
+/** Anything the pointer might legitimately be aiming at instead of a solid. */
+const INTERACTIVE = 'a,button,summary,details,input,textarea,select,label,[role="button"]';
 
 /**
  * `journey` is the landing page: scroll drives the camera from station to
  * station. `ambient` is every other route: the same constellation parked at the
- * finale's pull-back, turning slowly, with no scroll coupling and no Lenis.
+ * finale's pull-back, turning slowly, with no scroll coupling and no Lenis —
+ * plus that page's own section solids, placed by the slots its layout leaves.
  *
  * One scene, one branch. The alternative was eleven static pages — the site
  * stopped moving the moment you clicked Features, which is the opposite of the
@@ -44,6 +54,11 @@ const LIT_SECONDS = 1.4;
  */
 export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambient' }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  /** The live scene's re-measure hook. A route change calls it; the GL effect
+   *  owns it. Held in a ref rather than lifted into state because rebuilding the
+   *  renderer on navigation is exactly what this is here to avoid. */
+  const sync = useRef<(() => void) | null>(null);
+  const pathname = usePathname();
 
   useEffect(() => {
     const canvas = ref.current;
@@ -85,13 +100,15 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
 
     let progress = 0;
     let sec = 0;
-    let side = 1;
     let clock = 0;
     let lit = 0;
     let prev = 0;
     // Pointer parallax: the raw target from pointermove, and the damped value the
     // scene actually sees. One delegated listener, no per-element handlers.
     let pxT = 0, pyT = 0, px = 0, py = 0;
+    // Last pointer position in NDC, for the hover hit test.
+    let ndcX = 0, ndcY = 0;
+    let hovering = false;
 
     const awake = () =>
       !cancelled && !lost && !still && !document.hidden && focused;
@@ -100,6 +117,7 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
     const paintOnce = () => {
       lit = 1;
       progress = targetProgress();
+      sec = sectionAt();
       frame(performance.now());
     };
 
@@ -114,11 +132,9 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
     let tops: number[] = [];
     let end = 0;
 
-    // The focal solid's anchors: the same elements on the landing page, and the
-    // spine rows everywhere else. One selector list, so a page only has to mark
-    // its sections and it gets a focal solid.
+    /** Section tops, for `sectionAt`. The solids' POSITIONS do not come from
+     *  here — they come from the slots below. */
     let secTops: number[] = [];
-    /** The section elements themselves, for the side each one left empty. */
     let secEls: HTMLElement[] = [];
 
     const measure = () => {
@@ -133,10 +149,34 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
       const secs = Array.from(document.querySelectorAll<HTMLElement>('[data-section]'));
       secEls = secs;
       secTops = secs.map((el) => el.getBoundingClientRect().top + y);
+
+      // The empty box each section's layout leaves for its solid. Document space,
+      // so only the scroll offset has to be written per frame — and so the solid
+      // tracks its own copy exactly, at any row height, on any page.
+      const slots: Slot[] = Array.from(document.querySelectorAll<HTMLElement>('[data-slot]'))
+        .map((el) => {
+          const r = el.getBoundingClientRect();
+          return {
+            x: r.left + r.width / 2,
+            y: r.top + y + r.height / 2,
+            // The half-extent that FITS: a tall narrow rail slot must not draw a
+            // solid as wide as the slot is tall.
+            r: Math.min(r.width, r.height) / 2,
+          };
+        });
+
+      // A hidden slot (narrow viewport) measures zero and must not be counted, or
+      // every section after it would index the wrong box.
+      const usable = slots.length === secs.length && slots.every((s) => s.r > 4);
+      journey?.setSlots(usable ? slots : []);
+
+      const layout =
+        (document.querySelector<HTMLElement>('[data-spine]')?.dataset.layout as LayoutName) ??
+        'beside';
       // Weight is authored per section; a missing one is 1, not a crash.
       journey?.setSections(
-        secs.map((el) => Number(el.dataset.weight) || 1),
-        secs[0]?.dataset.dense === '1',
+        usable ? secs.map((el) => Number(el.dataset.weight) || 1) : [],
+        layout,
       );
     };
 
@@ -152,10 +192,6 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
       const span = i + 1 < secTops.length ? secTops[i + 1] - secTops[i] : 0;
       return i + (span > 0 ? clamp01((y - secTops[i]) / span) : 0);
     };
-
-    /** Which half of the screen this section left empty. The solid goes in the
-     *  other one, so the two alternate down the page together. */
-    const sideAt = () => (secEls[Math.round(sec)]?.dataset.side === 'right' ? -1 : 1);
 
     /** Target progress in 0..1: which panel the viewport top sits in, and how
      *  far through it. Arriving at a panel parks the camera at its station. */
@@ -192,9 +228,10 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
       // centre plus its radius at aspect 0.5, which is a 360px-wide viewport.
       camera.fov = 52 * Math.min(1.5, Math.max(1, Math.pow(w / h, -0.7)));
       camera.updateProjectionMatrix();
-      // Drawing-buffer pixels, not CSS: gl_PointSize is in device pixels, so a
-      // joint drawn from the CSS height shrinks physically on a dense display.
-      journey.resize(w * pr, h * pr);
+      // Drawing-buffer pixels for gl_PointSize — a joint drawn from the CSS
+      // height shrinks physically on a dense display — and CSS pixels for the
+      // slot maths, which is measuring DOM rects.
+      journey.resize(w * pr, h * pr, w, h);
     };
 
     const frame = (now: number) => {
@@ -223,17 +260,23 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
       py += (pyT - py) * k;
 
       // The section index is damped like the camera is: a solid that snapped to
-      // the next section mid-scroll would skip its own reassembly.
+      // the next section mid-scroll would skip its own arrival.
       sec += (sectionAt() - sec) * (1 - Math.exp(-5.5 * dt));
 
-      // Damped too: the solid should cross the page as the sides swap, not jump.
-      side += (sideAt() - side) * (1 - Math.exp(-4.5 * dt));
-
       journey.update(
-        camera, clock, progress, lit * lit * (3 - 2 * lit), px, py, sec, side,
+        camera, clock, progress, lit * lit * (3 - 2 * lit), px, py, sec, window.scrollY,
       );
 
       renderer.render(scene, camera);
+
+      // Hover is tested here rather than in the pointermove handler: the solids
+      // move with the scroll, so what is under a stationary cursor changes
+      // without the pointer having moved at all.
+      const over = journey.hit(camera, ndcX, ndcY) !== null;
+      if (over !== hovering) {
+        hovering = over;
+        html.classList.toggle('solid-hover', over);
+      }
 
       if (!painted) {
         painted = true;
@@ -282,9 +325,39 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
       const p = e as PointerEvent;
       pxT = (p.clientX / window.innerWidth) * 2 - 1;
       pyT = 1 - (p.clientY / window.innerHeight) * 2;
+      ndcX = pxT;
+      ndcY = pyT;
     });
     // A pointer that leaves the window must not park the parallax off-centre.
     on(document, 'pointerleave', () => { pxT = 0; pyT = 0; });
+
+    /* Clicking a solid goes to its section.
+       The canvas stays pointer-events:none at z-index -1 — making it clickable
+       would put it in front of the copy and end text selection. The document
+       hears the click instead, and anything the visitor might actually have been
+       aiming at wins: a link, a button, an open <details>, or a selection they
+       were dragging. */
+    on(document, 'click', (e) => {
+      if (!journey || !camera || still) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest(INTERACTIVE)) return;
+      if ((window.getSelection()?.toString() ?? '').length > 0) return;
+      const p = e as PointerEvent;
+      const hit = journey.hit(
+        camera,
+        (p.clientX / window.innerWidth) * 2 - 1,
+        1 - (p.clientY / window.innerHeight) * 2,
+      );
+      if (!hit) return;
+      const target = hit.kind === 'station'
+        ? document.querySelector<HTMLElement>(`[data-station="${hit.index}"]`)
+        : secEls[hit.index];
+      target?.scrollIntoView({
+        behavior: reduced.matches ? 'auto' : 'smooth',
+        block: hit.kind === 'station' ? 'start' : 'center',
+      });
+    });
+
     // three's own constructor already preventDefaults this one, so a restore
     // will follow and three re-uploads everything itself. Until it does, park
     // and fail open — a canvas with a dead context is a black rectangle.
@@ -312,14 +385,17 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
     reduced.addEventListener('change', onReduced);
     off.push(() => reduced.removeEventListener('change', onReduced));
 
-    // Panels grow when a screenshot loads or the text rewraps; the offsets have
-    // to follow or the camera drifts out of step with the copy.
-    const host = document.getElementById('journey-stations');
-    const ro = host ? new ResizeObserver(measure) : null;
-    if (host && ro) {
-      ro.observe(host);
-      off.push(() => ro.disconnect());
+    // Panels and sections grow when a screenshot loads or the text rewraps; the
+    // offsets have to follow or the camera and the solids drift out of step with
+    // the copy. Both hosts are observed — watching only the landing page's
+    // container meant a shot loading on /features desynchronised everything
+    // below it for the rest of the visit.
+    const ro = new ResizeObserver(() => measure());
+    for (const sel of ['#journey-stations', '[data-spine]']) {
+      const el = document.querySelector(sel);
+      if (el) ro.observe(el);
     }
+    off.push(() => ro.disconnect());
 
     void (async () => {
       let three: typeof THREE;
@@ -368,12 +444,22 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
 
       resize();
       measure();
+      sec = sectionAt();
       if (still) paintOnce();
       else wake();
     })();
 
+    // Published for the route effect below: re-measure, then SNAP rather than
+    // damp, so a new page's first frame is already correct.
+    sync.current = () => {
+      measure();
+      sec = sectionAt();
+      progress = targetProgress();
+    };
+
     return () => {
       cancelled = true;
+      sync.current = null;
       sleep();
       for (const f of off) f();
       journey?.dispose();
@@ -382,11 +468,30 @@ export function JourneyCanvas({ mode = 'journey' }: { mode?: 'journey' | 'ambien
       renderer = null;
       scene = null;
       camera = null;
-      html.classList.remove('journey-on');
+      html.classList.remove('solid-hover');
+      // `journey-on` is deliberately NOT cleared here. This cleanup also runs
+      // when only the MODE changes — crossing between the landing page and the
+      // rest — and clearing it faded the canvas to nothing and back for a
+      // context that was about to be rebuilt anyway. Only drop() clears it, and
+      // drop() means the scene genuinely cannot run.
     };
     // Crossing between the landing page and the rest is the only thing that
     // rebuilds the scene. Inner-page to inner-page keeps the same canvas.
   }, [mode]);
+
+  // A client-side navigation swaps the DOM under a scene that is still running.
+  // Two frames later the layout has settled, so the re-measure waits for them —
+  // measuring during the swap reads the outgoing page's rects.
+  useEffect(() => {
+    let a = 0, b = 0;
+    a = requestAnimationFrame(() => {
+      b = requestAnimationFrame(() => sync.current?.());
+    });
+    return () => {
+      cancelAnimationFrame(a);
+      cancelAnimationFrame(b);
+    };
+  }, [pathname]);
 
   return <canvas id="journey" ref={ref} aria-hidden="true" />;
 }

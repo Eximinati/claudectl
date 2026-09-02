@@ -1,22 +1,55 @@
 import type { ReactNode } from 'react';
 
 /**
- * The skill tree for the content routes.
+ * The section rail, and the contract that places the 3D solids.
  *
- * The landing page connects its sections in 3D. Every other page had no
- * connective tissue at all — a list of panels with a drifting constellation
- * behind it that bore no relation to them. This is the same idea in the DOM: a
- * spine down the column, a node at every section, drawn as you scroll.
+ * Two things live here and nowhere else:
  *
- * Drawn with `pathLength="1"` and `stroke-dashoffset` on a native view timeline,
- * which is how `.station-in` and `.reveal` already work here — no observer, no
- * JS, no measurement, and it stays a hairline at any zoom because it is a vector.
+ *  1. `data-section` / `data-weight` — which section you are reading, and how
+ *     much it contains.
+ *  2. `.spine-slot` — an EMPTY element sitting in the space this page leaves for
+ *     that section's solid. Canvas.tsx measures its rect and the scene draws
+ *     inside it.
  *
- * The nodes are positioned by the flex layout, not by coordinates: each child
- * sits in a row beside its own marker, so nothing has to know how tall a section
- * is. Getting that wrong is how a spine ends up pointing at the wrong paragraph
- * the moment a screenshot loads and the section grows.
+ * The second one is the whole design. The scene used to derive a position from
+ * the frustum (`u_sx`/`u_sy`/`u_fs` plus a `dense` flag), which cannot know where
+ * the copy is: solids sat at the viewport centre while the copy was half a screen
+ * above, landed in the margin outside a `max-w-4xl` column, and had to be turned
+ * off on the pages whose prose filled the width. Now CSS decides the space and
+ * the scene obeys it, so a page's showcase is a grid in globals.css rather than
+ * new shader code — which is why every route below can have its own.
+ *
+ * The layouts are defined at the end of app/globals.css, keyed by these class
+ * names. They are hand-written CSS, not Tailwind, precisely so `spine-${layout}`
+ * can be interpolated — a Tailwind class built by interpolation never gets
+ * generated, because the scanner reads source text.
  */
+
+export type SpineLayout =
+  /** features — full-height rows, copy and solid trading sides */
+  | 'beside'
+  /** download — solid in a fixed right column, one rung per step */
+  | 'ladder'
+  /** architecture — one column, solids nested front to back */
+  | 'depth'
+  /** about — solids circling a point beside the copy */
+  | 'orbit'
+  /** community — three solids, chorded to each other rather than chained */
+  | 'triad'
+  /** blog — a narrow rail of small solids down the left */
+  | 'rail-left'
+  /** faq — the same rail on the right */
+  | 'rail-right'
+  /** changelog and the prose routes — solids down the left, alternating out */
+  | 'zigzag';
+
+export type SpineItem = {
+  key: string;
+  node: ReactNode;
+  /** How much this section contains. Relative, normalised by the scene: it
+   *  decides how much of its slot the solid fills, never where the slot is. */
+  weight?: number;
+};
 
 /** connections.TYPE_COLORS, cycled — the same palette the scene draws with.
  *  Written out in full because Tailwind scans source text: a class built by
@@ -27,57 +60,37 @@ const NODE = [
 
 export function Spine({
   items,
-  dense,
+  layout = 'beside',
 }: {
-  items: { key: string; node: ReactNode; weight?: number }[];
-  /** Natural row height instead of one section per screen. For lists — a FAQ or
-   *  a post index padded to twelve screens is worse to read, not better. */
-  dense?: boolean;
+  items: SpineItem[];
+  layout?: SpineLayout;
 }) {
   return (
-    // Wide container, narrow column. The copy keeps the left ~42rem and the
-    // right half of the viewport is deliberately empty — that space is where the
-    // section's own solid sits, which is the same composition the landing page
-    // uses. A full-width column leaves nowhere for it to be, and the solid ends
-    // up over the text instead of beside it.
-    <div className="mx-auto max-w-[92rem] px-5">
+    // data-layout is what Canvas.tsx reads to know which showcase to drive; the
+    // class is what globals.css reads to lay the slots out. One name, two sides.
+    <div className={`spine spine-${layout}`} data-spine data-layout={layout}>
       <ol>
         {items.map((it, i) => (
-          /* data-section/data-weight are the contract with Canvas.tsx: it
-             measures these offsets to know which section you are reading, and
-             reads the weight to size the focal solid. A section with more in it
-             gets a bigger object. */
           <li
             key={it.key}
             data-section={i}
             data-weight={it.weight ?? 1}
-            data-dense={dense ? '1' : undefined}
-            data-side={i % 2 === 0 ? 'left' : 'right'}
-            className={`relative grid grid-cols-[28px_minmax(0,1fr)] items-center gap-x-4 sm:grid-cols-[36px_minmax(0,1fr)] sm:gap-x-6 ${
-              dense ? 'py-6' : 'min-h-[74svh] py-10'
-            } ${
-              // Alternating: the copy takes one half and leaves the other for its
-              // solid, so the page reads as a path down the middle rather than a
-              // single column with decoration stapled to one side.
-              i % 2 === 0 ? '' : 'lg:justify-items-end'
-            }`}
+            className="spine-row"
           >
-            <div className="relative flex items-center justify-center self-stretch" aria-hidden="true">
+            <div className="spine-mark" aria-hidden="true">
               {/* The rail. A scaled div, not an SVG path: `stroke-dashoffset`
                   repaints, and the rule here is transform and opacity only. It
                   spans the whole row, so a tall section gets a long rail for free
                   and nothing has to measure anything. The last row stops halfway
                   — a tree ends, it does not trail off. */}
               <span
-                className={`spine-rail absolute left-1/2 top-0 w-px -translate-x-1/2 ${
-                  i === items.length - 1 ? 'h-1/2' : 'bottom-0'
-                }`}
+                className={`spine-rail${i === items.length - 1 ? ' spine-rail-end' : ''}`}
               />
-              <span
-                className={`spine-node relative h-2.5 w-2.5 rounded-full ${NODE[i % NODE.length]}`}
-              />
+              <span className={`spine-node ${NODE[i % NODE.length]}`} />
             </div>
-            <div className="reveal min-w-0 max-w-[44rem] pb-2">{it.node}</div>
+            <div className="spine-copy reveal">{it.node}</div>
+            {/* Empty on purpose: this is the space, not a thing in it. */}
+            <div className="spine-slot" data-slot aria-hidden="true" />
           </li>
         ))}
       </ol>

@@ -1,7 +1,7 @@
 import { FAQ, faqJsonLd } from '@/lib/faq';
 import { breadcrumbs, jsonLd, meta } from '@/lib/meta';
 import { SITE } from '@/lib/site';
-import { Cta, PageBody, PageHeader } from '@/components/Page';
+import { Cta, PageHeader } from '@/components/Page';
 import { Spine } from '@/components/site/Spine';
 
 export const metadata = meta({
@@ -41,11 +41,17 @@ export default function FaqPage() {
         <Cta href="/community">Ask a question</Cta>
       </PageHeader>
 
-      <PageBody>
+      {/* Not PageBody: that caps the width at max-w-4xl, which is what left the
+          old solids floating in the margin outside the column with nothing to
+          sit in. The rail needs the room. */}
+      <div className="py-16">
         {/* <details> is the platform's disclosure widget: keyboard and screen
             reader behaviour for free, and no client component. */}
+        {/* A list, so the rows keep their natural height and the solids shrink
+            to a rail on the right — padding twelve questions out to twelve
+            screens makes them worse to read, not better. */}
         <Spine
-          dense
+          layout="rail-right"
           items={FAQ.map(({ q, a }) => ({
             key: q,
             // A long answer is a question people ask more about; it gets the
@@ -75,7 +81,7 @@ export default function FaqPage() {
             ),
           }))}
         />
-      </PageBody>
+      </div>
     </>
   );
 }

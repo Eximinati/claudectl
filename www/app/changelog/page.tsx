@@ -1,7 +1,12 @@
-import { CHANGELOG_HTML, VERSION } from '@/lib/build-data';
+import { CHANGELOG_HTML, VERSION, splitHeadings } from '@/lib/build-data';
 import { breadcrumbs, jsonLd, meta } from '@/lib/meta';
 import { SITE } from '@/lib/site';
-import { Cta, PageBody, PageHeader } from '@/components/Page';
+import { Cta, PageBody, PageHeader, ProseSections } from '@/components/Page';
+
+/** One section per release, straight out of the repository's own CHANGELOG.md.
+ *  This route used to be a single wall of prose with nothing for the rail to
+ *  show — a release IS a section, so it did not need inventing. */
+const RELEASES = splitHeadings(CHANGELOG_HTML);
 
 export const metadata = meta({
   title: 'Changelog',
@@ -34,13 +39,15 @@ export default function ChangelogPage() {
         <Cta href="/download">Install or upgrade</Cta>
       </PageHeader>
 
-      <PageBody>
-        {CHANGELOG_HTML ? (
-          <div className="prose" dangerouslySetInnerHTML={{ __html: CHANGELOG_HTML }} />
-        ) : (
-          /* The file is read from the repository at build time, so it can be
-             absent in a checkout that does not carry it. One missing file must
-             not take the route down. */
+      {RELEASES.length > 1 ? (
+        /* One solid per release, down the LEFT and alternating in and out so the
+           chain between them zig-zags, with the copy pushed right to clear them. */
+        <ProseSections sections={RELEASES} />
+      ) : (
+        <PageBody>
+          {/* The file is read from the repository at build time, so it can be
+              absent in a checkout that does not carry it. One missing file must
+              not take the route down. */}
           <div className="panel p-6">
             <h2 className="text-lg font-semibold text-text">Release notes live on GitHub</h2>
             <p className="mt-2 text-[0.95rem] leading-[1.7] text-dim">
@@ -62,8 +69,8 @@ export default function ChangelogPage() {
               .
             </p>
           </div>
-        )}
-      </PageBody>
+        </PageBody>
+      )}
     </>
   );
 }

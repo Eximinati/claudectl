@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import type { Doc } from '@/lib/content';
+import type { HtmlSection } from '@/lib/build-data';
 import { SectionView } from '@/components/doc/Blocks';
-import { Spine } from '@/components/site/Spine';
+import { Spine, type SpineLayout } from '@/components/site/Spine';
 
 /**
  * The chrome every apex route opens with, so the nine of them read as one site.
@@ -49,13 +50,18 @@ export function PageHeader({
 export function DocSections({
   doc,
   after,
+  layout,
 }: {
   doc: Doc;
   after?: Record<string, ReactNode>;
+  /** Which showcase this route wears. Every apex route picks its own — see the
+   *  `.spine-*` grids at the end of app/globals.css. */
+  layout?: SpineLayout;
 }) {
   return (
     <div className="py-16">
       <Spine
+        layout={layout}
         items={doc.sections.map((s) => ({
           key: s.id,
           // Weight is how much the section actually contains — a table of six
@@ -85,6 +91,47 @@ export function DocSections({
 /** Body wrapper for the routes that render markdown rather than a Doc. */
 export function PageBody({ children }: { children: ReactNode }) {
   return <div className="reveal mx-auto max-w-4xl px-5 py-16">{children}</div>;
+}
+
+/**
+ * A rendered markdown page as spine sections, one per `<h2>`.
+ *
+ * The routes that render a repository file straight to HTML — changelog,
+ * contributing, code of conduct — were the only ones with nothing for the rail
+ * to show, and an earlier attempt to give them one drew the solids over the
+ * text: their prose fills the whole column, so there is no empty half. The
+ * `zigzag` layout answers that by moving the COLUMN instead, and a release or a
+ * numbered step is already a section, so nothing had to be invented as data.
+ */
+export function ProseSections({
+  sections,
+  layout = 'zigzag',
+}: {
+  sections: HtmlSection[];
+  layout?: SpineLayout;
+}) {
+  return (
+    <div className="py-14">
+      <Spine
+        layout={layout}
+        items={sections.map((s) => ({
+          key: s.id,
+          weight: s.html.length,
+          node: (
+            // No id here: splitHeadings puts it on the <h2> itself, so the
+            // anchor is on the heading a reader is actually looking for and two
+            // elements never claim the same one.
+            <div
+              // The section's own heading is its first child, so the rule that
+              // puts a top border above every h2 would draw one above nothing.
+              className="prose scroll-mt-24 [&>h2:first-child]:mt-0 [&>h2:first-child]:border-0 [&>h2:first-child]:pt-0 [&_h2]:scroll-mt-24"
+              dangerouslySetInnerHTML={{ __html: s.html }}
+            />
+          ),
+        }))}
+      />
+    </div>
+  );
 }
 
 /** A link that looks like a button. next/link renders a plain anchor for an

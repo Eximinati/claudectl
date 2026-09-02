@@ -152,7 +152,9 @@ export default function FeaturesPage() {
         </div>
       </div>
 
-      <DocSections doc={FEATURES} after={SHOTS} />
+      {/* Nine sections, each with something to show: full-height rows, the copy
+          and its solid trading sides down the page. */}
+      <DocSections doc={FEATURES} after={SHOTS} layout="beside" />
     </>
   );
 }

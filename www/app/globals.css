@@ -276,6 +276,35 @@ html.lenis body {
   animation-range: entry 2% cover 20%;
 }
 
+/* ── the page transition ────────────────────────────────────────────────────
+   The App Router swaps the DOM instantly and `.reveal` is a view timeline, which
+   does nothing for content that is already in frame — so a route change read as
+   a hard cut with the scene carrying on behind it. One short entrance, keyed on
+   the pathname, transform and opacity only. */
+@keyframes page-in {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+
+.page-in {
+  animation: page-in 0.26s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* A solid under the pointer is clickable — it scrolls to its own section. The
+   canvas itself stays pointer-events:none and at z-index -1; Canvas.tsx hit-tests
+   on the document and sets this class, so nothing about stacking changes. */
+html.solid-hover,
+html.solid-hover body {
+  cursor: pointer;
+}
+
+/* The home page's screenshots are drawn IN the scene, on framed planes at their
+   own stations. The DOM copy stays for anyone without WebGL — same picture, same
+   alt text — and is hidden the moment GL has actually painted. */
+html.journey-on .shot-fallback {
+  display: none;
+}
+
 /* ── the skill tree on the content routes ───────────────────────────────────
    The landing page connects its sections in 3D; these connect in the DOM. The
    rail draws itself with stroke-dashoffset on the same view timeline the reveal
@@ -287,6 +316,14 @@ html.lenis body {
 }
 
 .spine-rail {
+  position: absolute;
+  left: 50%;
+  /* Out into the row padding. The marker cell stretches to the CONTENT box,
+     so a rail pinned to 0 left a gap the height of the padding between every
+     pair of rows — the spine read as a dashed line rather than a spine. */
+  top: calc(-1 * var(--sp-pad, 0px));
+  bottom: calc(-1 * var(--sp-pad, 0px));
+  width: 1px;
   background: linear-gradient(
     180deg,
     var(--color-cyan) 0%,
@@ -300,6 +337,11 @@ html.lenis body {
   animation-range: entry 0% cover 42%;
 }
 
+/* A tree ends, it does not trail off. */
+.spine-rail-end {
+  bottom: 50%;
+}
+
 /* The node lights as its own row arrives. Scale and opacity only — the ring is a
    box-shadow spread, which composites like any other shadow and needs no filter. */
 @keyframes spine-light {
@@ -308,6 +350,10 @@ html.lenis body {
 }
 
 .spine-node {
+  position: relative;
+  height: 0.625rem;
+  width: 0.625rem;
+  border-radius: 9999px;
   animation: spine-light 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
   animation-timeline: view();
   animation-range: entry 4% cover 16%;
@@ -323,7 +369,189 @@ html.lenis body {
   .spine-node {
     animation-timeline: none;
   }
-  #journey {
+  #journey,
+  .page-in {
     transition: none;
+    animation: none;
+  }
+}
+
+/* ── the per-route showcases ────────────────────────────────────────────────
+   LAST BLOCK IN THE FILE, deliberately. A class on the container adds no more
+   specificity than the base `.spine-row` rule it countermands, so source order
+   is the only thing deciding — the same lesson the app's icon rail and skin
+   blocks are already at the bottom for.
+
+   Every layout is the same three-cell grid: marker, copy, and an EMPTY
+   `.spine-slot`. The slot is the space this page gives that section's solid, and
+   Canvas.tsx measures its rect — so a new showcase is a grid here, never new
+   shader code. See components/site/Spine.tsx. */
+.spine {
+  margin-inline: auto;
+  max-width: 92rem;
+  padding-inline: 1.25rem;
+}
+
+.spine-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 1rem;
+  --sp-pad: 1.5rem;
+  padding-block: var(--sp-pad);
+}
+
+.spine-mark {
+  position: relative;
+  grid-column: 1;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.spine-copy {
+  grid-column: 2;
+  min-width: 0;
+  max-width: 44rem;
+  padding-bottom: 0.5rem;
+}
+
+/* Narrow viewports have no empty half to give, so there is no slot to measure
+   and the scene simply draws no section solids — the parked constellation is the
+   background there. Better than the old behaviour, which put them over the copy. */
+.spine-slot {
+  display: none;
+}
+
+@media (min-width: 1024px) {
+  .spine-row {
+    grid-template-columns: 36px minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: 1.5rem;
+  }
+  /* All three cells are pinned to row 1, and this is load-bearing. Several
+     layouts below put the slot in a column to the LEFT of the copy, and grid
+     auto-placement never goes backwards: the slot was pushed onto a second
+     implicit row underneath the text, so the solid drew below its own section
+     instead of beside it. Measured, not guessed — a slot 883px down a 1015px
+     row is what gave it away. */
+  .spine-mark,
+  .spine-copy,
+  .spine-slot {
+    grid-row: 1;
+  }
+  .spine-slot {
+    display: block;
+    grid-column: 3;
+    align-self: stretch;
+    min-height: 16rem;
+  }
+
+  /* features — the copy takes one half and leaves the other for its solid, and
+     the two trade sides down the page. */
+  .spine-beside .spine-row {
+    min-height: 74svh;
+  }
+  .spine-beside .spine-row:nth-child(even) .spine-copy {
+    grid-column: 3;
+    justify-self: end;
+  }
+  .spine-beside .spine-row:nth-child(even) .spine-slot {
+    grid-column: 2;
+  }
+
+  /* download — a sequence, so the solids stay in one right-hand column and read
+     as rungs rather than as a path wandering across the page. */
+  .spine-ladder .spine-row {
+    grid-template-columns: 36px minmax(0, 1fr) 22rem;
+    min-height: 58svh;
+  }
+
+  /* architecture — a page about layers: one column, and the scene nests the
+     three solids front to back inside it. */
+  .spine-depth .spine-row {
+    grid-template-columns: 36px minmax(0, 1fr) 26rem;
+    min-height: 70svh;
+  }
+  .spine-depth .spine-slot {
+    min-height: 22rem;
+  }
+
+  /* about — three small solids circling one point beside the copy. */
+  .spine-orbit .spine-row {
+    grid-template-columns: 36px minmax(0, 1fr) 20rem;
+    min-height: 54svh;
+  }
+
+  /* community — chorded to each other rather than chained: a community is a
+     mesh. The topology is built in scene.ts; this is only the space. */
+  .spine-triad .spine-row {
+    grid-template-columns: 36px minmax(0, 1fr) 24rem;
+    min-height: 60svh;
+  }
+
+  /* faq / blog — a list. Padding it to one section per screen makes it worse to
+     read, so the rows keep their natural height and the solids shrink to a rail. */
+  .spine-rail-left,
+  .spine-rail-right {
+    max-width: 74rem;
+  }
+  .spine-rail-left .spine-row,
+  .spine-rail-right .spine-row {
+    --sp-pad: 1.15rem;
+  }
+  .spine-rail-left .spine-copy,
+  .spine-rail-right .spine-copy {
+    max-width: 52rem;
+  }
+  .spine-rail-right .spine-row {
+    grid-template-columns: 36px minmax(0, 1fr) 7.5rem;
+  }
+  .spine-rail-left .spine-row {
+    grid-template-columns: 7.5rem 36px minmax(0, 1fr);
+  }
+  .spine-rail-left .spine-mark {
+    grid-column: 2;
+  }
+  .spine-rail-left .spine-copy {
+    grid-column: 3;
+  }
+  .spine-rail-left .spine-slot {
+    grid-column: 1;
+  }
+  .spine-rail-left .spine-slot,
+  .spine-rail-right .spine-slot {
+    min-height: 4.5rem;
+  }
+
+  /* changelog and the prose routes — the copy fills its column, so there is no
+     empty half to work with. The column moves right instead and the solids run
+     down the left, alternating in and out so the chain between them zig-zags. */
+  .spine-zigzag {
+    max-width: 80rem;
+  }
+  .spine-zigzag .spine-row {
+    /* A wide slot column with a narrow slot in it: the alternation between
+       justify-self start and end is the amplitude of the zig-zag, so the gap
+       between the two is what you actually see. */
+    grid-template-columns: 14rem 36px minmax(0, 1fr);
+    --sp-pad: 1.75rem;
+  }
+  .spine-zigzag .spine-mark {
+    grid-column: 2;
+  }
+  .spine-zigzag .spine-copy {
+    grid-column: 3;
+    max-width: 54rem;
+  }
+  .spine-zigzag .spine-slot {
+    grid-column: 1;
+    width: 7rem;
+    min-height: 7rem;
+    justify-self: start;
+  }
+  .spine-zigzag .spine-row:nth-child(even) .spine-slot {
+    justify-self: end;
   }
 }

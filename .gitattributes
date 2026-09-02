@@ -4,6 +4,11 @@
 # Force LF for Python (cross-platform)
 *.py text eol=lf
 
+# GitHub Pages reads this file as a bare hostname. autocrlf would put a carriage
+# return in the built site copy, so the ending is pinned instead of left to the
+# platform that happens to run the build.
+docs/CNAME text eol=lf
+
 # Force CRLF for Windows-only scripts
 *.bat text eol=crlf
 

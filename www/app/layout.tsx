@@ -3,6 +3,7 @@ import './globals.css';
 import { Header } from '@/components/site/Header';
 import { Footer } from '@/components/site/Footer';
 import { Backdrop } from '@/components/site/Backdrop';
+import { RouteFade } from '@/components/site/RouteFade';
 import { SITE, url } from '@/lib/site';
 import { HOME } from '@/lib/content';
 import { jsonLd } from '@/lib/meta';
@@ -93,7 +94,7 @@ export default function RootLayout({ children }: LayoutProps<'/'>) {
         <Backdrop />
         <Header />
         <main id="main" className="flex-1">
-          {children}
+          <RouteFade>{children}</RouteFade>
         </main>
         <Footer />
       </body>

@@ -1,9 +1,9 @@
 import { CONTRIBUTING } from '@/lib/content';
-import { CONTRIBUTING_HTML } from '@/lib/build-data';
+import { CONTRIBUTING_HTML, splitHeadings } from '@/lib/build-data';
 import { breadcrumbs, jsonLd, meta } from '@/lib/meta';
 import { SITE } from '@/lib/site';
 import { DocView } from '@/components/doc/Blocks';
-import { Cta, PageBody, PageHeader } from '@/components/Page';
+import { Cta, PageHeader, ProseSections } from '@/components/Page';
 
 export const metadata = meta({
   title: CONTRIBUTING.title,
@@ -24,6 +24,9 @@ const HTML = CONTRIBUTING_HTML?.replace(
   'href="/code-of-conduct"',
 );
 
+/** Each step of the contribution flow is a section. */
+const STEPS = splitHeadings(HTML ?? null);
+
 export default function ContributingPage() {
   return (
     <>
@@ -32,7 +35,7 @@ export default function ContributingPage() {
         dangerouslySetInnerHTML={{ __html: jsonLd(CRUMBS).text }}
       />
 
-      {HTML ? (
+      {STEPS.length > 1 ? (
         <>
           <PageHeader
             eyebrow="Contributing"
@@ -45,9 +48,7 @@ export default function ContributingPage() {
             <Cta href={`${SITE.repo}/blob/main/CONTRIBUTING.md`}>This file on GitHub</Cta>
             <Cta href="/code-of-conduct">Code of conduct</Cta>
           </PageHeader>
-          <PageBody>
-            <div className="prose" dangerouslySetInnerHTML={{ __html: HTML }} />
-          </PageBody>
+          <ProseSections sections={STEPS} />
         </>
       ) : (
         /* No PageHeader here: DocView renders the h1 and intro itself, and two

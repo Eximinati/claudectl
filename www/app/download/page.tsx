@@ -123,7 +123,8 @@ export default function DownloadPage() {
         </p>
       </div>
 
-      <DocSections doc={DOWNLOAD} />
+      {/* A sequence, so the solids stay in one column and read as rungs. */}
+      <DocSections doc={DOWNLOAD} layout="ladder" />
     </>
   );
 }

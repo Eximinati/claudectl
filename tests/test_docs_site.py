@@ -200,11 +200,13 @@ def test_an_off_host_redirect_is_scoped_to_the_host_it_is_correct_on():
 
 
 def test_each_deployment_carries_its_own_build_config():
-    """Two Vercel projects build this repository: the marketing site with Root
-    Directory `www`, and the documentation with Root Directory `.`. A project
-    whose root directory has no vercel.json falls back to the one at the
-    repository root — so with only the root file present, the Next app was handed
-    the documentation's Python install command and ran it inside www/:
+    """The documentation is served by GitHub Pages now, so this file is no longer
+    a live deployment — but it stays, and so does this gate, because it is what
+    stops the marketing site inheriting a Python toolchain it cannot run.
+
+    A Vercel project whose Root Directory has no vercel.json falls back to the one
+    at the repository root. With only the root file present, the Next app was
+    handed the documentation's Python install command and ran it inside www/:
 
         ERROR: Could not open requirements file: 'requirements-docs.txt'
 
@@ -267,3 +269,29 @@ def test_the_docs_toolchain_stays_out_of_the_shipped_package():
     assert 'mkdocs' not in pyproject.lower()
     assert not re.search(r'^dependencies\s*=', pyproject, re.M)
     assert 'mkdocs-material' in _read(os.path.join(ROOT, 'requirements-docs.txt'))
+
+
+def test_the_pages_deploy_keeps_the_custom_domain():
+    """GitHub Pages stores the custom domain in a CNAME file at the site root, and
+    a deploy that does not carry one CLEARS the setting in the repository. So the
+    domain has to live in the built output, not only in the dashboard — otherwise
+    the next docs push silently takes docs.claudectl.space offline and every
+    documentation link in the README, in pyproject.toml and on the apex 404s.
+
+    MkDocs copies any non-markdown file in docs_dir into site/ verbatim, so a file
+    at docs/CNAME is the whole mechanism. It must also agree with mkdocs.yml's own
+    site_url, or the sitemap and the canonicals name a host the deploy does not
+    claim."""
+    path = os.path.join(DOCS, 'CNAME')
+    assert os.path.exists(path), \
+        'docs/CNAME is missing, so the next Pages deploy drops the custom domain'
+
+    host = _read(path).strip()
+    assert host == SITE_URL.split('//')[1].strip('/'), \
+        'docs/CNAME (%r) and site_url (%r) name different hosts' % (host, SITE_URL)
+    # A bare host, no scheme and no path: Pages rejects anything else.
+    assert '/' not in host and ':' not in host, \
+        'a CNAME file holds a bare hostname, not a URL: %r' % host
+
+    assert SITE_URL in _mkdocs(), \
+        'mkdocs.yml must publish the host the CNAME claims'
